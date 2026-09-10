@@ -23,7 +23,7 @@
  * @link https://github.com/GeyserMC/Geyser
  */
 
-package org.geysermc.geyser.network;
+package org.geysermc.geyser.network.bedrock;
 
 import org.cloudburstmc.protocol.bedrock.codec.v1002.Bedrock_v1002;
 import org.cloudburstmc.protocol.bedrock.codec.v1001.Bedrock_v1001;

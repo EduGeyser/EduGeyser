@@ -27,7 +27,7 @@ package org.geysermc.geyser.network.nethernet;
 
 import io.netty.channel.Channel;
 import org.cloudburstmc.protocol.bedrock.BedrockSessionFactory;
-import org.geysermc.geyser.network.GeyserBedrockPeer;
+import org.geysermc.geyser.network.bedrock.GeyserBedrockPeer;
 
 /**
  * Peer for native NetherNet channels. NetherNet channels carry no RakNet
