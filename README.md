@@ -47,7 +47,7 @@ The [Connection Methods](https://edugeyser.org/wiki/geyser/education/connection-
 | Edition   | Supported Versions                                                                                                                     |
 |-----------|----------------------------------------------------------------------------------------------------------------------------------------|
 | Education | 26.30 Preview, 26.32                                                                                                                   |
-| Bedrock   | 26.0, 26.1, 26.2, 26.3, 26.10, 26.20, 26.21, 26.22, 26.23, 26.30, 26.31, 26.32, 26.33, 26.34, 26.40, 26.41, 26.42, 26.43, 26.44, 26.45 |
+| Bedrock   | 26.30, 26.31, 26.32, 26.33, 26.34, 26.40, 26.41, 26.42, 26.43, 26.44, 26.45, 26.50, 26.51                                               |
 | Java      | 26.2 (For older versions, [see this guide](https://edugeyser.org/wiki/geyser/supported-versions/))                                     |
 
 ## Platforms
