@@ -263,3 +263,4 @@ locales/
 # EduGeyser: bundled extension jar, committed deliberately so the build is self-contained
 !/bundled-extension/
 !/bundled-extension/edu.jar
+bootstrap/mod/gametest/src/main/generated/.cache
