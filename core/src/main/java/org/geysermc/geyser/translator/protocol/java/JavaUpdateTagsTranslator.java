@@ -25,6 +25,7 @@
 
 package org.geysermc.geyser.translator.protocol.java;
 
+import org.geysermc.geyser.session.cache.registry.JavaRegistryTagCache;
 import org.geysermc.mcprotocollib.protocol.packet.common.clientbound.ClientboundUpdateTagsPacket;
 import org.geysermc.geyser.session.GeyserSession;
 import org.geysermc.geyser.translator.protocol.PacketTranslator;
@@ -35,6 +36,7 @@ public class JavaUpdateTagsTranslator extends PacketTranslator<ClientboundUpdate
 
     @Override
     public void translate(GeyserSession session, ClientboundUpdateTagsPacket packet) {
-        session.getTagCache().loadPacket(packet);
+        // TODO meh cast
+        ((JavaRegistryTagCache) session.javaRegistries()).getTagCache().loadPacket(packet);
     }
 }
