@@ -25,10 +25,10 @@
 
 package org.geysermc.geyser.registry.java;
 
-import org.geysermc.geyser.session.cache.registry.RegistryCache;
+import org.geysermc.geyser.registry.java.reader.JavaRegistryReader;
 
 /**
- * Used with {@link RegistryCache.RegistryReader#UNIT} to load registries without loading any data.
+ * Used with {@link JavaRegistryReader#UNIT} to load registries without loading any data.
  *
  * <p>This is usually done when registries need to be loaded to make ID->key or key->ID conversions, but actual data isn't needed.</p>
  */
