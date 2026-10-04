@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2019-2022 GeyserMC. http://geysermc.org
+ * Copyright (c) 2019-2026 GeyserMC. http://geysermc.org
  *
  * Permission is hereby granted, free of charge, to any person obtaining a copy
  * of this software and associated documentation files (the "Software"), to deal
@@ -133,13 +133,14 @@ public final class FloodgateSkinUploader {
                             verifyCode = node.get("verify_code").getAsString();
                             // Should fallback to true when absent, as this used to be the behavior before this introduction
                             allowSubscribers = !node.has("allow_subscribers") || node.get("allow_subscribers").getAsBoolean();
+                            subscribersCount = 1;
                             break;
                         case SUBSCRIBER_COUNT:
                             subscribersCount = node.get("subscribers_count").getAsInt();
                             break;
                         case SKIN_UPLOADED:
-                            // Normal Bedrock path. Runs only when Geyser is the sole handler.
-                            if (subscribersCount <= 1) {
+                            // Normal Bedrock path. Runs only when no Floodgate subscriber handles it.
+                            if (subscribersCount <= 1 || !allowSubscribers) {
                                 String xuid = node.get("xuid").getAsString();
                                 GeyserSession session = geyser.connectionByXuid(xuid);
 
