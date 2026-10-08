@@ -73,18 +73,21 @@ public class LoginEncryptionUtils {
     private static final UUID EMPTY_XID_IDENTITY =
             UUID.nameUUIDFromBytes("pocket-auth-1-xuid:".getBytes(StandardCharsets.UTF_8));
 
-    public static void encryptPlayerConnection(GeyserSession session, LoginPacket loginPacket) {
-        encryptConnectionWithCert(session, loginPacket.getAuthPayload(), loginPacket.getClientJwt());
+    /**
+     * @return whether the client must answer the encryption handshake before its login can be trusted
+     */
+    public static boolean encryptPlayerConnection(GeyserSession session, LoginPacket loginPacket) {
+        return encryptConnectionWithCert(session, loginPacket.getAuthPayload(), loginPacket.getClientJwt());
     }
 
-    private static void encryptConnectionWithCert(GeyserSession session, AuthPayload authPayload, String jwt) {
+    private static boolean encryptConnectionWithCert(GeyserSession session, AuthPayload authPayload, String jwt) {
         try {
             GeyserImpl geyser = session.getGeyser();
 
             // Regardless of auth type, we don't support guest type accounts used for splitscreen
             if (authPayload.getAuthType() == AuthType.GUEST) {
                 session.disconnect(GeyserLocale.getLocaleStringLog("geyser.network.remote.invalid_xbox_account"));
-                return;
+                return false;
             }
 
             ChainValidationResult result = EncryptionUtils.validatePayload(authPayload);
@@ -125,7 +128,7 @@ public class LoginEncryptionUtils {
             // Xbox validation: reject unsigned non-edu clients when validation is enabled
             if (!result.signed() && !isEducationClient && session.getGeyser().config().advanced().bedrock().validateBedrockLogin()) {
                 session.disconnect(GeyserLocale.getLocaleStringLog("geyser.network.remote.invalid_xbox_account"));
-                return;
+                return false;
             }
 
             // Handle Education Edition: verify the MESS-signed server token echoed in the EduTokenChain JWT
@@ -147,12 +150,12 @@ public class LoginEncryptionUtils {
                     // Tell them exactly what to do instead of a generic auth-failure.
                     geyser.getLogger().debug("MESS token expired for " + session.bedrockUsername());
                     session.disconnect("Your Education Edition session has expired.\n\nPlease fully restart Minecraft Education Edition and try again.");
-                    return;
+                    return false;
                 }
                 if (tokenResult.getStatus() != EducationTokenValidationResult.Status.VALID) {
                     geyser.getLogger().debug("MESS token verification failed for " + session.bedrockUsername());
                     session.disconnect("Education Edition Connection Failed\n\nYour education token could not be verified.");
-                    return;
+                    return false;
                 }
 
                 session.setEducationTenantId(tokenResult.getTenantId());
@@ -165,7 +168,7 @@ public class LoginEncryptionUtils {
                         session.getUpstream().getSession().getCodec().getProtocolVersion());
                 if (educationCodec == null) {
                     session.disconnect("Outdated Geyser proxy! This server has not yet been updated to support your Education Edition version.");
-                    return;
+                    return false;
                 }
                 session.getUpstream().getSession().setCodec(educationCodec);
             }
@@ -183,7 +186,7 @@ public class LoginEncryptionUtils {
                     session.getUpstream().setInetAddress(new InetSocketAddress(waterdogIp, 0));
                 } else {
                     session.disconnect("Did not receive IP and xuid forwarded from the proxy!");
-                    return;
+                    return false;
                 }
             }
 
@@ -216,7 +219,7 @@ public class LoginEncryptionUtils {
             try {
                 boolean enableEncryption = !BedrockEncryptionControl.isEncryptionDisabled(
                         session.getUpstream().getSession().getPeer().getChannel());
-                startEncryptionHandshake(session, identityPublicKey, enableEncryption);
+                return startEncryptionHandshake(session, identityPublicKey, enableEncryption);
             } catch (Throwable e) {
                 // An error can be thrown on older Java 8 versions about an invalid key
                 if (geyser.config().debugMode()) {
@@ -224,6 +227,8 @@ public class LoginEncryptionUtils {
                 }
 
                 sendEncryptionFailedMessage(geyser);
+                session.disconnect("disconnectionScreen.internalError.cantConnect");
+                return false;
             }
         } catch (Exception ex) {
             session.disconnect("disconnectionScreen.internalError.cantConnect");
@@ -231,8 +236,13 @@ public class LoginEncryptionUtils {
         }
     }
 
-    private static void startEncryptionHandshake(GeyserSession session, PublicKey key,
-                                                 boolean enableEncryption) throws Exception {
+    /**
+     * Sends the handshake, which Education clients need on every transport for the server token it carries.
+     *
+     * @return whether encryption was enabled, so that the client's answer arrives through the decryptor
+     */
+    private static boolean startEncryptionHandshake(GeyserSession session, PublicKey key,
+                                                    boolean enableEncryption) throws Exception {
         KeyPair serverKeyPair = EncryptionUtils.createKeyPair();
         byte[] token = EncryptionUtils.generateRandomToken();
 
@@ -247,6 +257,7 @@ public class LoginEncryptionUtils {
             SecretKey encryptionKey = EncryptionUtils.getSecretKey(serverKeyPair.getPrivate(), key, token);
             session.getUpstream().getSession().enableEncryption(encryptionKey);
         }
+        return enableEncryption;
     }
 
     private static void sendEncryptionFailedMessage(GeyserImpl geyser) {

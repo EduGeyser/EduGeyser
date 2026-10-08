@@ -49,9 +49,15 @@ import java.lang.reflect.Type;
 import java.nio.charset.StandardCharsets;
 import java.util.Base64;
 import java.util.UUID;
+import java.util.regex.Pattern;
 
 @Getter
 public final class BedrockClientData {
+    /**
+     * Shape of the codes Bedrock sends, such as en_US.
+     */
+    private static final Pattern LANGUAGE_CODE = Pattern.compile("[a-zA-Z]{2,3}_[a-zA-Z]{2,3}");
+
     @SerializedName(value = "GameVersion")
     private String gameVersion;
     @SerializedName(value = "ServerAddress")
@@ -184,6 +190,10 @@ public final class BedrockClientData {
      */
     public boolean isEducationEdition() {
         return isEduMode;
+    }
+
+    public String getLanguageCode() {
+        return languageCode != null && LANGUAGE_CODE.matcher(languageCode).matches() ? languageCode : "en_US";
     }
 
     public DeviceOs getDeviceOs() {

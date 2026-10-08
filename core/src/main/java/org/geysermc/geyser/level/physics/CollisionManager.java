@@ -113,6 +113,11 @@ public class CollisionManager {
 
     private long lastCorrectionTick = -MIN_CORRECTION_DELAY_TICKS;
 
+    /**
+     * No real movement covers this many blocks on one axis in a tick
+     */
+    private static final double MAX_MOVEMENT_PER_TICK = 64;
+
     public CollisionManager(GeyserSession session) {
         this.session = session;
         this.playerBoundingBox = new BoundingBox(0, 0, 0, 0.6, 1.8, 0.6);
@@ -375,6 +380,11 @@ public class CollisionManager {
         double movementY = movement.getY();
         double movementZ = movement.getZ();
 
+        // The blocks walked below grow with the movement
+        if (!isPlausibleMovement(movementX) || !isPlausibleMovement(movementY) || !isPlausibleMovement(movementZ)) {
+            return Vector3d.ZERO;
+        }
+
         // Position might change slightly due to floating point error
         double originalX = boundingBox.getMiddleX();
         double originalY = boundingBox.getMiddleY();
@@ -406,6 +416,10 @@ public class CollisionManager {
         boundingBox.setMiddleZ(originalZ);
 
         return Vector3d.from(movementX, movementY, movementZ);
+    }
+
+    private static boolean isPlausibleMovement(double movement) {
+        return Double.isFinite(movement) && Math.abs(movement) <= MAX_MOVEMENT_PER_TICK;
     }
 
     private double computeCollisionOffset(BoundingBox boundingBox, Axis axis, double offset, BlockPositionIterator iter, boolean checkWorld, boolean walkOnLava) {
