@@ -45,6 +45,8 @@ dependencies {
     shadowBundle(libs.protocol.connection)
     shadowBundle(libs.protocol.common)
     shadowBundle(libs.protocol.codec)
+    // RakNet API dependency, so it must be relocated along with it
+    shadowBundle(libs.netty.transport.common)
     shadowBundle(libs.raknet)
     shadowBundle(libs.nethernet)
     shadowBundle(libs.mcprotocollib)
