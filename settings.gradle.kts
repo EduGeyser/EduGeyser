@@ -16,8 +16,11 @@ pluginManagement {
 
 rootProject.name = "geyser-parent"
 
-val localNetworkM = extra.has("localNetworkM") || extra.has("localRaknet") || extra.has("localNethernet")
-if (localNetworkM) {
+// Opt-in local transport testing against the sibling NetworkM checkout: -PlocalRaknet and
+// -PlocalNethernet substitute one transport each, -PlocalNetworkM both.
+val localRaknet = extra.has("localNetworkM") || extra.has("localRaknet")
+val localNethernet = extra.has("localNetworkM") || extra.has("localNethernet")
+if (localRaknet || localNethernet) {
     val networkM = file(providers.gradleProperty("networkMDir").getOrElse("../NetworkM"))
     require(networkM.resolve("settings.gradle.kts").isFile) {
         "Local transport testing requires NetworkM at ${networkM.absolutePath}. " +
@@ -25,10 +28,16 @@ if (localNetworkM) {
     }
     includeBuild(networkM) {
         dependencySubstitution {
-            substitute(module("io.github.sendablemetatype.netty:netty-transport-raknet"))
-                .using(project(":transport-raknet"))
-            substitute(module("io.github.sendablemetatype.netty:netty-transport-nethernet"))
-                .using(project(":transport-nethernet"))
+            if (localRaknet) {
+                substitute(module("io.github.sendablemetatype.netty:netty-transport-common"))
+                    .using(project(":transport-common"))
+                substitute(module("io.github.sendablemetatype.netty:netty-transport-raknet"))
+                    .using(project(":transport-raknet"))
+            }
+            if (localNethernet) {
+                substitute(module("io.github.sendablemetatype.netty:netty-transport-nethernet"))
+                    .using(project(":transport-nethernet"))
+            }
         }
     }
 }
