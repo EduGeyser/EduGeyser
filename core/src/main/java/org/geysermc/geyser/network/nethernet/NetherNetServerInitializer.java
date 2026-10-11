@@ -37,14 +37,13 @@ import org.cloudburstmc.protocol.bedrock.data.PacketCompressionAlgorithm;
 import org.cloudburstmc.protocol.bedrock.netty.codec.compression.CompressionCodec;
 import org.cloudburstmc.protocol.bedrock.netty.codec.packet.BedrockPacketCodec;
 import org.cloudburstmc.protocol.bedrock.netty.codec.packet.BedrockPacketCodec_v3;
-import org.cloudburstmc.protocol.bedrock.netty.initializer.BedrockChannelInitializer;
 import org.geysermc.geyser.GeyserImpl;
 import org.geysermc.geyser.network.GeyserServerInitializer;
 import org.geysermc.geyser.network.netty.BedrockEncryptionControl;
 
 /**
- * Channel initializer for incoming Nethernet (WebRTC) connections, built on
- * CloudburstMC's transport neutral BedrockChannelInitializer seam. NetherNet
+ * Channel initializer for incoming Nethernet (WebRTC) connections. Session
+ * setup is shared with RakNet through GeyserServerInitializer, but NetherNet
  * is a first class transport here: no FrameIdCodec (the 0xFE byte is RakNet
  * framing; data channel payloads are bare batch bytes) and no RakMessage
  * wrapping. The pipeline is:
@@ -58,20 +57,19 @@ import org.geysermc.geyser.network.netty.BedrockEncryptionControl;
  * Bedrock layer encryption stays disabled: DTLS already secures the
  * transport, and clients expect none on NetherNet.
  */
-public class NetherNetServerInitializer extends BedrockChannelInitializer<BedrockServerSession> {
+public class NetherNetServerInitializer extends GeyserServerInitializer {
 
-    private final GeyserImpl geyser;
-    private final DefaultEventLoopGroup eventLoopGroup;
     private final ChannelGroup playerChannels;
 
     public NetherNetServerInitializer(GeyserImpl geyser, DefaultEventLoopGroup eventLoopGroup, ChannelGroup playerChannels) {
-        this.geyser = geyser;
-        this.eventLoopGroup = eventLoopGroup;
+        super(geyser, eventLoopGroup);
         this.playerChannels = playerChannels;
     }
 
     @Override
     protected void preInitChannel(Channel channel) {
+        // No super call: the parent adds the RakNet framing.
+
         // Register for clean disconnect on a real teardown. The group removes
         // the channel automatically when it closes.
         playerChannels.add(channel);
@@ -100,7 +98,7 @@ public class NetherNetServerInitializer extends BedrockChannelInitializer<Bedroc
     }
 
     @Override
-    protected BedrockServerSession createSession0(BedrockPeer peer, int subClientId) {
+    public BedrockServerSession createSession0(BedrockPeer peer, int subClientId) {
         BedrockServerSession session = new BedrockServerSession(peer, subClientId);
         // On RakNet the transport refines the session's disconnect reason
         // (client quit becomes CLOSED, which Geyser renders as its closed by
@@ -111,15 +109,5 @@ public class NetherNetServerInitializer extends BedrockChannelInitializer<Bedroc
         // reason explicitly and never read this.
         session.setDisconnectReason(BedrockDisconnectReasons.CLOSED);
         return session;
-    }
-
-    @Override
-    protected void initSession(BedrockServerSession session) {
-        try {
-            GeyserServerInitializer.initGeyserSession(session, geyser, eventLoopGroup);
-        } catch (Throwable e) {
-            geyser.getLogger().error("Error occurred while initializing Nethernet player!", e);
-            session.disconnect(e.getMessage());
-        }
     }
 }

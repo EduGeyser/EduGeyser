@@ -46,8 +46,10 @@ import io.github.sendablemetatype.netty.handler.codec.raknet.server.RakServerRat
 import org.geysermc.geyser.GeyserImpl;
 import org.geysermc.geyser.api.event.connection.ConnectionRequestEvent;
 import org.geysermc.geyser.configuration.GeyserConfig;
+import org.geysermc.geyser.network.bedrock.raknet.Bootstraps;
 import org.geysermc.geyser.network.bedrock.raknet.RakConnectionRequestHandler;
 import org.geysermc.geyser.network.bedrock.raknet.RakPingHandler;
+import org.geysermc.geyser.network.bedrock.raknet.RakServerInitializer;
 import org.geysermc.geyser.text.GeyserLocale;
 import org.geysermc.geyser.util.WebUtils;
 import org.geysermc.mcprotocollib.network.helper.TransportHelper;
@@ -191,7 +193,7 @@ public final class RaknetServer {
         ));
         this.geyser.getLogger().debug("Disabling RakNet rate limiting " + rakRateLimitingDisabled);
 
-        this.initializer = new GeyserServerInitializer(this.geyser, rakSendCookie);
+        this.initializer = new RakServerInitializer(this.geyser, rakSendCookie);
         playerGroup = initializer.getEventLoopGroup();
 
         return new ServerBootstrap()
