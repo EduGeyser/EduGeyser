@@ -44,13 +44,11 @@ import io.github.sendablemetatype.netty.channel.raknet.config.RakServerCookieMod
 import io.github.sendablemetatype.netty.handler.codec.raknet.server.RakServerOfflineHandler;
 import io.github.sendablemetatype.netty.handler.codec.raknet.server.RakServerRateLimiter;
 import org.geysermc.geyser.GeyserImpl;
-import org.geysermc.geyser.api.event.connection.ConnectionRequestEvent;
 import org.geysermc.geyser.configuration.GeyserConfig;
 import org.geysermc.geyser.network.bedrock.raknet.Bootstraps;
 import org.geysermc.geyser.network.bedrock.raknet.RakConnectionRequestHandler;
 import org.geysermc.geyser.network.bedrock.raknet.RakPingHandler;
 import org.geysermc.geyser.network.bedrock.raknet.RakServerInitializer;
-import org.geysermc.geyser.text.GeyserLocale;
 import org.geysermc.geyser.util.WebUtils;
 import org.geysermc.mcprotocollib.network.helper.TransportHelper;
 
@@ -228,22 +226,9 @@ public final class RaknetServer {
             }
         }
 
-        String ip = geyser.config().logPlayerIpAddresses() ? clientAddress.toString() : "<IP address withheld>";
-
-        ConnectionRequestEvent requestEvent = new ConnectionRequestEvent(
-            clientAddress,
-            geyser.config().advanced().bedrock().useHaproxyProtocol() ? inetSocketAddress : null
-        );
-        geyser.eventBus().fire(requestEvent);
-        if (requestEvent.isCancelled()) {
-            geyser.getLogger().debug("Connection request from " + ip + " was cancelled using the API!");
-            connectionAttempts++;
-            return false;
-        }
-
-        geyser.getLogger().debug(GeyserLocale.getLocaleStringLog("geyser.network.attempt_connect", ip));
         connectionAttempts++;
-        return true;
+        return ConnectionRequests.accept(geyser, clientAddress,
+            geyser.config().advanced().bedrock().useHaproxyProtocol() ? inetSocketAddress : null);
     }
 
     private List<CIDRMatcher> whitelistedIPsMatchers = null;

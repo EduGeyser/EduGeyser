@@ -60,10 +60,12 @@ import org.geysermc.geyser.network.netty.BedrockEncryptionControl;
 public class NetherNetServerInitializer extends GeyserServerInitializer {
 
     private final ChannelGroup playerChannels;
+    private final NetherNetConnectionGate connectionGate;
 
     public NetherNetServerInitializer(GeyserImpl geyser, DefaultEventLoopGroup eventLoopGroup, ChannelGroup playerChannels) {
         super(geyser, eventLoopGroup);
         this.playerChannels = playerChannels;
+        this.connectionGate = new NetherNetConnectionGate(geyser);
     }
 
     @Override
@@ -81,6 +83,7 @@ public class NetherNetServerInitializer extends GeyserServerInitializer {
         channel.attr(PacketDirection.ATTRIBUTE).set(PacketDirection.CLIENT_BOUND);
 
         channel.pipeline()
+                .addLast(NetherNetConnectionGate.NAME, this.connectionGate)
                 .addLast(NetherNetFramingCodec.NAME, new NetherNetFramingCodec())
                 .addLast(NetherNetBatchWrapperCodec.NAME, NetherNetBatchWrapperCodec.INSTANCE)
                 .addLast(CompressionCodec.NAME, new CompressionCodec(
