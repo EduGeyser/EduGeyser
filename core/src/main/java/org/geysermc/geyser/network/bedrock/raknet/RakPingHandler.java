@@ -33,7 +33,7 @@ import io.github.sendablemetatype.netty.channel.raknet.RakPing;
 import io.github.sendablemetatype.netty.channel.raknet.RakPong;
 import io.github.sendablemetatype.netty.channel.raknet.RakServerChannel;
 import io.github.sendablemetatype.netty.channel.raknet.config.RakChannelOption;
-import org.geysermc.geyser.network.GeyserServer;
+import org.geysermc.geyser.network.RaknetServer;
 
 import java.net.InetSocketAddress;
 
@@ -42,7 +42,7 @@ import java.net.InetSocketAddress;
 public class RakPingHandler extends SimpleChannelInboundHandler<RakPing> {
     public static final String NAME = "rak-ping-handler";
 
-    private final GeyserServer server;
+    private final RaknetServer server;
 
     @Override
     protected void channelRead0(ChannelHandlerContext ctx, RakPing msg) {

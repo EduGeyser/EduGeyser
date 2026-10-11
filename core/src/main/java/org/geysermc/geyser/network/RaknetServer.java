@@ -54,7 +54,6 @@ import org.geysermc.geyser.network.bedrock.raknet.RakConnectionRequestHandler;
 import org.geysermc.geyser.network.bedrock.raknet.RakPingHandler;
 import org.geysermc.geyser.ping.GeyserPingInfo;
 import org.geysermc.geyser.ping.IGeyserPingPassthrough;
-import org.geysermc.geyser.skin.SkinProvider;
 import org.geysermc.geyser.text.GeyserLocale;
 import org.geysermc.geyser.translator.text.MessageTranslator;
 import org.geysermc.geyser.util.WebUtils;
@@ -72,7 +71,7 @@ import java.util.function.Supplier;
 import static io.github.sendablemetatype.netty.channel.raknet.RakConstants.DEFAULT_GLOBAL_PACKET_LIMIT;
 import static io.github.sendablemetatype.netty.channel.raknet.RakConstants.DEFAULT_PACKET_LIMIT;
 
-public final class GeyserServer {
+public final class RaknetServer {
     private static final boolean PRINT_DEBUG_PINGS = Boolean.parseBoolean(System.getProperty("Geyser.PrintPingsInDebugMode", "true"));
 
     /*
@@ -117,7 +116,7 @@ public final class GeyserServer {
      */
     private final int broadcastPort;
 
-    public GeyserServer(GeyserImpl geyser, int threadCount) {
+    public RaknetServer(GeyserImpl geyser, int threadCount) {
         this.geyser = geyser;
         this.listenCount = Bootstraps.isReusePortAvailable() ?  Integer.getInteger("Geyser.ListenCount", 1) : 1;
         GeyserImpl.getInstance().getLogger().debug("Listen thread count: " + listenCount);
@@ -172,8 +171,6 @@ public final class GeyserServer {
             futureChildGroup.sync();
             futureGroup.sync();
             futurePlayerGroup.sync();
-
-            SkinProvider.shutdown();
         } catch (InterruptedException e) {
             GeyserImpl.getInstance().getLogger().severe("Exception in shutdown process", e);
         }
