@@ -45,6 +45,7 @@ import io.netty.util.concurrent.GlobalEventExecutor;
 import org.cloudburstmc.protocol.bedrock.BedrockPong;
 import org.geysermc.geyser.GeyserImpl;
 import org.geysermc.geyser.GeyserLogger;
+import org.geysermc.geyser.network.BedrockPingHandler;
 
 import java.net.InetAddress;
 import java.net.InetSocketAddress;
@@ -109,6 +110,7 @@ public class NetherNetServer {
     private final DefaultEventLoopGroup playerEventLoopGroup;
     private final PlayFabTokenManager tokenManager;
     private final String connectionId;
+    private final BedrockPingHandler pingResponder;
 
     // Tracks live player connections so a real teardown (shutdown or an
     // API-initiated stop with players online) can cleanly disconnect them
@@ -165,6 +167,7 @@ public class NetherNetServer {
         this.playerEventLoopGroup = playerEventLoopGroup;
         this.tokenManager = new PlayFabTokenManager(logger, playfabCustomId, playfabDeviceId);
         this.connectionId = connectionId;
+        this.pingResponder = new BedrockPingHandler(geyser);
     }
 
     /**
@@ -504,9 +507,10 @@ public class NetherNetServer {
     /**
      * Builds the status document: the NetherNet equivalent of the RakNet
      * unconnected pong, matching vanilla's fourteen member ServerData
-     * document. Built from the same pong the RakNet listener answers pings
-     * with, MOTD passthrough, the ping event, and the fallbacks included, so
-     * the two transports always describe the server identically.
+     * document. Built by the same {@link BedrockPingHandler} the RakNet
+     * listener answers pings with, MOTD passthrough, the ping event, and the
+     * fallbacks included, so the two transports always describe the server
+     * identically.
      *
      * Both auth bits are true because we accept Microsoft authenticated and
      * self signed identities alike: client assertions are stripped rather
@@ -517,7 +521,7 @@ public class NetherNetServer {
      * behind a blocking ping passthrough.
      */
     private NetherNetServerStatus buildServerStatus() {
-        BedrockPong pong = geyser.getGeyserServer().onQuery(statusPingAddress(), 0L);
+        BedrockPong pong = this.pingResponder.onQuery(0L, statusPingAddress());
         return NetherNetServerStatus.builder()
                 .dataVersion(SERVER_DATA_VERSION)
                 .name(pong.motd())
