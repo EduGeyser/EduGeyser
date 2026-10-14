@@ -524,7 +524,7 @@ public class NetherNetServer {
      * behind a blocking ping passthrough.
      */
     private NetherNetServerStatus buildServerStatus() {
-        BedrockPong pong = this.pingResponder.onQuery(0L, statusPingAddress());
+        BedrockPong pong = this.pingResponder.onQuery(0L, statusPingAddress(), null);
         return NetherNetServerStatus.builder()
                 .dataVersion(SERVER_DATA_VERSION)
                 .name(pong.motd())
