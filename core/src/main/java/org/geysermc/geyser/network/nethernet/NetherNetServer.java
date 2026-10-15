@@ -426,6 +426,9 @@ public class NetherNetServer {
             tlsMode = "automatic certificate management";
         }
         this.httpSignaling = new NetherNetHttpSignaling(tlsSupplier, workerGroup);
+        // The default validator refuses Education clients and some Bedrock builds, and a refused
+        // offer ends the join with no RakNet fallback. RakNet does not validate clients either.
+        this.httpSignaling.setOfferValidator(null);
         this.httpSignaling.setStatusSupplier(this::serveServerStatus);
         try {
             ServerBootstrap httpBootstrap = new ServerBootstrap();
