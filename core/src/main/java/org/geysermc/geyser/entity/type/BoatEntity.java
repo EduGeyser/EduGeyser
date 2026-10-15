@@ -35,6 +35,7 @@ import org.geysermc.geyser.entity.spawn.EntitySpawnContext;
 import org.geysermc.geyser.entity.vehicle.BoatVehicleComponent;
 import org.geysermc.geyser.entity.vehicle.ClientVehicle;
 import org.geysermc.geyser.entity.vehicle.VehicleComponent;
+import org.geysermc.geyser.network.bedrock.GameProtocol;
 import org.geysermc.geyser.util.InteractionResult;
 import org.geysermc.geyser.util.InteractiveTag;
 import org.geysermc.mcprotocollib.protocol.data.game.entity.metadata.type.BooleanEntityMetadata;
@@ -80,7 +81,9 @@ public class BoatEntity extends Entity implements Tickable, Leashable, ClientVeh
         setHeadYaw(headYaw + 90);
         this.variant = variant;
 
-        metadata.put(EntityDataTypes.VARIANT, variant.ordinal());
+        // Clients before 26.50 crash on the poplar variant; show pale oak, like the poplar boat item
+        BoatVariant shownVariant = variant == BoatVariant.POPLAR && !GameProtocol.is26_50orHigher(session.protocolVersion()) ? BoatVariant.PALE_OAK : variant;
+        metadata.put(EntityDataTypes.VARIANT, shownVariant.ordinal());
 
         // Required to be able to move on land 1.16.200+ or apply gravity not in the water 1.16.100+
         metadata.put(EntityDataTypes.IS_BUOYANT, true);
