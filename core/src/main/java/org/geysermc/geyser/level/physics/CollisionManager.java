@@ -30,6 +30,7 @@ import lombok.Setter;
 import net.kyori.adventure.util.TriState;
 import org.checkerframework.checker.nullness.qual.Nullable;
 import org.cloudburstmc.math.GenericMath;
+import org.cloudburstmc.math.vector.Vector2f;
 import org.cloudburstmc.math.vector.Vector3d;
 import org.cloudburstmc.math.vector.Vector3f;
 import org.cloudburstmc.math.vector.Vector3i;
@@ -252,6 +253,8 @@ public class CollisionManager {
         correctionPacket.setDelta(entity.getLastTickEndVelocity());
         correctionPacket.setOnGround(entity.isOnGround());
         correctionPacket.setTick(tick);
+        // Encoded for every prediction type since 1.21.100, so it can't be null
+        correctionPacket.setVehicleRotation(Vector2f.ZERO);
         session.sendUpstreamPacket(correctionPacket);
     }
 
