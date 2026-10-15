@@ -2116,7 +2116,10 @@ public class GeyserSession implements GeyserConnection, GeyserCommandSource {
 
         startGamePacket.setChatRestrictionLevel(ChatRestrictionLevel.NONE);
 
-        startGamePacket.setRewindHistorySize(0);
+        // Nonzero so the client buffers its inputs for CorrectPlayerMovePredictionPacket corrections;
+        // the client rewinds to the corrected tick and replays the buffered inputs forward.
+        // SERVER_WITH_REWIND is the default movement mode for every supported protocol version.
+        startGamePacket.setRewindHistorySize(20);
         // Server authorative block breaking results in the client always sending
         // positions for block breaking actions, which is easier to validate
         // It does *not* mean we can dictate the break speed server-sided :(

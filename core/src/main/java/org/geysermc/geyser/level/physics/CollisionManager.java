@@ -34,7 +34,7 @@ import org.cloudburstmc.math.vector.Vector3d;
 import org.cloudburstmc.math.vector.Vector3f;
 import org.cloudburstmc.math.vector.Vector3i;
 import org.cloudburstmc.protocol.bedrock.data.entity.EntityFlag;
-import org.cloudburstmc.protocol.bedrock.packet.MovePlayerPacket;
+import org.cloudburstmc.protocol.bedrock.packet.CorrectPlayerMovePredictionPacket;
 import org.geysermc.erosion.util.BlockPositionIterator;
 import org.geysermc.geyser.entity.VanillaEntities;
 import org.geysermc.geyser.entity.type.player.PlayerEntity;
@@ -101,6 +101,15 @@ public class CollisionManager {
      * the player is teleported to the correct position
      */
     private static final double INCORRECT_MOVEMENT_THRESHOLD = 0.08;
+
+    /**
+     * Minimum client ticks between prediction corrections, matching the BDS default
+     * player-rewind-min-correction-delay-ticks. While a correction is in flight the client
+     * has not rewound yet; correcting again from the still diverged state fights the replay.
+     */
+    private static final int MIN_CORRECTION_DELAY_TICKS = 5;
+
+    private long lastCorrectionTick = -MIN_CORRECTION_DELAY_TICKS;
 
     public CollisionManager(GeyserSession session) {
         this.session = session;
@@ -193,7 +202,11 @@ public class CollisionManager {
 
         Vector3d startingPos = playerBoundingBox.getBottomCenter();
         Vector3d movement = position.sub(startingPos);
-        Vector3d adjustedMovement = correctPlayerMovement(movement, false, teleported);
+        // Clip the claimed movement against Java collision shapes so the position we send to the
+        // Java server is always collision lawful, matching the clip the vanilla server itself runs.
+        // Skipped while no clip applies (spectator mode, below the void floor) where passing
+        // through blocks is intended.
+        Vector3d adjustedMovement = correctPlayerMovement(movement, !session.isNoClip(), teleported);
         playerBoundingBox.translate(adjustedMovement.getX(), adjustedMovement.getY(), adjustedMovement.getZ());
         playerBoundingBox.translate(pistonCache.getPlayerMotion().getX(), pistonCache.getPlayerMotion().getY(), pistonCache.getPlayerMotion().getZ());
         // Correct player position
@@ -227,13 +240,19 @@ public class CollisionManager {
     }
 
     public void recalculatePosition() {
-        PlayerEntity entity = session.getPlayerEntity();
-        MovePlayerPacket movePlayerPacket = new MovePlayerPacket();
-        movePlayerPacket.setRuntimeEntityId(entity.geyserId());
-        movePlayerPacket.setPosition(entity.bedrockPosition());
-        movePlayerPacket.setRotation(entity.bedrockRotation());
-        movePlayerPacket.setMode(MovePlayerPacket.Mode.NORMAL);
-        session.sendUpstreamPacket(movePlayerPacket);
+        long tick = session.getClientTicks();
+        if (tick - lastCorrectionTick < MIN_CORRECTION_DELAY_TICKS) {
+            return;
+        }
+        lastCorrectionTick = tick;
+
+        SessionPlayerEntity entity = session.getPlayerEntity();
+        CorrectPlayerMovePredictionPacket correctionPacket = new CorrectPlayerMovePredictionPacket();
+        correctionPacket.setPosition(entity.bedrockPosition());
+        correctionPacket.setDelta(entity.getLastTickEndVelocity());
+        correctionPacket.setOnGround(entity.isOnGround());
+        correctionPacket.setTick(tick);
+        session.sendUpstreamPacket(correctionPacket);
     }
 
     public static BlockPositionIterator collidableBlocksIterator(GeyserSession session, BoundingBox box) {
