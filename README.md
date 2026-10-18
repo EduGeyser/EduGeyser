@@ -85,6 +85,7 @@ The rest of the [wiki](https://edugeyser.org/wiki/) covers the Geyser features E
 | [webrtc-java](https://github.com/EduGeyser/webrtc-java) | WebRTC binding used by the NetherNet transport |
 | [education-edition-support](https://github.com/EduGeyser/education-edition-support) | Bedrock protocol library with the Education Edition codecs |
 | [EduGeyserWebsite](https://github.com/EduGeyser/EduGeyserWebsite) | Source of edugeyser.org |
+| [EduGeyser-Docs](https://codeberg.org/SendableMetatype/EduGeyser-Docs) | Early documentation of Education Edition systems, written while developing EduGeyser. Out of date and does not cover recent changes, but may be updated soon |
 
 ## Compiling
 
@@ -121,5 +122,10 @@ Libraries used:
 - [webrtc-java](https://github.com/EduGeyser/webrtc-java), a fork of [devopvoid's webrtc-java](https://github.com/devopvoid/webrtc-java), optimized and slimmed down for data channel only usage
 - [TerminalConsoleAppender](https://github.com/Minecrell/TerminalConsoleAppender)
 - [Simple Logging Facade for Java (slf4j)](https://github.com/qos-ch/slf4j)
+
+Prior work:
+
+- [GeyserReversion](https://github.com/bundabrg/GeyserReversion) by [bundabrg](https://github.com/bundabrg), an earlier Geyser extension with Education Edition support
+- [mcedu-docs](https://github.com/josef240/mcedu-docs) by [josef240](https://github.com/josef240), documentation of Education Edition's inner workings
 
 EduGeyser is licensed under the [MIT License](LICENSE).
