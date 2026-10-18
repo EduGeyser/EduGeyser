@@ -124,6 +124,8 @@ public final class EntityUtils {
             case MINECART, HOPPER_MINECART, TNT_MINECART, CHEST_MINECART, FURNACE_MINECART, SPAWNER_MINECART,
                     COMMAND_BLOCK_MINECART -> mountedHeightOffset = 0;
             case BAMBOO_RAFT, BAMBOO_CHEST_RAFT -> mountedHeightOffset = 0.25f;
+            // Java seats riders at the cushion's top, and a player's feet sit 0.6 below that
+            case CUSHION -> mountedHeightOffset = height - 0.25f;
             case HOGLIN, ZOGLIN -> {
                 boolean isBaby = mount.getFlag(EntityFlag.BABY);
                 mountedHeightOffset = height - (isBaby ? 0.2f : 0.15f);
