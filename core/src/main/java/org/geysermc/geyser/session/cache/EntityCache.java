@@ -61,7 +61,7 @@ public class EntityCache {
     private final GeyserSession session;
 
     /**
-     * Guards the {@link #entities}, {@link #entityIdTranslations} and {@link #entityUuidTranslations} maps.
+     * Guards the {@link #entities}, {@link #entityParts}, {@link #entityIdTranslations} and {@link #entityUuidTranslations} maps.
      * <p>
      * All mutations to these maps happen on the session's event loop thread. However, the Geyser entity API exposes
      * {@link #getEntityByGeyserId(long)}, {@link #getEntityByJavaId(int)} and {@link #getEntityByUuid(UUID)},
@@ -73,6 +73,11 @@ public class EntityCache {
     private final ReentrantReadWriteLock lock = new ReentrantReadWriteLock();
 
     private final Long2ObjectMap<Entity> entities = new Long2ObjectOpenHashMap<>();
+    /**
+     * Client-only entities that draw part of another entity, mapped to that entity so the client's interactions
+     * with them reach it.
+     */
+    private final Long2ObjectMap<Entity> entityParts = new Long2ObjectOpenHashMap<>();
     /**
      * A list of all entities that must be ticked.
      */
@@ -243,7 +248,26 @@ public class EntityCache {
     }
 
     private Entity getEntityByGeyserId0(long geyserId) {
-        return entities.get(geyserId);
+        Entity entity = entities.get(geyserId);
+        return entity != null ? entity : entityParts.get(geyserId);
+    }
+
+    public void addEntityPart(long geyserId, Entity owner) {
+        lock.writeLock().lock();
+        try {
+            entityParts.put(geyserId, owner);
+        } finally {
+            lock.writeLock().unlock();
+        }
+    }
+
+    public void removeEntityPart(long geyserId) {
+        lock.writeLock().lock();
+        try {
+            entityParts.remove(geyserId);
+        } finally {
+            lock.writeLock().unlock();
+        }
     }
 
     /**
