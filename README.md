@@ -91,7 +91,7 @@ The rest of the [wiki](https://edugeyser.org/wiki/) covers the Geyser features E
 
 1. Clone the repository.
 2. Run `git submodule update --init --recursive` in the repository root. This downloads the submodules the build needs.
-3. Build with JDK 25: `./gradlew build -PrequireBundledExtension` (on Windows `gradlew build -PrequireBundledExtension`).
+3. Build with JDK 27: `./gradlew build -PrequireBundledExtension` (on Windows `gradlew build -PrequireBundledExtension`).
 4. The jars are in `bootstrap/<platform>/build/libs/EduGeyser-<Platform>.jar`. The Fabric and NeoForge jars are in `bootstrap/mod/<platform>/build/libs/`.
 
 The education extension ships inside the jar: `bundled-extension/edu.jar` is embedded at build time and EduGeyser installs it into its extensions folder on startup. `-PrequireBundledExtension` fails the build if that jar is missing. Without the property the build still embeds the jar when it is present and only warns and continues when it is not.

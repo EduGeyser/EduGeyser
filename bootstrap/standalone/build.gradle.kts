@@ -27,6 +27,8 @@ tasks.named<Jar>("jar") {
     manifest {
         // log4j provides multi-release java 9 code which resolves https://github.com/GeyserMC/Geyser/issues/3693
         attributes("Multi-Release" to true)
+        // JLine's FFM terminal calls restricted java.lang.foreign methods
+        attributes("Enable-Native-Access" to "ALL-UNNAMED")
     }
 }
 

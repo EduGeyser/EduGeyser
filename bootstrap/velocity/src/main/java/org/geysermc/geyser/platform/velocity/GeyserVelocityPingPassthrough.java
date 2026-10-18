@@ -42,6 +42,7 @@ import org.geysermc.geyser.ping.IGeyserPingPassthrough;
 
 import java.net.InetSocketAddress;
 import java.util.Optional;
+import java.util.UUID;
 import java.util.concurrent.ExecutionException;
 
 @AllArgsConstructor
@@ -77,6 +78,7 @@ public class GeyserVelocityPingPassthrough implements IGeyserPingPassthrough {
 
         private final InetSocketAddress remote;
         private final @Nullable InetSocketAddress virtualHost;
+        private final UUID sessionId = UUID.randomUUID();
 
         public GeyserInboundConnection(InetSocketAddress remote, @Nullable InetSocketAddress virtualHost) {
             this.remote = remote;
@@ -116,6 +118,11 @@ public class GeyserVelocityPingPassthrough implements IGeyserPingPassthrough {
         @Override
         public HandshakeIntent getHandshakeIntent() {
             return HandshakeIntent.STATUS;
+        }
+
+        @Override
+        public UUID getSessionId() {
+            return this.sessionId;
         }
     }
 
