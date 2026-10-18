@@ -26,6 +26,7 @@
 package org.geysermc.geyser.entity.type;
 
 import org.cloudburstmc.protocol.bedrock.data.entity.EntityDataTypes;
+import org.cloudburstmc.protocol.bedrock.data.entity.EntityFlag;
 import org.geysermc.geyser.entity.spawn.EntitySpawnContext;
 import org.geysermc.geyser.util.InteractionResult;
 import org.geysermc.geyser.util.InteractiveTag;
@@ -38,6 +39,14 @@ public class CushionEntity extends Entity {
         super(context);
         // The default colour is white, or 15 on bedrock, which Java doesn't send
         metadata.put(EntityDataTypes.VARIANT, 15);
+    }
+
+    @Override
+    protected void initializeMetadata() {
+        super.initializeMetadata();
+        // Riders get off on top of the cushion, so the client has to wait for the server's position instead of
+        // stepping off to the side first. BDS sends this for the happy ghast, the other vanilla entity that does that.
+        setFlag(EntityFlag.DOES_SERVER_AUTH_ONLY_DISMOUNT, true);
     }
 
     public void setDyeColor(IntEntityMetadata dyeColor) {
