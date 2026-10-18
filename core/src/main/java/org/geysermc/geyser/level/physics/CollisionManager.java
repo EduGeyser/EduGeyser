@@ -52,6 +52,7 @@ import org.geysermc.geyser.translator.collision.OtherCollision;
 import org.geysermc.geyser.translator.collision.SolidCollision;
 import org.geysermc.geyser.translator.collision.fixes.ScaffoldingCollision;
 import org.geysermc.geyser.util.BlockUtils;
+import org.geysermc.mcprotocollib.protocol.data.game.entity.player.GameMode;
 
 import java.text.DecimalFormat;
 import java.text.DecimalFormatSymbols;
@@ -207,7 +208,8 @@ public class CollisionManager {
         // Java server is always collision lawful, matching the clip the vanilla server itself runs.
         // Skipped while no clip applies (spectator mode, below the void floor) where passing
         // through blocks is intended.
-        Vector3d adjustedMovement = correctPlayerMovement(movement, !session.isNoClip(), teleported);
+        boolean passesThroughBlocks = session.isNoClip() || session.getGameMode() == GameMode.SPECTATOR;
+        Vector3d adjustedMovement = correctPlayerMovement(movement, !passesThroughBlocks, teleported);
         playerBoundingBox.translate(adjustedMovement.getX(), adjustedMovement.getY(), adjustedMovement.getZ());
         playerBoundingBox.translate(pistonCache.getPlayerMotion().getX(), pistonCache.getPlayerMotion().getY(), pistonCache.getPlayerMotion().getZ());
         // Correct player position
