@@ -28,6 +28,7 @@ package org.geysermc.geyser.item.type;
 import org.checkerframework.checker.nullness.qual.NonNull;
 import org.cloudburstmc.protocol.bedrock.data.inventory.ItemData;
 import org.geysermc.geyser.item.TooltipOptions;
+import org.geysermc.geyser.network.bedrock.GameProtocol;
 import org.geysermc.geyser.registry.type.ItemMapping;
 import org.geysermc.geyser.registry.type.ItemMappings;
 import org.geysermc.geyser.session.GeyserSession;
@@ -64,8 +65,17 @@ public class MapItem extends Item {
         Map.entry("abandoned_camp_map", 18),
         Map.entry("warm_ocean_ruins_map", 26)
     );
+    // Clients before 26.50 do not know the explorer maps added in it: they show no icon, and holding one crashes the game
+    private static final Map<String, Integer> PRE_26_50_EXPLORER_MAP_METADATA = Map.of(
+        "buried_ancient_city_map", 5,
+        "buried_mineshaft_map", 5,
+        "desert_pyramid_map", 12,
+        "abandoned_camp_map", 5,
+        "warm_ocean_ruins_map", 3
+    );
 
     private final int explorerMetadata;
+    private final int pre26_50ExplorerMetadata;
 
     public MapItem(String javaIdentifier, Builder builder) {
         super(javaIdentifier, builder);
@@ -74,13 +84,14 @@ public class MapItem extends Item {
             throw new IllegalStateException("Missing explorer map metadata for: " + javaIdentifier);
         }
         this.explorerMetadata = explorerMetadata;
+        this.pre26_50ExplorerMetadata = PRE_26_50_EXPLORER_MAP_METADATA.getOrDefault(javaIdentifier, explorerMetadata);
     }
 
     @Override
     public ItemData.Builder translateToBedrock(GeyserSession session, int count, DataComponents components, ItemMapping mapping, ItemMappings mappings) {
         ItemData.Builder builder = super.translateToBedrock(session, count, components, mapping, mappings);
         if (explorerMetadata != -1) {
-            builder.damage(explorerMetadata);
+            builder.damage(GameProtocol.is26_50orHigher(session.protocolVersion()) ? explorerMetadata : pre26_50ExplorerMetadata);
         }
         return builder;
     }

@@ -27,6 +27,8 @@ package org.geysermc.geyser.level;
 
 import lombok.Getter;
 import org.checkerframework.checker.nullness.qual.Nullable;
+import org.geysermc.geyser.network.bedrock.GameProtocol;
+import org.geysermc.geyser.session.GeyserSession;
 import org.geysermc.mcprotocollib.protocol.data.game.level.map.MapIconType;
 
 public enum BedrockMapIcon {
@@ -65,11 +67,12 @@ public enum BedrockMapIcon {
     ICON_JUNGLE_TEMPLE(MapIconType.JUNGLE_TEMPLE, 22),
     ICON_SWAMP_HUT(MapIconType.SWAMP_HUT, 23),
     ICON_TRIAL_CHAMBERS(MapIconType.TRIAL_CHAMBERS, 24),
-    ICON_ABANDONED_CAMP(MapIconType.ABANDONED_CAMP, 25),
-    ICON_ANCIENT_CITY(MapIconType.ANCIENT_CITY, 26),
-    ICON_DESERT_PYRAMID(MapIconType.DESERT_PYRAMID, 28),
-    ICON_MINESHAFT(MapIconType.MINESHAFT, 27),
-    ICON_OCEAN_RUIN_WARM(MapIconType.OCEAN_RUIN_WARM, 29);
+    // Added in 26.50; older clients get the treasure X, the jungle temple and the monument instead
+    ICON_ABANDONED_CAMP(MapIconType.ABANDONED_CAMP, 25, 4),
+    ICON_ANCIENT_CITY(MapIconType.ANCIENT_CITY, 26, 4),
+    ICON_DESERT_PYRAMID(MapIconType.DESERT_PYRAMID, 28, 22),
+    ICON_MINESHAFT(MapIconType.MINESHAFT, 27, 4),
+    ICON_OCEAN_RUIN_WARM(MapIconType.OCEAN_RUIN_WARM, 29, 15);
 
     private static final BedrockMapIcon[] VALUES = values();
 
@@ -77,18 +80,28 @@ public enum BedrockMapIcon {
 
     @Getter
     private final int iconID;
+    private final int pre26_50IconID;
 
     private final int red;
     private final int green;
     private final int blue;
 
     BedrockMapIcon(MapIconType iconType, int iconID) {
-        this(iconType, iconID, 255, 255, 255);
+        this(iconType, iconID, iconID);
+    }
+
+    BedrockMapIcon(MapIconType iconType, int iconID, int pre26_50IconID) {
+        this(iconType, iconID, pre26_50IconID, 255, 255, 255);
     }
 
     BedrockMapIcon(MapIconType iconType, int iconID, int red, int green, int blue) {
+        this(iconType, iconID, iconID, red, green, blue);
+    }
+
+    BedrockMapIcon(MapIconType iconType, int iconID, int pre26_50IconID, int red, int green, int blue) {
         this.iconType = iconType;
         this.iconID = iconID;
+        this.pre26_50IconID = pre26_50IconID;
 
         this.red = red;
         this.green = green;
@@ -109,6 +122,10 @@ public enum BedrockMapIcon {
         }
 
         return null;
+    }
+
+    public int getIconID(GeyserSession session) {
+        return GameProtocol.is26_50orHigher(session.protocolVersion()) ? iconID : pre26_50IconID;
     }
 
     /**

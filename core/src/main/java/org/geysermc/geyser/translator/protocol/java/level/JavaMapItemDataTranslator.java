@@ -84,7 +84,7 @@ public class JavaMapItemDataTranslator extends PacketTranslator<ClientboundMapIt
                 BedrockMapIcon bedrockMapIcon = BedrockMapIcon.fromType(icon.getIconType());
 
                 mapItemDataPacket.getTrackedObjects().add(new MapTrackedObject(id));
-                mapItemDataPacket.getDecorations().add(new MapDecoration(bedrockMapIcon.getIconID(), icon.getIconRotation(), icon.getCenterX(), icon.getCenterZ(), "", bedrockMapIcon.toARGB()));
+                mapItemDataPacket.getDecorations().add(new MapDecoration(bedrockMapIcon.getIconID(session), icon.getIconRotation(), icon.getCenterX(), icon.getCenterZ(), "", bedrockMapIcon.toARGB()));
                 id++;
             }
         }
