@@ -36,7 +36,6 @@ import org.incendo.cloud.CommandManager;
 import org.incendo.cloud.neoforge.PermissionNotRegisteredException;
 
 import java.util.HashSet;
-import java.util.Map;
 import java.util.Set;
 
 public class GeyserNeoForgeCommandRegistry extends CommandRegistry {
@@ -53,24 +52,16 @@ public class GeyserNeoForgeCommandRegistry extends CommandRegistry {
     }
 
     @Override
-    protected void register(GeyserCommand command, Map<String, GeyserCommand> commands) {
-        super.register(command, commands);
-
-        // FIRST STAGE: Collect all permissions that may have undefined defaults.
-        if (!command.permission().isBlank() && command.permissionDefault() == null) {
-            // Permission requirement exists but no default value specified.
-            undefinedPermissions.add(command.permission());
-        }
-    }
-
-    @Override
     protected void onRegisterPermissions(GeyserRegisterPermissionsEvent event) {
         super.onRegisterPermissions(event);
 
-        // SECOND STAGE
-        // Now that we are aware of all commands, we can eliminate some incorrect assumptions.
-        // Example: two commands may have the same permission, but only of them defines a permission default.
-        undefinedPermissions.removeAll(permissionDefaults.keySet());
+        // FIRST STAGE: collect the permissions of all commands that no command gave a default.
+        // Done here rather than in register(), which the CommandRegistry constructor calls before this class's fields exist.
+        // Two commands may share a permission where only one of them defines a default, so this also needs all commands known.
+        registeredCommands()
+            .map(GeyserCommand::permission)
+            .filter(permission -> !permission.isBlank() && !permissionDefaults.containsKey(permission))
+            .forEach(undefinedPermissions::add);
     }
 
     /**
@@ -78,7 +69,7 @@ public class GeyserNeoForgeCommandRegistry extends CommandRegistry {
      * Should be subscribed late to allow extensions and mods to register a desired permission default first.
      */
     void onPermissionGatherForUndefined(PermissionGatherEvent.Nodes event) {
-        // THIRD STAGE
+        // SECOND STAGE
         for (String permission : undefinedPermissions) {
             if (PermissionUtils.register(permission, TriState.NOT_SET, event)) {
                 // The permission was not already registered

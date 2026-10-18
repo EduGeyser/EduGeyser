@@ -85,6 +85,7 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
+import java.util.stream.Stream;
 
 import static org.geysermc.geyser.command.GeyserCommand.DEFAULT_ROOT_COMMAND;
 
@@ -229,6 +230,13 @@ public class CommandRegistry implements EventRegistrar {
 
         // Wait for the right moment (depends on the platform) to register permissions.
         geyser.eventBus().subscribe(this, GeyserRegisterPermissionsEvent.class, this::onRegisterPermissions);
+    }
+
+    /**
+     * @return every Geyser and extension command registered to this command registry, once per name or alias
+     */
+    protected Stream<GeyserCommand> registeredCommands() {
+        return Stream.concat(commands.values().stream(), extensionCommands.values().stream().flatMap(map -> map.values().stream()));
     }
 
     /**
