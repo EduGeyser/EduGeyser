@@ -205,6 +205,12 @@ public class CushionEntity extends Entity {
     }
 
     @Override
+    public boolean doesJumpDismount() {
+        // Touch controls dismount through the jump button, so locking jump would leave touch players stuck
+        return false;
+    }
+
+    @Override
     protected InteractiveTag testInteraction(Hand hand) {
         if (session.isSneaking() || !passengers.isEmpty()) {
             return InteractiveTag.NONE;
