@@ -82,7 +82,7 @@ public class VersionCommand extends GeyserCommand {
         }
 
         if (GeyserImpl.IS_DEV) {
-            source.sendMessage(GeyserLocale.getPlayerLocaleString("geyser.core.dev_build", source.locale(), "https://discord.gg/geysermc"));
+            source.sendMessage(GeyserImpl.brand(GeyserLocale.getPlayerLocaleString("geyser.core.dev_build", source.locale(), "https://edugeyser.org/discord")));
             return;
         }
 

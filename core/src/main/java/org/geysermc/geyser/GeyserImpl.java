@@ -149,12 +149,13 @@ public class GeyserImpl implements GeyserApi, EventRegistrar {
     public static final String NAME = "Geyser";
 
     /**
-     * The fork's display name, applied only to the startup log lines.
-     * Deeper renames (NAME itself, locale wide substitution) were
-     * deliberately rolled back: configs, integrations, and anything else
-     * matching on the Geyser name must behave exactly like upstream.
+     * The fork's display name, applied only to the startup log lines and
+     * the dev build notice. Deeper renames (NAME itself, locale wide
+     * substitution) were deliberately rolled back: configs, integrations,
+     * and anything else matching on the Geyser name must behave exactly
+     * like upstream.
      */
-    private static String brandStartupLine(String line) {
+    public static String brand(String line) {
         return line.replace("Geyser", "EduGeyser");
     }
     public static final String GIT_VERSION = BuildData.GIT_VERSION;
@@ -280,10 +281,10 @@ public class GeyserImpl implements GeyserApi, EventRegistrar {
 
         logger.info("******************************************");
         logger.info("");
-        logger.info(brandStartupLine(GeyserLocale.getLocaleStringLog("geyser.core.load", NAME, VERSION)));
+        logger.info(brand(GeyserLocale.getLocaleStringLog("geyser.core.load", NAME, VERSION)));
         logger.info("");
         if (IS_DEV) {
-            logger.info(GeyserLocale.getLocaleStringLog("geyser.core.dev_build", "https://discord.gg/geysermc"));
+            logger.info(brand(GeyserLocale.getLocaleStringLog("geyser.core.dev_build", "https://edugeyser.org/discord")));
             logger.info("");
         }
         logger.info("******************************************");
@@ -523,9 +524,9 @@ public class GeyserImpl implements GeyserApi, EventRegistrar {
                 if (throwable == null) {
                     if ("0.0.0.0".equals(address)) {
                         // basically just hide it in the log because some people get confused and try to change it
-                        logger.info(brandStartupLine(GeyserLocale.getLocaleStringLog("geyser.core.start.ip_suppressed", port)));
+                        logger.info(brand(GeyserLocale.getLocaleStringLog("geyser.core.start.ip_suppressed", port)));
                     } else {
-                        logger.info(brandStartupLine(GeyserLocale.getLocaleStringLog("geyser.core.start", address, port)));
+                        logger.info(brand(GeyserLocale.getLocaleStringLog("geyser.core.start", address, port)));
                     }
                 } else {
                     logger.severe(GeyserLocale.getLocaleStringLog("geyser.core.fail", address, port));
