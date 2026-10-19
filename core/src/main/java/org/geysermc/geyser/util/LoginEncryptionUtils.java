@@ -98,11 +98,11 @@ public class LoginEncryptionUtils {
             Long rawIssuedAt = (Long) result.rawIdentityClaims().get("iat");
             long issuedAt = rawIssuedAt != null ? rawIssuedAt : -1;
 
+            // Certificate chains only come from Education clients, whose skins
+            // are uploaded through the signing relay instead.
             if (authPayload instanceof TokenPayload tokenPayload) {
                 session.setToken(tokenPayload.getToken());
-            } else if (authPayload instanceof CertificateChainPayload certificateChainPayload) {
-                session.setCertChainData(certificateChainPayload.getChain());
-            } else {
+            } else if (!(authPayload instanceof CertificateChainPayload)) {
                 GeyserImpl.getInstance().getLogger().warning("Unknown auth payload! Skin uploading will not work");
             }
 

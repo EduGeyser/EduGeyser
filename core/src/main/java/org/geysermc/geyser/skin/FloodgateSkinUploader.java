@@ -25,7 +25,6 @@
 
 package org.geysermc.geyser.skin;
 
-import com.google.gson.JsonArray;
 import com.google.gson.JsonObject;
 import com.google.gson.JsonSyntaxException;
 import java.io.OutputStream;
@@ -37,7 +36,6 @@ import java.nio.charset.StandardCharsets;
 import java.util.Deque;
 import java.util.Iterator;
 import java.util.LinkedList;
-import java.util.List;
 import java.util.concurrent.ThreadLocalRandom;
 import java.util.concurrent.TimeUnit;
 import javax.net.ssl.SSLException;
@@ -280,20 +278,13 @@ public final class FloodgateSkinUploader {
             return;
         }
 
-        List<String> chainData = session.getCertChainData();
         String token = session.getToken();
-        if (chainData == null && token == null) {
+        if (token == null) {
             return;
         }
 
         JsonObject node = new JsonObject();
-        if (chainData != null) {
-            JsonArray chainDataNode = new JsonArray();
-            chainData.forEach(chainDataNode::add);
-            node.add("chain_data", chainDataNode);
-        } else {
-            node.addProperty("token", token);
-        }
+        node.addProperty("token", token);
         node.addProperty("client_data", clientData);
 
         sendOrQueue(node.toString());
@@ -333,9 +324,9 @@ public final class FloodgateSkinUploader {
                 String hash = response.get("hash").getAsString();
                 session.setEducationSkinHash(hash);
 
-                // Build the payload for the global API using the relay's signed chain and client_data
+                // Build the payload for the global API using the relay's multiplayer token and client_data
                 JsonObject node = new JsonObject();
-                node.add("chain_data", response.getAsJsonArray("chain_data"));
+                node.addProperty("token", response.get("token").getAsString());
                 node.addProperty("client_data", response.get("client_data").getAsString());
 
                 sendOrQueue(node.toString());

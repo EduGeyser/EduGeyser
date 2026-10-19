@@ -72,7 +72,6 @@ public class JavaLoginFinishedTranslator extends PacketTranslator<ClientboundLog
         }
 
         // We no longer need these variables; they're just taking up space in memory now
-        session.setCertChainData(null);
         session.setToken(null);
         session.getClientData().setOriginalString(null);
 

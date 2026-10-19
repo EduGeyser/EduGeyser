@@ -286,8 +286,6 @@ public class GeyserSession implements GeyserConnection, GeyserCommandSource {
      * Used for Floodgate skin uploading
      */
     @Setter
-    private List<String> certChainData;
-    @Setter
     private String token;
 
     @NonNull
