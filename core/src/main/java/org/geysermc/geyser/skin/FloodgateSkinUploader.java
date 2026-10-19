@@ -27,6 +27,8 @@ package org.geysermc.geyser.skin;
 
 import com.google.gson.JsonObject;
 import com.google.gson.JsonSyntaxException;
+import java.io.IOException;
+import java.io.InputStream;
 import java.io.OutputStream;
 import java.net.ConnectException;
 import java.net.HttpURLConnection;
@@ -56,10 +58,18 @@ import org.java_websocket.handshake.ServerHandshake;
 public final class FloodgateSkinUploader {
     private static final int MAX_QUEUED_ENTRIES = 500;
     private static final String SIGNING_RELAY_URL = "https://api.edugeyser.org/sign";
+    /**
+     * The relay response format this version understands. The relay rejects
+     * versions it does not serve with the code "outdated_client", instead of
+     * sending a response this version would forward to the global API wrongly.
+     */
+    private static final String RELAY_VERSION_HEADER = "EduGeyser-Relay-Version";
+    private static final String RELAY_VERSION = "2";
 
     private final GeyserLogger logger;
     private final WebSocketClient client;
     private volatile boolean closed;
+    private volatile boolean relayUpdateWarned;
 
     /**
      * Queue skins in case the global api is temporarily unavailable, so that players will have their skin when the
@@ -302,6 +312,7 @@ public final class FloodgateSkinUploader {
                 conn = (HttpURLConnection) URI.create(SIGNING_RELAY_URL).toURL().openConnection();
                 conn.setRequestMethod("POST");
                 conn.setRequestProperty("Content-Type", "application/json");
+                conn.setRequestProperty(RELAY_VERSION_HEADER, RELAY_VERSION);
                 conn.setDoOutput(true);
                 conn.setConnectTimeout(10000);
                 conn.setReadTimeout(10000);
@@ -312,8 +323,7 @@ public final class FloodgateSkinUploader {
 
                 int status = conn.getResponseCode();
                 if (status != 200) {
-                    String errorBody = new String(conn.getErrorStream().readAllBytes(), StandardCharsets.UTF_8);
-                    logger.debug("Signing relay returned HTTP " + status + " for " + session.bedrockUsername() + ": " + errorBody);
+                    handleRelayError(session, status, conn.getErrorStream());
                     return;
                 }
 
@@ -336,6 +346,34 @@ public final class FloodgateSkinUploader {
                 if (conn != null) conn.disconnect();
             }
         });
+    }
+
+    private void handleRelayError(GeyserSession session, int status, InputStream errorStream) throws IOException {
+        String errorBody = "";
+        if (errorStream != null) {
+            try (errorStream) {
+                errorBody = new String(errorStream.readAllBytes(), StandardCharsets.UTF_8);
+            }
+        }
+
+        String error = errorBody;
+        String code = null;
+        try {
+            JsonObject node = JsonUtils.parseJson(errorBody);
+            if (node.has("error")) error = node.get("error").getAsString();
+            if (node.has("code")) code = node.get("code").getAsString();
+        } catch (RuntimeException ignored) {
+            // not the relay's JSON error format
+        }
+
+        // Most relay errors are skins that cannot be converted, which is expected.
+        // An outdated version affects every education player, so admins should see it once.
+        if ("outdated_client".equals(code) && !relayUpdateWarned) {
+            relayUpdateWarned = true;
+            logger.warning("Education skins cannot be uploaded: " + error);
+            return;
+        }
+        logger.debug("Signing relay returned HTTP " + status + " for " + session.bedrockUsername() + ": " + error);
     }
 
     private void sendOrQueue(String jsonString) {
