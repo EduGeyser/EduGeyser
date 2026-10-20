@@ -268,7 +268,7 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 
 @Getter
-public class GeyserSession implements GeyserConnection, GeyserCommandSource {
+public class GeyserSession implements GeyserConnection, GeyserCommandSource, JavaRegistryProvider.Provider {
     private static final String UNKNOWN_LOG_NAME = "This account";
 
     private final GeyserImpl geyser;
@@ -302,7 +302,6 @@ public class GeyserSession implements GeyserConnection, GeyserCommandSource {
     private final BookEditCache bookEditCache;
     private final BundleCache bundleCache;
     private final ChunkCache chunkCache;
-    private final ComponentCache componentCache;
     private final EntityCache entityCache;
     private final EntityEffectCache effectCache;
     private final FormCache formCache;
@@ -313,6 +312,7 @@ public class GeyserSession implements GeyserConnection, GeyserCommandSource {
     private final PreferencesCache preferencesCache;
     @Accessors(fluent = true)
     private final JavaRegistryProvider javaRegistries;
+    private final ComponentCache componentCache;
     private final SkullCache skullCache;
     private final StructureBlockCache structureBlockCache;
     private final WaypointCache waypointCache;
@@ -894,7 +894,6 @@ public class GeyserSession implements GeyserConnection, GeyserCommandSource {
         this.bookEditCache = new BookEditCache(this);
         this.bundleCache = new BundleCache(this);
         this.chunkCache = new ChunkCache(this);
-        this.componentCache = new ComponentCache(this);
         this.entityCache = new EntityCache(this);
         this.effectCache = new EntityEffectCache();
         this.formCache = new FormCache(this);
@@ -903,6 +902,7 @@ public class GeyserSession implements GeyserConnection, GeyserCommandSource {
         this.pistonCache = new PistonCache(this);
         this.preferencesCache = new PreferencesCache(this);
         this.javaRegistries = new JavaRegistryTagCache();
+        this.componentCache = new ComponentCache(this.javaRegistries);
         this.skullCache = new SkullCache(this);
         this.structureBlockCache = new StructureBlockCache();
         this.waypointCache = new WaypointCache(this);
