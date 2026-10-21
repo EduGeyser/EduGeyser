@@ -37,6 +37,7 @@ import org.cloudburstmc.protocol.bedrock.codec.v1001.Bedrock_v1001;
 import org.cloudburstmc.protocol.bedrock.codec.v1002.Bedrock_v1002;
 import org.cloudburstmc.protocol.bedrock.codec.v2168.Bedrock_v2168;
 import org.cloudburstmc.protocol.bedrock.codec.v2193.Bedrock_v2193;
+import org.cloudburstmc.protocol.bedrock.codec.v2225.Bedrock_v2225;
 import org.geysermc.geyser.GeyserBootstrap;
 import org.geysermc.geyser.GeyserImpl;
 import org.geysermc.geyser.item.type.Item;
@@ -76,7 +77,8 @@ public final class TagRegistryPopulator {
             // Education 26.30 (protocol 1002) carries the same content as retail 26.30
             ObjectIntPair.of("26_30", Bedrock_v1002.EDUCATION_CODEC.getProtocolVersion()),
             ObjectIntPair.of("26_30", Bedrock_v2168.CODEC.getProtocolVersion()),
-            ObjectIntPair.of("26_30", Bedrock_v2193.CODEC.getProtocolVersion())
+            ObjectIntPair.of("26_30", Bedrock_v2193.CODEC.getProtocolVersion()),
+            ObjectIntPair.of("26_30", Bedrock_v2225.CODEC.getProtocolVersion())
         );
         Type type = new TypeToken<Map<String, List<String>>>() {}.getType();
 
