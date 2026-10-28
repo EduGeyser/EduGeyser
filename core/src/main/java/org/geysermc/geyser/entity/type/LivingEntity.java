@@ -558,6 +558,8 @@ public class LivingEntity extends Entity implements Tickable {
         // Since 26.40 the snap is its own field instead of that flag
         moveEntityPacket.setForceMove(true);
         moveEntityPacket.setRuntimeEntityId(geyserId);
+        // Since 26.40 the ground state is its own field instead of that flag
+        moveEntityPacket.setOnGround(onGround);
         if (onGround) {
             moveEntityPacket.getFlags().add(MoveEntityDeltaPacket.Flag.ON_GROUND);
         }
