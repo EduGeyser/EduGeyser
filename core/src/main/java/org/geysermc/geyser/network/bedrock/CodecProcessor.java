@@ -149,7 +149,7 @@ public class CodecProcessor {
         }
     };
 
-    /*
+    /**
      * Serializer that throws an exception when trying to deserialize InventorySlotPacket since server-auth inventory is used.
      */
     private static final BedrockPacketSerializer<InventorySlotPacket> INVENTORY_SLOT_SERIALIZER_V748 = new InventorySlotSerializer_v748() {
@@ -166,6 +166,9 @@ public class CodecProcessor {
         }
     };
 
+    /**
+     * Serializer that throws an exception when trying to deserialize MovePlayerPacket since server-auth movement is used.
+     */
     private static final BedrockPacketSerializer<MovePlayerPacket> MOVE_PLAYER_SERIALIZER_V419 = new MovePlayerSerializer_v419() {
         @Override
         public void deserialize(ByteBuf buffer, BedrockCodecHelper helper, MovePlayerPacket packet) {
@@ -180,6 +183,9 @@ public class CodecProcessor {
         }
     };
 
+    /**
+     * Serializer that throws an exception when trying to deserialize MoveEntityAbsolutePacket since server-auth movement is used.
+     */
     private static final BedrockPacketSerializer<MoveEntityAbsolutePacket> MOVE_ENTITY_SERIALIZER_V291 = new MoveEntityAbsoluteSerializer_v291() {
         @Override
         public void deserialize(ByteBuf buffer, BedrockCodecHelper helper, MoveEntityAbsolutePacket packet) {
