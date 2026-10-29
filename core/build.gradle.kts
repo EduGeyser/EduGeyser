@@ -3,6 +3,9 @@ import org.eclipse.jgit.revwalk.RevWalk
 import net.kyori.indra.git.RepositoryValueSource
 
 import java.net.URI
+import java.nio.file.Files
+import java.nio.file.StandardCopyOption
+import java.security.MessageDigest
 import java.util.Properties
 
 plugins {
@@ -205,26 +208,49 @@ val generateGitProperties = tasks.register("generateGitProperties") {
     }
 }
 
+// Checks the local pack against the latest build's SHA-256 on every build, as a pack that is merely present
+// would never update in a local checkout. Offline, an existing pack is kept.
 val downloadIntegratedPack = tasks.register("downloadIntegratedPack") {
     val packFile = file("src/main/resources/GeyserIntegratedPack.mcpack")
-    val source = "https://download.geysermc.org/v2/projects/geyserintegratedpack/versions/latest/builds/latest/downloads/geyserintegratedpack"
-    onlyIf { !packFile.exists() }
+    val api = "https://download.geysermc.org/v2/projects/geyserintegratedpack"
     doLast {
-        println("Cannot find GeyserIntegratedPack.mcpack, trying to download from $source, and writing it to core/src/main/resources/GeyserIntegratedPack.mcpack")
+        val build = try {
+            groovy.json.JsonSlurper().parseText(URI("$api/versions/latest/builds/latest").toURL().readText()) as Map<*, *>
+        } catch (e: Exception) {
+            if (packFile.exists()) {
+                logger.warn("Could not check for a newer integrated pack ({}), keeping the existing one", e.toString())
+                return@doLast
+            }
+            throw GradleException("Cannot download the integrated pack from $api", e)
+        }
+        val version = build["version"]
+        val number = build["build"]
+        val expected = ((build["downloads"] as Map<*, *>)["geyserintegratedpack"] as Map<*, *>)["sha256"] as String
+
+        if (packFile.exists() && sha256(packFile) == expected) {
+            logger.lifecycle("Integrated pack {} build {} is up to date", version, number)
+            return@doLast
+        }
+
         packFile.parentFile.mkdirs()
         val tmp = File(packFile.parentFile, packFile.name + ".tmp")
         try {
-            URI(source).toURL().openStream().use { input ->
+            URI("$api/versions/$version/builds/$number/downloads/geyserintegratedpack").toURL().openStream().use { input ->
                 tmp.outputStream().use { input.copyTo(it) }
             }
-            if (!tmp.renameTo(packFile)) {
-                throw GradleException("Failed to install downloaded integrated pack at $packFile")
+            if (sha256(tmp) != expected) {
+                throw GradleException("The downloaded integrated pack does not match its published SHA-256")
             }
+            Files.move(tmp.toPath(), packFile.toPath(), StandardCopyOption.REPLACE_EXISTING)
+            logger.lifecycle("Downloaded integrated pack {} build {}", version, number)
         } finally {
             tmp.delete()
         }
     }
 }
+
+fun sha256(file: File): String =
+    MessageDigest.getInstance("SHA-256").digest(file.readBytes()).joinToString("") { "%02x".format(it) }
 
 tasks.processResources {
     dependsOn(downloadIntegratedPack)
