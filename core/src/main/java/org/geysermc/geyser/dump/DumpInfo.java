@@ -67,6 +67,10 @@ import java.net.Socket;
 import java.net.UnknownHostException;
 import java.nio.charset.Charset;
 import java.nio.file.Paths;
+import java.time.OffsetDateTime;
+import java.time.ZoneId;
+import java.time.format.DateTimeFormatter;
+import java.time.temporal.ChronoUnit;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
@@ -83,6 +87,8 @@ public class DumpInfo {
     private final String cpuName;
     private final Locale systemLocale;
     private final String systemEncoding;
+    private final String systemTime;
+    private final String systemTimeZone;
     private final GitInfo gitInfo;
     private Object config;
     private final Object2IntMap<DeviceOs> userPlatforms;
@@ -103,6 +109,8 @@ public class DumpInfo {
         this.cpuName = CpuUtils.tryGetProcessorName();
         this.systemLocale = Locale.getDefault();
         this.systemEncoding = Charset.defaultCharset().displayName();
+        this.systemTime = DateTimeFormatter.ISO_OFFSET_DATE_TIME.format(OffsetDateTime.now().truncatedTo(ChronoUnit.SECONDS));
+        this.systemTimeZone = ZoneId.systemDefault().getId();
 
         this.gitInfo = new GitInfo(GeyserImpl.BUILD_NUMBER, GeyserImpl.COMMIT.substring(0, 7), GeyserImpl.COMMIT, GeyserImpl.BRANCH, GeyserImpl.REPOSITORY);
 
