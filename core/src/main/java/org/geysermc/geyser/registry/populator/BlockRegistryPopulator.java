@@ -64,6 +64,7 @@ import org.geysermc.geyser.registry.BlockRegistries;
 import org.geysermc.geyser.registry.java.BuiltInJavaRegistries;
 import org.geysermc.geyser.registry.populator.conversion.BlockRemapper;
 import org.geysermc.geyser.registry.populator.conversion.ICanHasMoreStates;
+import org.geysermc.geyser.registry.populator.conversion.ICanHasStates;
 import org.geysermc.geyser.registry.type.BlockMappings;
 import org.geysermc.geyser.registry.type.GeyserBedrockBlock;
 import org.geysermc.geyser.util.JsonUtils;
@@ -124,10 +125,10 @@ public final class BlockRegistryPopulator {
 
     private static void registerBedrockBlocks() {
         ImmutableMap<ObjectIntPair<String>, BlockRemapper> blockMappers = ImmutableMap.<ObjectIntPair<String>, BlockRemapper>builder()
-                .put(ObjectIntPair.of("26_30", Bedrock_v1001.CODEC.getProtocolVersion()), ICanHasMoreStates.Old.INSTANCE)
+                .put(ObjectIntPair.of("26_30", Bedrock_v1001.CODEC.getProtocolVersion()), ICanHasStates.INSTANCE)
                 // Education 26.30 (protocol 1002) carries the same content as retail 26.30
-                .put(ObjectIntPair.of("26_30", Bedrock_v1002.EDUCATION_CODEC.getProtocolVersion()), ICanHasMoreStates.Old.INSTANCE)
-                .put(ObjectIntPair.of("26_40", Bedrock_v2168.CODEC.getProtocolVersion()), ICanHasMoreStates.Old.INSTANCE)
+                .put(ObjectIntPair.of("26_30", Bedrock_v1002.EDUCATION_CODEC.getProtocolVersion()), ICanHasStates.INSTANCE)
+                .put(ObjectIntPair.of("26_40", Bedrock_v2168.CODEC.getProtocolVersion()), ICanHasStates.INSTANCE)
                 .put(ObjectIntPair.of("26_50", Bedrock_v2193.CODEC.getProtocolVersion()), ICanHasMoreStates.INSTANCE)
                 .put(ObjectIntPair.of("26_60", Bedrock_v2225.CODEC.getProtocolVersion()), tag -> tag)
             .build();
