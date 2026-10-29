@@ -364,7 +364,7 @@ public class CodecProcessor {
             codecBuilder.updateSerializer(PartyChangedPacket.class, IGNORED_SERIALIZER);
 
             // Added in 26.60
-            if (codec.getProtocolVersion() >= 2225) {
+            if (GameProtocol.is26_60orHigher(codec.getProtocolVersion())) {
                 codecBuilder.updateSerializer(ClientboundMatchmakingStatePacket.class, IGNORED_SERIALIZER);
                 codecBuilder.updateSerializer(ServerboundMatchmakingCancelPacket.class, IGNORED_SERIALIZER);
             }
