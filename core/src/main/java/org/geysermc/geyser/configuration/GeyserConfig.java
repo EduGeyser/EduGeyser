@@ -135,7 +135,7 @@ public interface GeyserConfig {
         String address();
 
         @Comment("""
-            The port that will Geyser will listen on for incoming Bedrock connections.
+            The port that Geyser will listen on for incoming Bedrock connections.
             Since Minecraft: Bedrock Edition uses UDP, this port must allow UDP traffic.""")
         @Override
         @DefaultNumeric(19132)
