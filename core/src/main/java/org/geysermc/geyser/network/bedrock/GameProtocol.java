@@ -101,7 +101,7 @@ public final class GameProtocol {
         DEFAULT_BEDROCK_VERSION = latestBedrock.versionString();
         DEFAULT_BEDROCK_PROTOCOL = latestBedrock.protocolVersion();
 
-        registerEducation(Bedrock_v1002.EDUCATION_CODEC, "26.30 Preview", "26.32");
+        registerEducation(Bedrock_v1002.EDUCATION_CODEC, "26.30 Preview", "26.32", "26.33");
     }
 
     /**
