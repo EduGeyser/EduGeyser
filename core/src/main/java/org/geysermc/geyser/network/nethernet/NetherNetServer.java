@@ -37,9 +37,10 @@ import io.netty.channel.Channel;
 import io.netty.channel.ChannelFuture;
 import io.netty.channel.DefaultEventLoopGroup;
 import io.netty.channel.EventLoopGroup;
+import io.netty.channel.MultiThreadIoEventLoopGroup;
 import io.netty.channel.group.ChannelGroup;
 import io.netty.channel.group.DefaultChannelGroup;
-import io.netty.channel.nio.NioEventLoopGroup;
+import io.netty.channel.nio.NioIoHandler;
 import io.netty.handler.ssl.SslContext;
 import io.netty.util.concurrent.GlobalEventExecutor;
 import org.cloudburstmc.protocol.bedrock.BedrockPong;
@@ -300,8 +301,8 @@ public class NetherNetServer {
 
     private boolean bind(String mcToken) {
         this.rpcSignaling = new NetherNetXboxRpcSignaling(connectionId, mcToken);
-        this.bossGroup = new NioEventLoopGroup(1);
-        this.workerGroup = new NioEventLoopGroup(workerThreads());
+        this.bossGroup = new MultiThreadIoEventLoopGroup(1, NioIoHandler.newFactory());
+        this.workerGroup = new MultiThreadIoEventLoopGroup(workerThreads(), NioIoHandler.newFactory());
 
         NetherNetServerInitializer childHandler = new NetherNetServerInitializer(geyser, playerEventLoopGroup, playerChannels);
 

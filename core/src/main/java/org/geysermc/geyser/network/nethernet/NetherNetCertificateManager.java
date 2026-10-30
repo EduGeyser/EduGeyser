@@ -31,8 +31,10 @@ import io.netty.channel.Channel;
 import io.netty.channel.ChannelFutureListener;
 import io.netty.channel.ChannelHandlerContext;
 import io.netty.channel.ChannelInitializer;
+import io.netty.channel.EventLoopGroup;
+import io.netty.channel.MultiThreadIoEventLoopGroup;
 import io.netty.channel.SimpleChannelInboundHandler;
-import io.netty.channel.nio.NioEventLoopGroup;
+import io.netty.channel.nio.NioIoHandler;
 import io.netty.channel.socket.SocketChannel;
 import io.netty.channel.socket.nio.NioServerSocketChannel;
 import io.netty.handler.codec.http.DefaultFullHttpResponse;
@@ -901,11 +903,11 @@ public final class NetherNetCertificateManager implements AutoCloseable {
 
     /** Presents the TLS-ALPN-01 challenge certificate on port 443; the handshake is the validation. */
     private static final class TlsAlpnChallengeServer implements AutoCloseable {
-        private NioEventLoopGroup group;
+        private EventLoopGroup group;
         private Channel channel;
 
         void bind(SslContext challengeContext) throws Exception {
-            group = new NioEventLoopGroup(1);
+            group = new MultiThreadIoEventLoopGroup(1, NioIoHandler.newFactory());
             ServerBootstrap bootstrap = new ServerBootstrap();
             bootstrap.group(group)
                     .channel(NioServerSocketChannel.class)
@@ -947,11 +949,11 @@ public final class NetherNetCertificateManager implements AutoCloseable {
         private static final String CHALLENGE_PATH = "/.well-known/acme-challenge/";
 
         final Map<String, String> tokens = new ConcurrentHashMap<>();
-        private NioEventLoopGroup group;
+        private EventLoopGroup group;
         private Channel channel;
 
         void bind() throws Exception {
-            group = new NioEventLoopGroup(1);
+            group = new MultiThreadIoEventLoopGroup(1, NioIoHandler.newFactory());
             ServerBootstrap bootstrap = new ServerBootstrap();
             bootstrap.group(group)
                     .channel(NioServerSocketChannel.class)
