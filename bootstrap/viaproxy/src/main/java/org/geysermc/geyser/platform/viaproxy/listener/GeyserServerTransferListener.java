@@ -32,12 +32,12 @@ import org.geysermc.event.subscribe.Subscribe;
 import org.geysermc.geyser.api.event.bedrock.SessionLoginEvent;
 import org.geysermc.geyser.api.event.java.ServerTransferEvent;
 
+import java.time.Duration;
 import java.util.Map;
-import java.util.concurrent.TimeUnit;
 
 public class GeyserServerTransferListener {
 
-    private final Cache<String, Map<String, byte[]>> cookieStorages = CacheBuilder.newBuilder().expireAfterWrite(1, TimeUnit.MINUTES).build();
+    private final Cache<String, Map<String, byte[]>> cookieStorages = CacheBuilder.newBuilder().expireAfterWrite(Duration.ofMinutes(1)).build();
 
     @Subscribe(postOrder = PostOrder.FIRST)
     private void onServerTransfer(final ServerTransferEvent event) {

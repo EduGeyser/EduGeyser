@@ -71,10 +71,10 @@ import org.geysermc.mcprotocollib.protocol.packet.ingame.serverbound.player.Serv
 import org.geysermc.mcprotocollib.protocol.packet.ingame.serverbound.player.ServerboundPlayerActionPacket;
 import org.geysermc.mcprotocollib.protocol.packet.ingame.serverbound.player.ServerboundUseItemOnPacket;
 
+import java.time.Duration;
 import java.util.HashSet;
 import java.util.Objects;
 import java.util.Set;
-import java.util.concurrent.TimeUnit;
 
 /**
  * Class responsible for block breaking handling. This is designed to be extensible
@@ -149,7 +149,7 @@ public class BlockBreakHandler {
     @Getter
     private final Cache<Vector3i, Pair<Long, BlockBreakStage>> destructionStageCache = CacheBuilder.newBuilder()
         .maximumSize(200)
-        .expireAfterWrite(3, TimeUnit.MINUTES)
+        .expireAfterWrite(Duration.ofMinutes(3))
         .build();
 
     /**

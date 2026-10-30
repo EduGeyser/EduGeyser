@@ -25,19 +25,19 @@
 
 package org.geysermc.geyser.util;
 
-import com.google.common.base.Charsets;
 import net.kyori.adventure.key.Key;
 import org.geysermc.geyser.GeyserImpl;
 import org.geysermc.geyser.session.GeyserSession;
 import org.geysermc.mcprotocollib.protocol.packet.common.serverbound.ServerboundCustomPayloadPacket;
 
 import java.nio.ByteBuffer;
+import java.nio.charset.StandardCharsets;
 
 public class PluginMessageUtils {
     private static final byte[] GEYSER_BRAND_DATA;
 
     static {
-        byte[] data = GeyserImpl.NAME.getBytes(Charsets.UTF_8);
+        byte[] data = GeyserImpl.NAME.getBytes(StandardCharsets.UTF_8);
         GEYSER_BRAND_DATA =
                 ByteBuffer.allocate(data.length + getVarIntLength(data.length))
                         .put(writeVarInt(data.length))
