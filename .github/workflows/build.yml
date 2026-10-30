@@ -1,124 +1,78 @@
 name: Build
 
+# Builds and tests every push and pull request. A successful build of a push to master
+# is then released by release.yml.
 on:
-  workflow_dispatch:
   push:
-    branches-ignore:
-      - 'gh-readonly-queue/**'
-    paths-ignore:
-      - '.github/ISSUE_TEMPLATE/*.yml'
-      - '.github/workflows/build-remote.yml'
-      - '.github/workflows/preview.yml'
-      - '.github/workflows/pull-request.yml'
-      - '.idea/copyright/*.xml'
+    paths-ignore: &unbuilt
+      - '.editorconfig'
       - '.gitignore'
+      - '.idea/**'
+      - 'AGENTS.md'
       - 'CONTRIBUTING.md'
       - 'LICENSE'
-      - 'Jenkinsfile '
       - 'README.md'
+      - 'jitpack.yml'
+      - '.forgejo/**'
+      - '.github/ISSUE_TEMPLATE/**'
+      - '.github/scripts/**'
+      - '.github/workflows/release.yml'
+  pull_request:
+    paths-ignore: *unbuilt
+
+permissions:
+  contents: read
 
 concurrency:
-  group: ci-${{ github.ref }}
+  group: build-${{ github.ref }}
+  # A master build becomes a release, so a newer push waits for it instead of cancelling it
+  cancel-in-progress: ${{ github.ref != 'refs/heads/master' }}
 
 jobs:
   build:
     runs-on: ubuntu-latest
     steps:
-      - name: Get Release Info
-        id: release-info
-        uses: GeyserMC/actions/previous-release@master
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          appID: ${{ secrets.RELEASE_APP_ID }}
-          appPrivateKey: ${{ secrets.RELEASE_APP_PK }}
+          submodules: recursive
+          persist-credentials: false
+
+      - name: Setup Java
+        uses: actions/setup-java@b843ebf9b913146b38da2eaa7aeddf76074ae1ad # v6.1.0
+        with:
+          distribution: temurin
+          # 25 for the core tests on the Java version EduGeyser targets; 27, the last, runs Gradle
+          java-version: |
+            25
+            27
 
       - name: Setup Gradle
-        uses: GeyserMC/actions/setup-gradle-composite@master
-        with:
-          setup-java_java-version: 27
+        uses: gradle/actions/setup-gradle@8da46b539cd8fe6ab27ca75128919a18d757604c # v6.4.1
 
-      - name: Build Geyser
-        run: ./gradlew build
-        env:
-          BUILD_NUMBER: ${{ steps.release-info.outputs.curentRelease }}
-          
-      - name: Archive Artifacts
-        uses: GeyserMC/actions/upload-multi-artifact@master
-        if: success()
-        with:
-          artifacts: |
-            bootstrap/mod/fabric/build/libs/Geyser-Fabric.jar
-            bootstrap/mod/neoforge/build/libs/Geyser-NeoForge.jar
-            bootstrap/standalone/build/libs/Geyser-Standalone.jar
-            bootstrap/spigot/build/libs/Geyser-Spigot.jar
-            bootstrap/bungeecord/build/libs/Geyser-BungeeCord.jar
-            bootstrap/velocity/build/libs/Geyser-Velocity.jar
-            bootstrap/viaproxy/build/libs/Geyser-ViaProxy.jar
+      - name: Build
+        # Strict versions make indra run the core tests on Java 25 as well
+        run: >-
+          ./gradlew build
+          -PrequireBundledExtension
+          -PstrictMultireleaseVersions=true
+          -Porg.gradle.java.installations.fromEnv=JAVA_HOME_25_X64
 
-      - name: Publish to Maven Repository
-        if: ${{ success() && github.repository == 'GeyserMC/Geyser' && (github.ref_name == 'master' || startsWith(github.ref_name, 'api/') || startsWith(github.ref_name, 'feature/')) }}
-        run: ./gradlew publish
-        env:
-          BUILD_NUMBER: ${{ steps.release-info.outputs.curentRelease }}
-          ORG_GRADLE_PROJECT_geysermcUsername: ${{ vars.DEPLOY_USER }}
-          ORG_GRADLE_PROJECT_geysermcPassword: ${{ secrets.DEPLOY_PASS }}
-        
-      - name: Get Version
-        if: ${{ (success() || failure()) && github.repository == 'GeyserMC/Geyser' }}
-        id: get-version
+      - name: Collect Jars
         run: |
-          version=$(cat gradle.properties | grep -o "version=[0-9\\.]*" | cut -d"=" -f2)
-          echo "VERSION=${version}" >> $GITHUB_OUTPUT
+          mkdir dist
+          cp bootstrap/bungeecord/build/libs/EduGeyser-BungeeCord.jar \
+            bootstrap/mod/fabric/build/libs/EduGeyser-Fabric.jar \
+            bootstrap/mod/neoforge/build/libs/EduGeyser-NeoForge.jar \
+            bootstrap/spigot/build/libs/EduGeyser-Spigot.jar \
+            bootstrap/standalone/build/libs/EduGeyser-Standalone.jar \
+            bootstrap/velocity/build/libs/EduGeyser-Velocity.jar \
+            bootstrap/viaproxy/build/libs/EduGeyser-ViaProxy.jar \
+            dist/
 
-      - name: Get Release Metadata
-        if: ${{ (success() || failure()) && github.repository == 'GeyserMC/Geyser' }}
-        uses: GeyserMC/actions/release@master
-        id: metadata
+      - name: Upload Jars
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
-          appID: ${{ secrets.RELEASE_APP_ID }}
-          appPrivateKey: ${{ secrets.RELEASE_APP_PK }}
-          files: |
-            bungeecord:bootstrap/bungeecord/build/libs/Geyser-BungeeCord.jar
-            fabric:bootstrap/mod/fabric/build/libs/Geyser-Fabric.jar
-            neoforge:bootstrap/mod/neoforge/build/libs/Geyser-NeoForge.jar
-            spigot:bootstrap/spigot/build/libs/Geyser-Spigot.jar
-            standalone:bootstrap/standalone/build/libs/Geyser-Standalone.jar
-            velocity:bootstrap/velocity/build/libs/Geyser-Velocity.jar
-            viaproxy:bootstrap/viaproxy/build/libs/Geyser-ViaProxy.jar
-          releaseEnabled: false
-          saveMetadata: true
-          releaseProject: 'geyser'
-          releaseVersion: ${{ steps.get-version.outputs.VERSION }}
-
-      - name: Publish to Downloads API
-        if: ${{ success() && github.repository == 'GeyserMC/Geyser' && github.ref_name == 'master' }}
-        uses: GeyserMC/actions/upload-release@master
-        with:
-          username: ${{ vars.DOWNLOADS_USERNAME }}
-          privateKey: ${{ secrets.DOWNLOADS_PRIVATE_KEY }}
-          host: ${{ secrets.DOWNLOADS_SERVER_IP }}
-          files: |
-            bootstrap/bungeecord/build/libs/Geyser-BungeeCord.jar
-            bootstrap/mod/fabric/build/libs/Geyser-Fabric.jar
-            bootstrap/mod/neoforge/build/libs/Geyser-NeoForge.jar
-            bootstrap/spigot/build/libs/Geyser-Spigot.jar
-            bootstrap/standalone/build/libs/Geyser-Standalone.jar
-            bootstrap/velocity/build/libs/Geyser-Velocity.jar
-            bootstrap/viaproxy/build/libs/Geyser-ViaProxy.jar
-          changelog: ${{ steps.metadata.outputs.body }}
-
-      - name: Publish to Modrinth
-        if: ${{ success() && github.repository == 'GeyserMC/Geyser' && github.ref_name == 'master' }}
-        env:
-          CHANGELOG: ${{ steps.metadata.outputs.body }}
-          BUILD_NUMBER: ${{ steps.release-info.outputs.curentRelease }}
-          MODRINTH_TOKEN: ${{ secrets.MODRINTH_TOKEN }}
-        run: ./gradlew modrinth
-
-      - name: Notify Discord
-        if: ${{ (success() || failure()) && github.repository == 'GeyserMC/Geyser' }}
-        uses: GeyserMC/actions/notify-discord@master
-        with:
-          discordWebhook: ${{ secrets.DISCORD_WEBHOOK }}
-          status: ${{ job.status }}
-          body: ${{ steps.metadata.outputs.body }}
-          includeDownloads: ${{ github.ref_name == 'master' }}
+          name: EduGeyser
+          path: dist/*.jar
+          if-no-files-found: error
