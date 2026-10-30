@@ -1,0 +1,37 @@
+name: Build
+
+# Checks pull requests opened on Codeberg. GitHub builds every push in full and publishes each
+# release to Codeberg too. Codeberg's hosted runners have 4 CPUs, 8 GB of memory that files
+# written to disk count against, and 10 minutes per job, which is too little for the Fabric
+# and NeoForge builds and their game tests, so this builds the core and the plugin platforms.
+on:
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: codeberg-medium
+    steps:
+      - name: Checkout
+        uses: https://code.forgejo.org/actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          submodules: recursive
+          persist-credentials: false
+
+      - name: Setup Java
+        uses: https://github.com/actions/setup-java@b843ebf9b913146b38da2eaa7aeddf76074ae1ad # v6.1.0
+        with:
+          distribution: temurin
+          # 25 for the core tests on the Java version EduGeyser targets, which indra only runs in
+          # strict mode (set below, so it does not depend on the runner setting CI); 27, the last, runs Gradle
+          java-version: |
+            25
+            27
+
+      - name: Build
+        run: >-
+          ./gradlew :core:build :spigot:build :bungeecord:build :velocity:build :standalone:build :viaproxy:build
+          -PrequireBundledExtension
+          -PstrictMultireleaseVersions=true
+          -Porg.gradle.java.installations.fromEnv=JAVA_HOME_25_X64
+          -Dorg.gradle.jvmargs=-Xmx2G
