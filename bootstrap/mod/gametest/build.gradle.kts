@@ -45,8 +45,4 @@ tasks {
     jar.get().enabled = false
     shadowJar.get().enabled = false
     mergeShadowAndJarJar.get().enabled = false
-
-    withType(PublishToMavenRepository::class).configureEach {
-        enabled = false
-    }
 }

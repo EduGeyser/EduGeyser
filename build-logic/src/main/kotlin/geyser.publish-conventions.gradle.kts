@@ -9,7 +9,4 @@ indra {
             version = versionWithBranchName()
         }
     }
-
-    publishSnapshotsTo("geysermc", "https://repo.opencollab.dev/maven-snapshots")
-    publishReleasesTo("geysermc", "https://repo.opencollab.dev/maven-releases")
 }
