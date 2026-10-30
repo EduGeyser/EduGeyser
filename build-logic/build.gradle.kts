@@ -8,6 +8,17 @@ java {
     }
 }
 
+// Gradle's bundled Kotlin can't target Java 27 yet, so both compilers target 25 like the rest of the build
+tasks.withType<JavaCompile>().configureEach {
+    options.release = 25
+}
+
+kotlin {
+    compilerOptions {
+        jvmTarget = org.jetbrains.kotlin.gradle.dsl.JvmTarget.JVM_25
+    }
+}
+
 repositories {
     gradlePluginPortal()
 
