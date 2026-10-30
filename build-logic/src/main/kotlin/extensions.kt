@@ -144,9 +144,6 @@ private fun calcExclusion(section: String, bit: Int, excludedOn: Int): String =
 fun projectVersion(project: Project): String =
     project.version.toString().replace("SNAPSHOT", "b" + buildNumber())
 
-fun versionName(project: Project): String =
-    "Geyser-" + project.name.replaceFirstChar { it.uppercase() } + "-" + projectVersion(project)
-
 fun buildNumber(): Int =
     (System.getenv("BUILD_NUMBER"))?.let { Integer.parseInt(it) } ?: -1
 

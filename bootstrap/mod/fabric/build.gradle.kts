@@ -92,10 +92,3 @@ tasks {
         archiveBaseName.set("EduGeyser-Fabric")
     }
 }
-
-modrinth {
-    loaders.add("fabric")
-    dependencies {
-        required.project("fabric-api")
-    }
-}

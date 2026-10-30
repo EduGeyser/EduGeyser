@@ -1,6 +1,5 @@
 plugins {
     id("geyser.platform-conventions")
-    id("geyser.modrinth-uploading-conventions")
 }
 
 dependencies {
@@ -35,9 +34,4 @@ tasks.withType<com.github.jengelman.gradle.plugins.shadow.tasks.ShadowJar> {
         exclude(dependency("com.google.*:.*"))
         exclude(dependency("io.netty.*:.*"))
     }
-}
-
-modrinth {
-    uploadFile.set(tasks.getByPath("shadowJar"))
-    loaders.add("bungeecord")
 }

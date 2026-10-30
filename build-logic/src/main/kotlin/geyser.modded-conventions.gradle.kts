@@ -4,7 +4,6 @@ plugins {
     id("geyser.platform-conventions")
     id("architectury-plugin")
     id("dev.architectury.loom-no-remap")
-    id("geyser.modrinth-uploading-conventions")
 }
 
 // These are provided by Minecraft/modded platforms already, no need to include them
@@ -93,26 +92,9 @@ tasks {
         archiveClassifier.set("")
     }
 
-    val renameModrinthJar = tasks.register<Copy>("renameModrinthJar") {
-        dependsOn(mergeShadowAndJarJar)
-
-        from(mergeShadowAndJarJar.flatMap { it.archiveFile })
-        into(layout.buildDirectory.dir("libs"))
-
-        rename { "${versionName(project)}.jar" }
-    }
-
-    modrinth.configure {
-        dependsOn(renameModrinthJar)
-    }
-
     build {
         dependsOn(mergeShadowAndJarJar)
     }
-}
-
-modrinth {
-    uploadFile.set(layout.buildDirectory.file("libs/${versionName(project)}.jar"))
 }
 
 afterEvaluate {

@@ -94,7 +94,3 @@ tasks {
         archiveBaseName.set("EduGeyser-NeoForge")
     }
 }
-
-modrinth {
-    loaders.add("neoforge")
-}

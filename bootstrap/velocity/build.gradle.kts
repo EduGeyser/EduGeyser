@@ -1,6 +1,5 @@
 plugins {
     id("geyser.platform-conventions")
-    id("geyser.modrinth-uploading-conventions")
     alias(libs.plugins.runvelocity)
 }
 
@@ -41,11 +40,6 @@ tasks.withType<com.github.jengelman.gradle.plugins.shadow.tasks.ShadowJar> {
         // Exclude all Kyori dependencies
         exclude(dependency("net.kyori:.*:.*"))
     }
-}
-
-modrinth {
-    uploadFile.set(tasks.getByPath("shadowJar"))
-    loaders.addAll("velocity")
 }
 
 tasks {
