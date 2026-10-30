@@ -3,10 +3,9 @@ plugins {
     id("net.kyori.indra")
 }
 
-val rootProperties: Map<String, *> = project.rootProject.properties
-group = rootProperties["group"] as String + "." + rootProperties["id"] as String
-version = rootProperties["version"] as String
-description = rootProperties["description"] as String
+group = providers.gradleProperty("group").get() + "." + providers.gradleProperty("id").get()
+version = providers.gradleProperty("version").get()
+description = providers.gradleProperty("description").get()
 
 indra {
     github("GeyserMC", "Geyser") {
