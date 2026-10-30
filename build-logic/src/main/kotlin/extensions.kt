@@ -36,7 +36,7 @@ import org.gradle.api.tasks.TaskAction
 import org.gradle.kotlin.dsl.named
 import org.gradle.kotlin.dsl.the
 import java.io.File
-import java.net.URL
+import java.net.URI
 
 fun Project.relocate(pattern: String) {
     tasks.named<ShadowJar>("shadowJar") {
@@ -105,7 +105,7 @@ open class DownloadFilesTask : DefaultTask() {
                 outputFile.parentFile.mkdirs()
             }
 
-            URL(fileUrl).openStream().use { input ->
+            URI(fileUrl).toURL().openStream().use { input ->
                 outputFile.outputStream().use { output ->
                     input.copyTo(output)
                 }
