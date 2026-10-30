@@ -221,7 +221,7 @@ val downloadIntegratedPack = tasks.register("downloadIntegratedPack") {
                 logger.warn("Could not check for a newer integrated pack ({}), keeping the existing one", e.toString())
                 return@doLast
             }
-            throw GradleException("Cannot download the integrated pack from $api", e)
+            throw GradleException("Cannot download the integrated pack from $api: $e", e)
         }
         val version = build["version"]
         val number = build["build"]
