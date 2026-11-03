@@ -308,7 +308,7 @@ public class BuiltInMappings {
                     "*",
                     MaterialInstance.builder()
                         .texture(fallbackOutside ? outsideTexture : insideTexture)
-                        .ambientOcclusion(true)
+                        .ambientOcclusionExponent(1.0F)
                         .faceDimming(true)
                         .build()
                 );
@@ -320,7 +320,7 @@ public class BuiltInMappings {
                         entry.getKey(),
                         MaterialInstance.builder()
                             .texture(outside ? outsideTexture : insideTexture)
-                            .ambientOcclusion(true)
+                            .ambientOcclusionExponent(1.0F)
                             .faceDimming(true)
                             .build()
                     );
