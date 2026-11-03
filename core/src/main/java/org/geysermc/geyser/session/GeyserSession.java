@@ -2727,7 +2727,6 @@ public class GeyserSession implements GeyserConnection, GeyserCommandSource, Jav
         }
 
         packet.setLockComponentData(result);
-        packet.setServerPosition(this.playerEntity.bedrockPosition());
 
         sendUpstreamPacket(packet);
     }

@@ -677,8 +677,7 @@ public final class VanillaEntities {
                 .addTranslator(MetadataTypes.BYTE, LivingEntity::setLivingEntityFlags)
                 .addTranslator(MetadataTypes.FLOAT, LivingEntity::setHealth)
                 .addTranslator(MetadataTypes.PARTICLES, LivingEntity::setParticles)
-                .addTranslator(MetadataTypes.BOOLEAN,
-                        (livingEntity, entityMetadata) -> livingEntity.getMetadata().put(EntityDataTypes.EFFECT_AMBIENCE, (byte) (((BooleanEntityMetadata) entityMetadata).getPrimitiveValue() ? 1 : 0)))
+                .addTranslator(null) // Ambient potion effect, removed from Bedrock entity data in 1.21.0
                 .addTranslator(null) // Arrow count
                 .addTranslator(null) // Stinger count
                 .addTranslator(MetadataTypes.OPTIONAL_BLOCK_POS, LivingEntity::setBedPosition)

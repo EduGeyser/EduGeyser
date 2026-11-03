@@ -47,7 +47,6 @@ public class BossBar {
     private float health;
     private int color;
     private final int overlay;
-    private final int darkenSky;
 
     public void addBossBar() {
         addBossEntity();
@@ -64,7 +63,6 @@ public class BossBar {
         bossEventPacket.setHealthPercentage(health);
         bossEventPacket.setColor(color);
         bossEventPacket.setOverlay(overlay);
-        bossEventPacket.setDarkenSky(darkenSky);
 
         session.sendUpstreamPacket(bossEventPacket);
     }

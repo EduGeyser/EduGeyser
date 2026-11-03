@@ -519,7 +519,6 @@ public class SessionPlayerEntity extends PlayerEntity {
                 GeyserAttributeType.ABSORPTION.getAttribute(0f)));
         session.sendUpstreamPacket(attributesPacket);
 
-        metadata.put(EntityDataTypes.EFFECT_AMBIENCE, (byte) 0);
         metadata.put(EntityDataTypes.FREEZING_EFFECT_STRENGTH, 0f);
         metadata.put(EntityDataTypes.VISIBLE_MOB_EFFECTS, 0L);
 
