@@ -28,8 +28,6 @@ package org.geysermc.geyser.gametest.util;
 import com.mojang.datafixers.util.Pair;
 import com.mojang.serialization.DataResult;
 import com.mojang.serialization.DynamicOps;
-import it.unimi.dsi.fastutil.bytes.ByteArrayList;
-import it.unimi.dsi.fastutil.bytes.ByteList;
 import org.cloudburstmc.nbt.NbtList;
 import org.cloudburstmc.nbt.NbtMap;
 import org.cloudburstmc.nbt.NbtMapBuilder;
@@ -228,8 +226,7 @@ public class CloudburstNbtOps implements DynamicOps<Object> {
             return DataResult.success(Arrays.stream(longs).mapToObj(Long::valueOf));
         }
         if (input instanceof byte[] bytes) {
-            ByteList byteList = new ByteArrayList(bytes);
-            return DataResult.success((Stream) byteList.stream());
+            return DataResult.success(IntStream.range(0, bytes.length).mapToObj(i -> bytes[i]));
         }
         return DataResult.error(() -> "Was not a list");
     }
