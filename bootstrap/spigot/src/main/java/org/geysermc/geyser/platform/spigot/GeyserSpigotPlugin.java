@@ -134,17 +134,6 @@ public class GeyserSpigotPlugin extends JavaPlugin implements GeyserBootstrap {
         }
 
         try {
-            Class.forName("io.netty.util.internal.ObjectPool$ObjectCreator");
-        } catch (ClassNotFoundException e) {
-            geyserLogger.error("*********************************************");
-            geyserLogger.error("");
-            geyserLogger.error("This version of Spigot is using an outdated version of netty. Please use Paper instead!");
-            geyserLogger.error("");
-            geyserLogger.error("*********************************************");
-            return;
-        }
-
-        try {
             // Check spigot config for BungeeCord mode
             if (Bukkit.getServer().spigot().getConfig().getBoolean("settings.bungeecord")) {
                 warnInvalidProxySetups("BungeeCord");

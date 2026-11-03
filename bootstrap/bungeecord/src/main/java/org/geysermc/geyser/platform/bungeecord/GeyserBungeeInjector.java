@@ -93,13 +93,6 @@ public class GeyserBungeeInjector extends GeyserInjector implements Listener {
                 "Please define a listener for Geyser to listen to in your Geyser config (advanced.java.bungee-listener)");
         }
 
-        try {
-            Class.forName("io.netty.channel.MultiThreadIoEventLoopGroup");
-        } catch (ClassNotFoundException e) {
-            bootstrap.getGeyserLogger().error("use-direct-connection disabled as BungeeCord is not up-to-date.");
-            return;
-        }
-
         SocketAddress bungeeAddress = listenerBindAddress.isBlank() ? null : Util.getAddr(listenerBindAddress);
         var stream = proxy.getConfig().getListeners().stream();
         if (bungeeAddress != null) {

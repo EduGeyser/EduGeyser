@@ -889,12 +889,32 @@ public class GeyserImpl implements GeyserApi, EventRegistrar {
         return Integer.parseInt(BUILD_NUMBER);
     }
 
-    public static GeyserImpl load(GeyserBootstrap bootstrap) {
+    /**
+     * Returns null if the platform cannot run Geyser. The reason is logged.
+     */
+    public static @Nullable GeyserImpl load(GeyserBootstrap bootstrap) {
         if (instance == null) {
+            if (!hasNetty42()) {
+                bootstrap.getGeyserLogger().error(brand("Geyser requires Netty 4.2, which this server or proxy does not provide. "
+                    + "Update the server or proxy software (Minecraft servers provide Netty 4.2 since 1.21.11)."));
+                return null;
+            }
             return new GeyserImpl(bootstrap);
         }
 
         return instance;
+    }
+
+    /**
+     * Plugin platforms provide Netty themselves, and Geyser uses the Netty 4.2 IO handler API throughout.
+     */
+    private static boolean hasNetty42() {
+        try {
+            Class.forName("io.netty.channel.MultiThreadIoEventLoopGroup", false, GeyserImpl.class.getClassLoader());
+            return true;
+        } catch (ClassNotFoundException e) {
+            return false;
+        }
     }
 
     public static void start() {

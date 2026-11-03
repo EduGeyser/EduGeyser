@@ -162,6 +162,12 @@ public class GeyserStandaloneBootstrap implements GeyserBootstrap {
         log4jLogger.get().setLevel(geyserConfig.debugMode() ? Level.DEBUG : Level.INFO);
 
         geyser = GeyserImpl.load(this);
+        if (geyser == null) {
+            if (gui == null) {
+                System.exit(1);
+            }
+            return;
+        }
 
         boolean reloading = geyser.isReloading();
         if (!reloading) {
