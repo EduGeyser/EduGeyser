@@ -80,11 +80,13 @@ public class SnifferEntity extends AnimalEntity implements Tickable {
 
         // SnifferState.SCENTING and SnifferState.IDLING not used in bedrock
         // The bedrock client does the scenting animation and sound on its own
-        setFlag(EntityFlag.FEELING_HAPPY, snifferState == SnifferState.FEELING_HAPPY);
-        setFlag(EntityFlag.SCENTING, snifferState == SnifferState.SNIFFING); // SnifferState.SNIFFING -> EntityFlag.SCENTING
+        // The vanilla animation controller plays long_sniff, stand_up and feeling_happy from
+        // timer flags 1 to 3; the SCENTING, RISING and FEELING_HAPPY flags are unused since v671
+        setFlag(EntityFlag.TIMER_FLAG_1, snifferState == SnifferState.SNIFFING);
         setFlag(EntityFlag.SEARCHING, snifferState == SnifferState.SEARCHING);
         setFlag(EntityFlag.DIGGING, snifferState == SnifferState.DIGGING);
-        setFlag(EntityFlag.RISING, snifferState == SnifferState.RISING);
+        setFlag(EntityFlag.TIMER_FLAG_2, snifferState == SnifferState.RISING);
+        setFlag(EntityFlag.TIMER_FLAG_3, snifferState == SnifferState.FEELING_HAPPY);
 
         setDimensionsFromPose(pose);
 
