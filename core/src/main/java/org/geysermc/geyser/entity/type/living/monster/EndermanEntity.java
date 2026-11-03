@@ -26,24 +26,47 @@
 package org.geysermc.geyser.entity.type.living.monster;
 
 import org.cloudburstmc.protocol.bedrock.data.SoundEvent;
-import org.cloudburstmc.protocol.bedrock.data.definitions.BlockDefinition;
-import org.cloudburstmc.protocol.bedrock.data.entity.EntityDataTypes;
 import org.cloudburstmc.protocol.bedrock.data.entity.EntityFlag;
+import org.cloudburstmc.protocol.bedrock.data.inventory.ItemData;
 import org.cloudburstmc.protocol.bedrock.packet.LevelSoundEventPacket;
 import org.geysermc.geyser.entity.spawn.EntitySpawnContext;
+import org.geysermc.geyser.inventory.GeyserItemStack;
+import org.geysermc.geyser.item.Items;
+import org.geysermc.geyser.item.type.Item;
+import org.geysermc.geyser.level.block.type.BlockState;
+import org.geysermc.geyser.translator.item.ItemTranslator;
 import org.geysermc.mcprotocollib.protocol.data.game.entity.metadata.type.BooleanEntityMetadata;
 import org.geysermc.mcprotocollib.protocol.data.game.entity.metadata.type.IntEntityMetadata;
 
 public class EndermanEntity extends MonsterEntity {
+    /**
+     * Since Bedrock 1.21.100 the client draws the block of an enderman's main hand item and no
+     * longer reads CARRY_BLOCK_STATE. Java Edition does not render an enderman's own main hand
+     * item, so the carried block takes its place. A block without an item is not shown.
+     */
+    private ItemData carriedBlock = ItemData.AIR;
 
     public EndermanEntity(EntitySpawnContext context) {
         super(context);
     }
 
     public void setCarriedBlock(IntEntityMetadata entityMetadata) {
-        BlockDefinition bedrockBlockId = session.getBlockMappings().getBedrockBlock(entityMetadata.getPrimitiveValue());
+        int javaState = entityMetadata.getPrimitiveValue();
+        Item item = BlockState.of(javaState).block().asItem();
+        if (item == Items.AIR) {
+            carriedBlock = ItemData.AIR;
+        } else {
+            carriedBlock = ItemTranslator.translateToBedrock(session, GeyserItemStack.of(session, item.javaId(), 1))
+                .toBuilder()
+                .blockDefinition(session.getBlockMappings().getBedrockBlock(javaState))
+                .build();
+        }
+        updateMainHand();
+    }
 
-        metadata.put(EntityDataTypes.CARRY_BLOCK_STATE, bedrockBlockId);
+    @Override
+    protected ItemData bedrockMainHandItem() {
+        return carriedBlock;
     }
 
     /**
