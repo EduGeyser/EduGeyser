@@ -31,6 +31,7 @@ import org.geysermc.geyser.util.metrics.MetricsPlatform;
 
 import java.io.File;
 import java.io.IOException;
+import java.util.List;
 import java.util.UUID;
 
 public final class SpigotMetrics implements MetricsPlatform {
@@ -51,13 +52,13 @@ public final class SpigotMetrics implements MetricsPlatform {
             config.addDefault("logResponseStatusText", false);
 
             // Inform the server owners about bStats
-            config.options().header(
-                "bStats (https://bStats.org) collects some basic information for plugin authors, like how\n" +
-                    "many people use their plugin and their total player count. It's recommended to keep bStats\n" +
-                    "enabled, but if you're not comfortable with this, you can turn this setting off. There is no\n" +
-                    "performance penalty associated with having metrics enabled, and data sent to bStats is fully\n" +
-                    "anonymous."
-            ).copyDefaults(true);
+            config.options().setHeader(List.of(
+                "bStats (https://bStats.org) collects some basic information for plugin authors, like how",
+                "many people use their plugin and their total player count. It's recommended to keep bStats",
+                "enabled, but if you're not comfortable with this, you can turn this setting off. There is no",
+                "performance penalty associated with having metrics enabled, and data sent to bStats is fully",
+                "anonymous."
+            )).copyDefaults(true);
             try {
                 config.save(configFile);
             } catch (IOException ignored) { }
