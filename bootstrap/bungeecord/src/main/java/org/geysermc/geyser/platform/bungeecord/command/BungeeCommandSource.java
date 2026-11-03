@@ -56,7 +56,7 @@ public class BungeeCommandSource implements GeyserCommandSource {
 
     @Override
     public void sendMessage(@NonNull String message) {
-        handle.sendMessage(TextComponent.fromLegacyText(message));
+        handle.sendMessage(TextComponent.fromLegacy(message));
     }
 
     private static final int PROTOCOL_HEX_COLOR = 713; // Added 20w17a

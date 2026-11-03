@@ -97,7 +97,7 @@ public class GeyserBungeePingPassthrough implements IGeyserPingPassthrough, List
                         proxyServer.getName() + " " + ProtocolConstants.SUPPORTED_VERSIONS.getFirst() + "-" + ProtocolConstants.SUPPORTED_VERSIONS.getLast(),
                         ProtocolConstants.SUPPORTED_VERSION_IDS.getLast()),
                 new ServerPing.Players(getDefaultListener().getMaxPlayers(), proxyServer.getOnlineCount(), null),
-                TextComponent.fromLegacyText(getDefaultListener().getMotd())[0],
+                TextComponent.fromLegacy(getDefaultListener().getMotd()),
                 proxyServer.getConfig().getFaviconObject()
         );
     }
@@ -171,7 +171,7 @@ public class GeyserBungeePingPassthrough implements IGeyserPingPassthrough, List
 
         @Override
         public SocketAddress getSocketAddress() {
-            return getAddress();
+            return remote;
         }
 
         @Override
