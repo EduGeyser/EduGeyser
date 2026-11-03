@@ -244,11 +244,6 @@ public class LoggingPacketHandler implements BedrockPacketHandler {
     }
 
     @Override
-    public PacketSignal handle(PlayerInputPacket packet) {
-        return defaultHandler(packet);
-    }
-
-    @Override
     public PacketSignal handle(PlayerSkinPacket packet) {
         return defaultHandler(packet);
     }
@@ -270,11 +265,6 @@ public class LoggingPacketHandler implements BedrockPacketHandler {
 
     @Override
     public PacketSignal handle(ResourcePackChunkRequestPacket packet) {
-        return defaultHandler(packet);
-    }
-
-    @Override
-    public PacketSignal handle(RiderJumpPacket packet) {
         return defaultHandler(packet);
     }
 
@@ -704,11 +694,6 @@ public class LoggingPacketHandler implements BedrockPacketHandler {
     }
 
     @Override
-    public PacketSignal handle(LevelSoundEvent2Packet packet) {
-        return defaultHandler(packet);
-    }
-
-    @Override
     public PacketSignal handle(NetworkChunkPublisherUpdatePacket packet) {
         return defaultHandler(packet);
     }
@@ -792,11 +777,6 @@ public class LoggingPacketHandler implements BedrockPacketHandler {
 
     @Override
     public PacketSignal handle(ItemStackRequestPacket packet) {
-        return defaultHandler(packet);
-    }
-
-    @Override
-    public PacketSignal handle(LevelSoundEvent1Packet packet) {
         return defaultHandler(packet);
     }
 
