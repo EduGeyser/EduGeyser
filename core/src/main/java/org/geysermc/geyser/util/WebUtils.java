@@ -44,6 +44,8 @@ import java.net.ConnectException;
 import java.net.HttpURLConnection;
 import java.net.MalformedURLException;
 import java.net.SocketTimeoutException;
+import java.net.URI;
+import java.net.URISyntaxException;
 import java.net.URL;
 import java.net.URLEncoder;
 import java.net.UnknownHostException;
@@ -64,6 +66,20 @@ public class WebUtils {
     private static final Path REMOTE_PACK_CACHE = GeyserImpl.getInstance().getBootstrap().getConfigFolder().resolve("cache").resolve("remote_packs");
 
     /**
+     * Replaces the deprecated URL(String) constructor. URI parsing is stricter, so its errors are
+     * reported as the MalformedURLException that callers already handle.
+     */
+    private static URL toUrl(String url) throws MalformedURLException {
+        try {
+            return new URI(url).toURL();
+        } catch (URISyntaxException | IllegalArgumentException e) {
+            MalformedURLException exception = new MalformedURLException(e.getMessage());
+            exception.initCause(e);
+            throw exception;
+        }
+    }
+
+    /**
      * Makes a web request to the given URL and returns the body as a string
      *
      * @param reqURL URL to fetch
@@ -72,7 +88,7 @@ public class WebUtils {
      */
     public static String getBody(String reqURL) throws IOException {
         try {
-            URL url = new URL(reqURL);
+            URL url = toUrl(reqURL);
             HttpURLConnection con = (HttpURLConnection) url.openConnection();
             con.setRequestMethod("GET");
             con.setRequestProperty("User-Agent", getUserAgent()); // Otherwise Java 8 fails on checking updates
@@ -92,7 +108,7 @@ public class WebUtils {
      * @return the response as JSON
      */
     public static JsonObject getJson(String reqURL) throws IOException {
-        HttpURLConnection con = (HttpURLConnection) new URL(reqURL).openConnection();
+        HttpURLConnection con = (HttpURLConnection) toUrl(reqURL).openConnection();
         con.setRequestProperty("User-Agent", getUserAgent());
         con.setConnectTimeout(10000);
         con.setReadTimeout(10000);
@@ -121,7 +137,7 @@ public class WebUtils {
      */
     public static void downloadFile(String reqURL, Path path) {
         try {
-            HttpURLConnection con = (HttpURLConnection) new URL(reqURL).openConnection();
+            HttpURLConnection con = (HttpURLConnection) toUrl(reqURL).openConnection();
             con.setRequestProperty("User-Agent", getUserAgent());
             checkResponseCode(con);
             InputStream in = con.getInputStream();
@@ -143,7 +159,7 @@ public class WebUtils {
     public static @NonNull Path downloadRemotePack(String url, boolean force) throws IOException {
         GeyserLogger logger = GeyserImpl.getInstance().getLogger();
         try {
-            HttpURLConnection con = (HttpURLConnection) new URL(url).openConnection();
+            HttpURLConnection con = (HttpURLConnection) toUrl(url).openConnection();
 
             con.setConnectTimeout(10000);
             con.setReadTimeout(10000);
@@ -272,7 +288,7 @@ public class WebUtils {
      * @throws IOException If the request fails
      */
     public static String post(String reqURL, String postContent) throws IOException {
-        URL url = new URL(reqURL);
+        URL url = toUrl(reqURL);
         HttpURLConnection con = (HttpURLConnection) url.openConnection();
         con.setRequestMethod("POST");
         con.setRequestProperty("Content-Type", "text/plain");
@@ -343,7 +359,7 @@ public class WebUtils {
      * @throws IOException If the request fails
      */
     public static String postForm(String reqURL, Map<String, String> fields) throws IOException {
-        URL url = new URL(reqURL);
+        URL url = toUrl(reqURL);
         HttpURLConnection con = (HttpURLConnection) url.openConnection();
         con.setRequestMethod("POST");
         con.setRequestProperty("Content-Type", "application/x-www-form-urlencoded");
@@ -393,7 +409,7 @@ public class WebUtils {
      */
     public static Stream<String> getLineStream(String reqURL) {
         try {
-            URL url = new URL(reqURL);
+            URL url = toUrl(reqURL);
             HttpURLConnection con = (HttpURLConnection) url.openConnection();
             con.setRequestMethod("GET");
             con.setRequestProperty("User-Agent", getUserAgent()); // Otherwise Java 8 fails on checking updates

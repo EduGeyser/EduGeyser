@@ -77,7 +77,7 @@ public final class CpuUtils {
      * <a href="https://stackoverflow.com/a/6327663">See here</a>
      */
     private static String getWindowsProcessorName() throws Exception {
-        final String cpuNameCmd = "reg query \"HKLM\\HARDWARE\\DESCRIPTION\\System\\CentralProcessor\\0\" /v ProcessorNameString";
+        final String[] cpuNameCmd = {"reg", "query", "HKLM\\HARDWARE\\DESCRIPTION\\System\\CentralProcessor\\0", "/v", "ProcessorNameString"};
         final String regstrToken = "REG_SZ";
 
         Process process = Runtime.getRuntime().exec(cpuNameCmd);
