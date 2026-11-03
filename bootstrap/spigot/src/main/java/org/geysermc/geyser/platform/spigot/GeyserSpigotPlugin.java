@@ -430,8 +430,8 @@ public class GeyserSpigotPlugin extends JavaPlugin implements GeyserBootstrap {
      */
     private boolean isViaVersionNeeded() {
         ProtocolVersion serverVersion = getServerProtocolVersion();
-        List<ProtocolPathEntry> protocolList = Via.getManager().getProtocolManager().getProtocolPath(GameProtocol.getJavaProtocolVersion(),
-                serverVersion.getVersion());
+        List<ProtocolPathEntry> protocolList = Via.getManager().getProtocolManager().getProtocolPath(ProtocolVersion.getProtocol(GameProtocol.getJavaProtocolVersion()),
+                serverVersion);
         if (protocolList == null) {
             // No translation needed!
             return false;

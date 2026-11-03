@@ -51,8 +51,8 @@ public class GeyserSpigotLegacyNativeWorldManager extends GeyserSpigotNativeWorl
         IntList allBlockStates = adapter.getAllBlockStates();
         oldToNewBlockId = new Int2IntOpenHashMap(allBlockStates.size());
         ProtocolVersion serverVersion = plugin.getServerProtocolVersion();
-        List<ProtocolPathEntry> protocolList = Via.getManager().getProtocolManager().getProtocolPath(GameProtocol.getJavaProtocolVersion(),
-                serverVersion.getVersion());
+        List<ProtocolPathEntry> protocolList = Via.getManager().getProtocolManager().getProtocolPath(ProtocolVersion.getProtocol(GameProtocol.getJavaProtocolVersion()),
+                serverVersion);
         Objects.requireNonNull(protocolList, "protocolList cannot be null");
         for (int oldBlockId : allBlockStates) {
             int newBlockId = oldBlockId;
