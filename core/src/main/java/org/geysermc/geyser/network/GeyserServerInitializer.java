@@ -26,7 +26,9 @@
 package org.geysermc.geyser.network;
 
 import io.netty.channel.Channel;
-import io.netty.channel.DefaultEventLoopGroup;
+import io.netty.channel.EventLoopGroup;
+import io.netty.channel.MultiThreadIoEventLoopGroup;
+import io.netty.channel.local.LocalIoHandler;
 import io.netty.util.concurrent.DefaultThreadFactory;
 import lombok.Getter;
 import org.checkerframework.checker.nullness.qual.NonNull;
@@ -45,18 +47,17 @@ import org.geysermc.geyser.session.GeyserSession;
  */
 public abstract class GeyserServerInitializer extends BedrockServerInitializer {
     protected final GeyserImpl geyser;
-    // There is a constructor that doesn't require inputting threads, but older Netty versions don't have it
     @Getter
-    private final DefaultEventLoopGroup eventLoopGroup;
+    private final EventLoopGroup eventLoopGroup;
 
     protected GeyserServerInitializer(GeyserImpl geyser, String playerThreadName) {
-        this(geyser, new DefaultEventLoopGroup(0, new DefaultThreadFactory(playerThreadName)));
+        this(geyser, new MultiThreadIoEventLoopGroup(new DefaultThreadFactory(playerThreadName), LocalIoHandler.newFactory()));
     }
 
     /**
      * For a transport whose sessions run on the player threads of another.
      */
-    protected GeyserServerInitializer(GeyserImpl geyser, DefaultEventLoopGroup eventLoopGroup) {
+    protected GeyserServerInitializer(GeyserImpl geyser, EventLoopGroup eventLoopGroup) {
         this.geyser = geyser;
         this.eventLoopGroup = eventLoopGroup;
     }

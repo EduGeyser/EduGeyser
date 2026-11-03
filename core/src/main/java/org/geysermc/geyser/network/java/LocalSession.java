@@ -31,9 +31,10 @@ import io.netty.channel.Channel;
 import io.netty.channel.ChannelFactory;
 import io.netty.channel.ChannelHandler;
 import io.netty.channel.ChannelOption;
-import io.netty.channel.DefaultEventLoopGroup;
 import io.netty.channel.EventLoopGroup;
+import io.netty.channel.MultiThreadIoEventLoopGroup;
 import io.netty.channel.ReflectiveChannelFactory;
+import io.netty.channel.local.LocalIoHandler;
 import io.netty.channel.unix.PreferredDirectByteBufAllocator;
 import io.netty.util.concurrent.DefaultThreadFactory;
 import org.checkerframework.checker.nullness.qual.NonNull;
@@ -77,7 +78,7 @@ public final class LocalSession extends ClientNetworkSession {
     @Override
     protected EventLoopGroup getEventLoopGroup() {
         if (DEFAULT_EVENT_LOOP_GROUP == null) {
-            DEFAULT_EVENT_LOOP_GROUP = new DefaultEventLoopGroup(new DefaultThreadFactory(this.getClass(), true));
+            DEFAULT_EVENT_LOOP_GROUP = new MultiThreadIoEventLoopGroup(new DefaultThreadFactory(this.getClass(), true), LocalIoHandler.newFactory());
             Runtime.getRuntime().addShutdownHook(new Thread(
                 () -> DEFAULT_EVENT_LOOP_GROUP.shutdownGracefully(100, 500, TimeUnit.MILLISECONDS)));
         }

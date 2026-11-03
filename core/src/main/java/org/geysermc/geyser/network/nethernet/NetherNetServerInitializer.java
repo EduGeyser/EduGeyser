@@ -27,7 +27,7 @@ package org.geysermc.geyser.network.nethernet;
 
 import io.github.sendablemetatype.netty.channel.nethernet.codec.NetherNetFramingCodec;
 import io.netty.channel.Channel;
-import io.netty.channel.DefaultEventLoopGroup;
+import io.netty.channel.EventLoopGroup;
 import io.netty.channel.group.ChannelGroup;
 import org.cloudburstmc.protocol.bedrock.BedrockDisconnectReasons;
 import org.cloudburstmc.protocol.bedrock.BedrockPeer;
@@ -62,7 +62,7 @@ public class NetherNetServerInitializer extends GeyserServerInitializer {
     private final ChannelGroup playerChannels;
     private final NetherNetConnectionGate connectionGate;
 
-    public NetherNetServerInitializer(GeyserImpl geyser, DefaultEventLoopGroup eventLoopGroup, ChannelGroup playerChannels) {
+    public NetherNetServerInitializer(GeyserImpl geyser, EventLoopGroup eventLoopGroup, ChannelGroup playerChannels) {
         super(geyser, eventLoopGroup);
         this.playerChannels = playerChannels;
         this.connectionGate = new NetherNetConnectionGate(geyser);

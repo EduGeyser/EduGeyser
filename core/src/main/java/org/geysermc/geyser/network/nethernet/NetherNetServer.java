@@ -35,7 +35,6 @@ import io.github.sendablemetatype.webrtc.PeerConnectionFactory;
 import io.netty.bootstrap.ServerBootstrap;
 import io.netty.channel.Channel;
 import io.netty.channel.ChannelFuture;
-import io.netty.channel.DefaultEventLoopGroup;
 import io.netty.channel.EventLoopGroup;
 import io.netty.channel.MultiThreadIoEventLoopGroup;
 import io.netty.channel.group.ChannelGroup;
@@ -108,7 +107,7 @@ public class NetherNetServer {
 
     private final GeyserImpl geyser;
     private final GeyserLogger logger;
-    private final DefaultEventLoopGroup playerEventLoopGroup;
+    private final EventLoopGroup playerEventLoopGroup;
     private final PlayFabTokenManager tokenManager;
     private final String connectionId;
     private final BedrockPingHandler pingResponder;
@@ -161,7 +160,7 @@ public class NetherNetServer {
     private long nextReconnectAttemptAt;
     private int consecutiveReconnectFailures;
 
-    public NetherNetServer(GeyserImpl geyser, DefaultEventLoopGroup playerEventLoopGroup,
+    public NetherNetServer(GeyserImpl geyser, EventLoopGroup playerEventLoopGroup,
                            String connectionId, String playfabCustomId, String playfabDeviceId) {
         this.geyser = geyser;
         this.logger = geyser.getLogger();

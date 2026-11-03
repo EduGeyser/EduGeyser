@@ -30,8 +30,10 @@ import io.netty.channel.Channel;
 import io.netty.channel.ChannelFuture;
 import io.netty.channel.ChannelHandler;
 import io.netty.channel.ChannelInitializer;
-import io.netty.channel.DefaultEventLoopGroup;
+import io.netty.channel.EventLoopGroup;
+import io.netty.channel.MultiThreadIoEventLoopGroup;
 import io.netty.channel.local.LocalAddress;
+import io.netty.channel.local.LocalIoHandler;
 import io.netty.util.concurrent.DefaultThreadFactory;
 import net.minecraft.server.MinecraftServer;
 import net.minecraft.server.network.ServerConnectionListener;
@@ -50,7 +52,7 @@ public class GeyserModInjector extends GeyserInjector {
 
     private final MinecraftServer server;
     private final GeyserModPlatform platform;
-    private DefaultEventLoopGroup eventLoopGroup;
+    private EventLoopGroup eventLoopGroup;
 
     /**
      * Used to uninject ourselves on shutdown.
@@ -85,7 +87,7 @@ public class GeyserModInjector extends GeyserInjector {
         initChannel.setAccessible(true);
 
         // Separate variable so we can shut it down later
-        eventLoopGroup = new DefaultEventLoopGroup(0, new DefaultThreadFactory("Geyser " + this.platform.platformType().platformName() + " connection thread", Thread.MAX_PRIORITY));
+        eventLoopGroup = new MultiThreadIoEventLoopGroup(0, new DefaultThreadFactory("Geyser " + this.platform.platformType().platformName() + " connection thread", Thread.MAX_PRIORITY), LocalIoHandler.newFactory());
         ChannelFuture channelFuture = (new ServerBootstrap()
                 .channel(LocalServerChannelWrapper.class)
                 .childHandler(new ChannelInitializer<>() {
@@ -101,7 +103,7 @@ public class GeyserModInjector extends GeyserInjector {
                         }
                     }
                 })
-                // Set to MAX_PRIORITY as MultithreadEventLoopGroup#newDefaultThreadFactory which DefaultEventLoopGroup implements does by default
+                // Set to MAX_PRIORITY as MultithreadEventLoopGroup#newDefaultThreadFactory does by default
                 .group(eventLoopGroup)
                 .localAddress(LocalAddress.ANY))
                 .bind()

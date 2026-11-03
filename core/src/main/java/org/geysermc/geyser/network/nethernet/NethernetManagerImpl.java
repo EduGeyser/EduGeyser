@@ -25,7 +25,7 @@
 
 package org.geysermc.geyser.network.nethernet;
 
-import io.netty.channel.DefaultEventLoopGroup;
+import io.netty.channel.EventLoopGroup;
 import org.checkerframework.checker.nullness.qual.NonNull;
 import org.geysermc.geyser.GeyserImpl;
 import org.geysermc.geyser.api.network.NethernetManager;
@@ -37,14 +37,14 @@ import org.geysermc.geyser.api.network.NethernetManager;
 public class NethernetManagerImpl implements NethernetManager {
 
     private final GeyserImpl geyser;
-    private final DefaultEventLoopGroup playerEventLoopGroup;
+    private final EventLoopGroup playerEventLoopGroup;
     private final String connectionId;
     private final String playfabCustomId;
     private final String playfabDeviceId;
     private final Object lock = new Object();
     private volatile NetherNetServer server;
 
-    public NethernetManagerImpl(GeyserImpl geyser, DefaultEventLoopGroup playerEventLoopGroup,
+    public NethernetManagerImpl(GeyserImpl geyser, EventLoopGroup playerEventLoopGroup,
                                 String connectionId, String playfabCustomId, String playfabDeviceId) {
         this.geyser = geyser;
         this.playerEventLoopGroup = playerEventLoopGroup;

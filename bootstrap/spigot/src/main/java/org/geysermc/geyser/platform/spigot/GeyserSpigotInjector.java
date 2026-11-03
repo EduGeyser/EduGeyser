@@ -31,8 +31,9 @@ import io.netty.channel.Channel;
 import io.netty.channel.ChannelFuture;
 import io.netty.channel.ChannelHandler;
 import io.netty.channel.ChannelInitializer;
-import io.netty.channel.DefaultEventLoopGroup;
+import io.netty.channel.MultiThreadIoEventLoopGroup;
 import io.netty.channel.local.LocalAddress;
+import io.netty.channel.local.LocalIoHandler;
 import io.netty.util.concurrent.DefaultThreadFactory;
 import org.bukkit.Bukkit;
 import org.checkerframework.checker.nullness.qual.NonNull;
@@ -132,8 +133,8 @@ public class GeyserSpigotInjector extends GeyserInjector {
                         }
                     }
                 })
-                // Set to MAX_PRIORITY as MultithreadEventLoopGroup#newDefaultThreadFactory which DefaultEventLoopGroup implements does by default
-                .group(new DefaultEventLoopGroup(0, new DefaultThreadFactory("Geyser Spigot connection thread", Thread.MAX_PRIORITY)))
+                // Set to MAX_PRIORITY as MultithreadEventLoopGroup#newDefaultThreadFactory does by default
+                .group(new MultiThreadIoEventLoopGroup(0, new DefaultThreadFactory("Geyser Spigot connection thread", Thread.MAX_PRIORITY), LocalIoHandler.newFactory()))
                 .localAddress(LocalAddress.ANY))
                 .bind()
                 .syncUninterruptibly();
