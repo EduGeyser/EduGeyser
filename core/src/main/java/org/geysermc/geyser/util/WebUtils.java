@@ -99,8 +99,7 @@ public class WebUtils {
         checkResponseCode(con);
         try (InputStreamReader isr = new InputStreamReader(con.getInputStream());
              JsonReader reader = GeyserImpl.GSON.newJsonReader(isr)) {
-            //noinspection deprecation
-            return new JsonParser().parse(reader).getAsJsonObject();
+            return JsonParser.parseReader(reader).getAsJsonObject();
         }
     }
 

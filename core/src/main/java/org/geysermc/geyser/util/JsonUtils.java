@@ -45,11 +45,11 @@ public final class JsonUtils {
     }
 
     public static JsonObject fromJson(InputStream stream) {
-        return (JsonObject) new JsonParser().parse(new InputStreamReader(stream));
+        return (JsonObject) JsonParser.parseReader(new InputStreamReader(stream));
     }
 
     public static JsonObject parseJson(String s) {
-        var output = new JsonParser().parse(s);
+        var output = JsonParser.parseString(s);
         if (output instanceof JsonObject jsonObject) {
             return jsonObject;
         }

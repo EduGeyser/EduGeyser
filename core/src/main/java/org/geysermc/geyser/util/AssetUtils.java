@@ -119,7 +119,7 @@ public final class AssetUtils {
                 GeyserImpl.getInstance().getLogger().debug(CLIENT_JAR_INFO); // Was previously a Jackson call for writeValueToString
 
                 // Get the assets list
-                JsonObject assets = ((JsonObject) new JsonParser().parse(WebUtils.getBody(versionInfo.getAssetIndex().getUrl()))).getAsJsonObject("objects");
+                JsonObject assets = ((JsonObject) JsonParser.parseString(WebUtils.getBody(versionInfo.getAssetIndex().getUrl()))).getAsJsonObject("objects");
 
                 // Put each asset into an array for use later
                 for (Map.Entry<String, JsonElement> entry : assets.entrySet()) {
