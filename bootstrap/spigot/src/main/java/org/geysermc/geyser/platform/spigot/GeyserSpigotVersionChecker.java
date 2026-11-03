@@ -26,6 +26,7 @@
 package org.geysermc.geyser.platform.spigot;
 
 import com.viaversion.viaversion.api.Via;
+import com.viaversion.viaversion.api.ViaAPI;
 import org.bukkit.Bukkit;
 import org.bukkit.UnsafeValues;
 import org.geysermc.geyser.GeyserLogger;
@@ -95,11 +96,12 @@ public final class GeyserSpigotVersionChecker {
     private static void checkViaVersionSupportedVersions(GeyserLogger logger) {
         // Run after ViaVersion has obtained the server protocol version
         Via.getPlatform().runSync(() -> {
-            if (Via.getAPI().getSupportedProtocolVersions().stream().anyMatch(version -> version.getVersion() == GameProtocol.getJavaProtocolVersion())) {
+            ViaAPI<?> api = Via.getAPI();
+            if (api.getSupportedProtocolVersions().stream().anyMatch(version -> version.getVersion() == GameProtocol.getJavaProtocolVersion())) {
                 // Via supports this protocol version; we will be able to connect.
                 return;
             }
-            if (Via.getAPI().getFullSupportedProtocolVersions().stream().anyMatch(version -> version.getVersion() == GameProtocol.getJavaProtocolVersion())) {
+            if (api.getFullSupportedProtocolVersions().stream().anyMatch(version -> version.getVersion() == GameProtocol.getJavaProtocolVersion())) {
                 // ViaVersion supports our protocol, but the user has blocked them from connecting.
                 logger.warning(GeyserLocale.getLocaleStringLog("geyser.bootstrap.viaversion.blocked", GameProtocol.getAllSupportedJavaVersions()));
                 return;
