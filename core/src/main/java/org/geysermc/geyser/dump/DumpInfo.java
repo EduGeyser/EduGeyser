@@ -304,7 +304,7 @@ public class DumpInfo {
                 Map<String, String> fields = new HashMap<>();
                 fields.put("content", FileUtils.readAllLines(geyser.getBootstrap().getLogsPath()).collect(Collectors.joining("\n")));
 
-                JsonObject logData = new JsonParser().parse(WebUtils.postForm("https://api.mclo.gs/1/log", fields)).getAsJsonObject();
+                JsonObject logData = JsonParser.parseString(WebUtils.postForm("https://api.mclo.gs/1/log", fields)).getAsJsonObject();
 
                 this.link = logData.get("url").getAsString();
             } catch (IOException ignored) { }

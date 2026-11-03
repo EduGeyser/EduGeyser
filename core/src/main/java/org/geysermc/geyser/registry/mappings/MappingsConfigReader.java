@@ -114,7 +114,7 @@ public final class MappingsConfigReader {
     private static @Nullable JsonObject getMappingsRoot(Path file) {
         JsonObject mappingsRoot;
         try (FileReader reader = new FileReader(file.toFile())) {
-            mappingsRoot = (JsonObject) new JsonParser().parse(reader);
+            mappingsRoot = (JsonObject) JsonParser.parseReader(reader);
         } catch (IOException e) {
             GeyserImpl.getInstance().getLogger().error("Failed to read custom mapping file: " + file, e);
             return null;

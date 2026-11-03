@@ -44,7 +44,7 @@ public class PotPatternRegistryLoader implements RegistryLoader<String, Map<Key,
     public Map<Key, Key> load(String input) {
         JsonObject mappings;
         try (InputStream stream = GeyserImpl.getInstance().getBootstrap().getResourceOrThrow(input)) {
-            mappings = new JsonParser().parse(new InputStreamReader(stream)).getAsJsonObject();
+            mappings = JsonParser.parseReader(new InputStreamReader(stream)).getAsJsonObject();
         } catch (IOException exception) {
             throw new AssertionError("Unable to load decorated pot patterns", exception);
         }

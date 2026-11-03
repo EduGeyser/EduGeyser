@@ -69,7 +69,7 @@ public class WebUtils {
      * Replaces the deprecated URL(String) constructor. URI parsing is stricter, so its errors are
      * reported as the MalformedURLException that callers already handle.
      */
-    private static URL toUrl(String url) throws MalformedURLException {
+    public static URL toUrl(String url) throws MalformedURLException {
         try {
             return new URI(url).toURL();
         } catch (URISyntaxException | IllegalArgumentException e) {

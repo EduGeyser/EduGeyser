@@ -49,16 +49,16 @@ import org.geysermc.mcprotocollib.protocol.data.game.entity.player.ResolvablePro
 
 import java.awt.*;
 import java.awt.image.BufferedImage;
+import java.time.Duration;
 import java.util.Objects;
 import java.util.concurrent.ExecutionException;
-import java.util.concurrent.TimeUnit;
 
 /**
  * Responsible for modifying a player's skin when wearing a player head
  */
 public class FakeHeadProvider {
     private static final LoadingCache<FakeHeadEntry, SkinData> MERGED_SKINS_LOADING_CACHE = CacheBuilder.newBuilder()
-            .expireAfterAccess(1, TimeUnit.HOURS)
+            .expireAfterAccess(Duration.ofHours(1))
             .maximumSize(10000)
             .build(new CacheLoader<>() {
                 @Override

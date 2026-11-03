@@ -25,7 +25,6 @@
 
 package org.geysermc.geyser.translator.protocol.java;
 
-import com.google.common.base.Charsets;
 import io.netty.buffer.ByteBuf;
 import io.netty.buffer.Unpooled;
 import org.cloudburstmc.protocol.bedrock.packet.TransferPacket;
@@ -87,7 +86,7 @@ public class JavaCustomPayloadTranslator extends PacketTranslator<ClientboundCus
                     throw new NullPointerException("Got type " + data[0] + " which isn't a valid form type!");
                 }
 
-                String dataString = new String(data, 3, data.length - 3, Charsets.UTF_8);
+                String dataString = new String(data, 3, data.length - 3, StandardCharsets.UTF_8);
 
                 Form form = Forms.fromJson(dataString, type, (ignored, response) -> {
                     byte[] finalData;

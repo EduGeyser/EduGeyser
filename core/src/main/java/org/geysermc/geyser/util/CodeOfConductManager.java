@@ -57,7 +57,7 @@ public class CodeOfConductManager {
 
             try (Reader reader = new FileReader(savePath.toFile())) {
                 //noinspection deprecation - otherwise 1.16.5 doesn't work
-                JsonObject object = new JsonParser().parse(reader).getAsJsonObject();
+                JsonObject object = JsonParser.parseReader(reader).getAsJsonObject();
                 for (Map.Entry<String, JsonElement> entry : object.entrySet()) {
                     playerAcceptedCodeOfConducts.put(entry.getKey(), entry.getValue().getAsInt());
                 }

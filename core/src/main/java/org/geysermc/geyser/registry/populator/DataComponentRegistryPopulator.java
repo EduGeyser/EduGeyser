@@ -64,7 +64,7 @@ public final class DataComponentRegistryPopulator {
         List<DataComponents> defaultComponents;
         try (InputStream stream = resources.getResourceOrThrow("mappings/item_data_components.json")) {
             //noinspection deprecation - 1.16.5 breaks otherwise
-            JsonElement rootElement = new JsonParser().parse(new InputStreamReader(stream));
+            JsonElement rootElement = JsonParser.parseReader(new InputStreamReader(stream));
             JsonArray jsonArray = rootElement.getAsJsonArray();
 
             defaultComponents = new ObjectArrayList<>(jsonArray.size());
@@ -95,7 +95,7 @@ public final class DataComponentRegistryPopulator {
         List<List<ResolvableComponent<?>>> resolvableComponents;
         try (InputStream stream = resources.getResourceOrThrow("mappings/resolvable_item_data_components.json")) {
             //noinspection deprecation
-            JsonElement rootElement = new JsonParser().parse(new InputStreamReader(stream));
+            JsonElement rootElement = JsonParser.parseReader(new InputStreamReader(stream));
             JsonArray items = rootElement.getAsJsonObject().get("value").getAsJsonArray();
 
             resolvableComponents = new ObjectArrayList<>(items.size());

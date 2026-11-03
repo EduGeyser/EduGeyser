@@ -43,7 +43,7 @@ public abstract class EffectRegistryLoader<T> implements RegistryLoader<String, 
         try (InputStream stream = GeyserImpl.getInstance().getBootstrap().getResourceOrThrow(input);
          InputStreamReader reader = new InputStreamReader(stream)) {
             //noinspection deprecation
-            return new JsonParser().parse(reader).getAsJsonObject();
+            return JsonParser.parseReader(reader).getAsJsonObject();
         } catch (Exception e) {
             throw new AssertionError("Unable to load registrations for " + input, e);
         }

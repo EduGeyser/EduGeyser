@@ -56,8 +56,8 @@ import java.io.ByteArrayOutputStream;
 import java.io.File;
 import java.io.IOException;
 import java.net.HttpURLConnection;
-import java.net.URL;
 import java.nio.charset.StandardCharsets;
+import java.time.Duration;
 import java.util.Base64;
 import java.util.Map;
 import java.util.Objects;
@@ -77,18 +77,18 @@ public class SkinProvider {
     static final Cape EMPTY_CAPE = new Cape("", "no-cape", ByteArrays.EMPTY_ARRAY, true);
 
     private static final Cache<String, Cape> CACHED_JAVA_CAPES = CacheBuilder.newBuilder()
-            .expireAfterAccess(1, TimeUnit.HOURS)
+            .expireAfterAccess(Duration.ofHours(1))
             .build();
     private static final Cache<String, Skin> CACHED_JAVA_SKINS = CacheBuilder.newBuilder()
-            .expireAfterAccess(1, TimeUnit.HOURS)
+            .expireAfterAccess(Duration.ofHours(1))
             .build();
 
     // Keyed by player
     private static final Cache<UUID, Cape> CACHED_BEDROCK_CAPES = CacheBuilder.newBuilder()
-            .expireAfterAccess(1, TimeUnit.HOURS)
+            .expireAfterAccess(Duration.ofHours(1))
             .build();
     private static final Cache<UUID, Skin> CACHED_BEDROCK_SKINS = CacheBuilder.newBuilder()
-            .expireAfterAccess(1, TimeUnit.HOURS)
+            .expireAfterAccess(Duration.ofHours(1))
             .build();
 
     private static final Map<String, CompletableFuture<Cape>> requestedCapes = new ConcurrentHashMap<>();
@@ -631,7 +631,7 @@ public class SkinProvider {
         if (!TextureUrlChecker.isAllowedTextureDomain(imageUrl)) {
             return EMPTY_SKIN_IMAGE;
         }
-        HttpURLConnection con = (HttpURLConnection) new URL(imageUrl).openConnection();
+        HttpURLConnection con = (HttpURLConnection) WebUtils.toUrl(imageUrl).openConnection();
         con.setRequestProperty("User-Agent", WebUtils.getUserAgent());
         con.setConnectTimeout(10000);
         con.setReadTimeout(10000);
