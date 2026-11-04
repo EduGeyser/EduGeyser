@@ -654,20 +654,27 @@ public class LivingEntity extends Entity implements Tickable {
 
         MobArmorEquipmentPacket armorEquipmentPacket = new MobArmorEquipmentPacket();
         armorEquipmentPacket.setRuntimeEntityId(geyserId);
-        armorEquipmentPacket.setHelmet(ItemTranslator.translateToBedrock(session, helmet));
-        armorEquipmentPacket.setChestplate(ItemTranslator.translateToBedrock(session, chestplate));
-        armorEquipmentPacket.setLeggings(ItemTranslator.translateToBedrock(session, getItemInSlot(EquipmentSlot.LEGGINGS)));
-        armorEquipmentPacket.setBoots(ItemTranslator.translateToBedrock(session, getItemInSlot(EquipmentSlot.BOOTS)));
-        armorEquipmentPacket.setBody(ItemTranslator.translateToBedrock(session, getItemInSlot(EquipmentSlot.BODY)));
+        armorEquipmentPacket.setHelmet(translateEquipment(helmet, EquipmentSlot.HELMET));
+        armorEquipmentPacket.setChestplate(translateEquipment(chestplate, EquipmentSlot.CHESTPLATE));
+        armorEquipmentPacket.setLeggings(translateEquipment(getItemInSlot(EquipmentSlot.LEGGINGS), EquipmentSlot.LEGGINGS));
+        armorEquipmentPacket.setBoots(translateEquipment(getItemInSlot(EquipmentSlot.BOOTS), EquipmentSlot.BOOTS));
+        armorEquipmentPacket.setBody(translateEquipment(getItemInSlot(EquipmentSlot.BODY), EquipmentSlot.BODY));
 
         session.sendUpstreamPacket(armorEquipmentPacket);
+    }
+
+    /**
+     * Translates an item this entity has equipped, as Bedrock should see it in the given slot.
+     */
+    protected ItemData translateEquipment(GeyserItemStack stack, EquipmentSlot slot) {
+        return ItemTranslator.translateToBedrock(session, stack);
     }
 
     /**
      * The item the Bedrock client shows in this entity's main hand.
      */
     protected ItemData bedrockMainHandItem() {
-        return ItemTranslator.translateToBedrock(session, getMainHandItem());
+        return translateEquipment(getMainHandItem(), EquipmentSlot.MAIN_HAND);
     }
 
     public void updateMainHand() {
@@ -688,7 +695,7 @@ public class LivingEntity extends Entity implements Tickable {
 
         MobEquipmentPacket offHandPacket = new MobEquipmentPacket();
         offHandPacket.setRuntimeEntityId(geyserId);
-        offHandPacket.setItem(ItemTranslator.translateToBedrock(session, getOffHandItem()));
+        offHandPacket.setItem(translateEquipment(getOffHandItem(), EquipmentSlot.OFF_HAND));
         offHandPacket.setHotbarSlot(-1);
         offHandPacket.setInventorySlot(0);
         offHandPacket.setContainerId(ContainerId.OFFHAND);
