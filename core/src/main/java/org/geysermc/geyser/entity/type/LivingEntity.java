@@ -670,19 +670,12 @@ public class LivingEntity extends Entity implements Tickable {
         return ItemTranslator.translateToBedrock(session, stack);
     }
 
-    /**
-     * The item the Bedrock client shows in this entity's main hand.
-     */
-    protected ItemData bedrockMainHandItem() {
-        return translateEquipment(getMainHandItem(), EquipmentSlot.MAIN_HAND);
-    }
-
     public void updateMainHand() {
         if (!valid) return;
 
         MobEquipmentPacket handPacket = new MobEquipmentPacket();
         handPacket.setRuntimeEntityId(geyserId);
-        handPacket.setItem(bedrockMainHandItem());
+        handPacket.setItem(translateEquipment(getMainHandItem(), EquipmentSlot.MAIN_HAND));
         handPacket.setHotbarSlot(-1);
         handPacket.setInventorySlot(0);
         handPacket.setContainerId(ContainerId.INVENTORY);

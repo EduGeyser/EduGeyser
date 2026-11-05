@@ -35,6 +35,7 @@ import org.geysermc.geyser.item.Items;
 import org.geysermc.geyser.item.type.Item;
 import org.geysermc.geyser.level.block.type.BlockState;
 import org.geysermc.geyser.translator.item.ItemTranslator;
+import org.geysermc.mcprotocollib.protocol.data.game.entity.EquipmentSlot;
 import org.geysermc.mcprotocollib.protocol.data.game.entity.metadata.type.BooleanEntityMetadata;
 import org.geysermc.mcprotocollib.protocol.data.game.entity.metadata.type.IntEntityMetadata;
 
@@ -65,8 +66,8 @@ public class EndermanEntity extends MonsterEntity {
     }
 
     @Override
-    protected ItemData bedrockMainHandItem() {
-        return carriedBlock;
+    protected ItemData translateEquipment(GeyserItemStack stack, EquipmentSlot slot) {
+        return slot == EquipmentSlot.MAIN_HAND ? carriedBlock : super.translateEquipment(stack, slot);
     }
 
     /**
