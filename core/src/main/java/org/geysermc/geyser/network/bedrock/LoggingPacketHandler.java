@@ -31,6 +31,7 @@ import org.cloudburstmc.protocol.common.PacketSignal;
 import org.geysermc.geyser.GeyserImpl;
 import org.geysermc.geyser.session.GeyserSession;
 import org.geysermc.geyser.text.GeyserLocale;
+import org.geysermc.geyser.text.MinecraftLocale;
 
 /**
  * Bare bones implementation of BedrockPacketHandler suitable for extension.
@@ -39,6 +40,9 @@ import org.geysermc.geyser.text.GeyserLocale;
  * packets of interest and limit boilerplate code.
  */
 public class LoggingPacketHandler implements BedrockPacketHandler {
+    /** The prefix of the translation keys the protocol library reports disconnect reasons with. */
+    private static final String DISCONNECT_KEY_PREFIX = "disconnect.";
+
     protected final GeyserImpl geyser;
     protected final GeyserSession session;
 
@@ -54,13 +58,33 @@ public class LoggingPacketHandler implements BedrockPacketHandler {
 
     @Override
     public void onDisconnect(CharSequence reason) {
-        // Use our own disconnect messages for these reasons
-        if (BedrockDisconnectReasons.CLOSED.contentEquals(reason)) {
-            this.session.getUpstream().getSession().setDisconnectReason(GeyserLocale.getLocaleStringLog("geyser.network.disconnect.closed_by_remote_peer"));
-        } else if (BedrockDisconnectReasons.TIMEOUT.contentEquals(reason)) {
-            this.session.getUpstream().getSession().setDisconnectReason(GeyserLocale.getLocaleStringLog("geyser.network.disconnect.timed_out"));
-        }
+        this.session.getUpstream().getSession().setDisconnectReason(transportReasonText(reason));
         this.session.disconnect(this.session.getUpstream().getSession().getDisconnectReason().toString());
+    }
+
+    /**
+     * The text logged for the reason a connection ended with. The protocol
+     * library names the reasons the transport ends a connection for with
+     * Bedrock translation keys. A closed and a timed out connection get
+     * Geyser's own text; other keys get the Java edition's text for the same
+     * key, such as "Connection Lost" for disconnect.lost, which a failed
+     * NetherNet transport ends with. Anything else is logged as it is.
+     */
+    static String transportReasonText(CharSequence reason) {
+        if (BedrockDisconnectReasons.CLOSED.contentEquals(reason)) {
+            return GeyserLocale.getLocaleStringLog("geyser.network.disconnect.closed_by_remote_peer");
+        }
+        if (BedrockDisconnectReasons.TIMEOUT.contentEquals(reason)) {
+            return GeyserLocale.getLocaleStringLog("geyser.network.disconnect.timed_out");
+        }
+        String text = reason.toString();
+        if (text.startsWith(DISCONNECT_KEY_PREFIX)) {
+            String translated = MinecraftLocale.getLocaleStringIfPresent(text, GeyserLocale.getDefaultLocale());
+            if (translated != null) {
+                return translated;
+            }
+        }
+        return text;
     }
 
     @Override
