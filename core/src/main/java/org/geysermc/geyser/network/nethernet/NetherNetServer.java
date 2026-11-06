@@ -148,6 +148,7 @@ public class NetherNetServer {
     private volatile NetherNetXboxRpcSignaling xboxSignaling;
     private volatile NetherNetHttpSignaling httpSignaling;
     private NetherNetCertificateManager certificateManager;
+    private NetherNetJoinLog joinLog;
 
     private volatile XboxSignalingTokens signalingTokens;
     // Only touched by the health listener, which runs on the signaling's
@@ -347,8 +348,10 @@ public class NetherNetServer {
         this.bossGroup = new MultiThreadIoEventLoopGroup(1, NioIoHandler.newFactory());
         this.workerGroup = new MultiThreadIoEventLoopGroup(workerThreads(), NioIoHandler.newFactory());
         this.engine = createEngine();
+        this.joinLog = new NetherNetJoinLog(logger, geyser.config().logPlayerIpAddresses());
 
-        NetherNetServerInitializer childHandler = new NetherNetServerInitializer(geyser, playerEventLoopGroup, playerChannels);
+        NetherNetServerInitializer childHandler = new NetherNetServerInitializer(geyser, playerEventLoopGroup,
+                playerChannels, joinLog);
 
         try {
             // Bound at the Bedrock address and port: with the shared ICE port
@@ -466,7 +469,7 @@ public class NetherNetServer {
             tlsMode = "automatic certificate management";
         }
         NetherNetHttpSignaling http = NetherNetHttpSignaling.builder(workerGroup)
-                .tls(tlsSelector)
+                .tls(joinLog.observe(tlsSelector))
                 .statusProvider(this::serveServerStatus)
                 .build();
         try {

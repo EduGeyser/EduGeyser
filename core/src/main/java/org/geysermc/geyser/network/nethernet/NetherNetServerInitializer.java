@@ -25,6 +25,7 @@
 
 package org.geysermc.geyser.network.nethernet;
 
+import io.github.sendablemetatype.netty.channel.nethernet.NetherNetChildChannel;
 import io.netty.channel.Channel;
 import io.netty.channel.EventLoopGroup;
 import io.netty.channel.group.ChannelGroup;
@@ -59,16 +60,25 @@ public class NetherNetServerInitializer extends GeyserServerInitializer {
 
     private final ChannelGroup playerChannels;
     private final NetherNetConnectionGate connectionGate;
+    private final NetherNetJoinLog joinLog;
 
-    public NetherNetServerInitializer(GeyserImpl geyser, EventLoopGroup eventLoopGroup, ChannelGroup playerChannels) {
+    public NetherNetServerInitializer(GeyserImpl geyser, EventLoopGroup eventLoopGroup, ChannelGroup playerChannels,
+                                      NetherNetJoinLog joinLog) {
         super(geyser, eventLoopGroup);
         this.playerChannels = playerChannels;
         this.connectionGate = new NetherNetConnectionGate(geyser);
+        this.joinLog = joinLog;
     }
 
     @Override
     protected void preInitChannel(Channel channel) {
         // No super call: the parent adds the RakNet framing.
+
+        // Runs as the endpoint exposes the join, before ICE, so joins that
+        // never connect are logged too.
+        if (channel instanceof NetherNetChildChannel child) {
+            joinLog.joined(child);
+        }
 
         // Register for clean disconnect on a real teardown. The group removes
         // the channel automatically when it closes.
