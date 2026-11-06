@@ -70,6 +70,7 @@ import java.util.concurrent.RejectedExecutionException;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.function.BooleanSupplier;
 import java.util.function.Supplier;
 
 /**
@@ -247,6 +248,7 @@ public class NetherNetServer {
             shutdown();
             return false;
         }
+        warnWhenClosedByItself(endpointChannel, () -> running, logger);
 
         // The connection ID clients type is the connection id followed by the
         // 32 hex pmid of the signaling MCToken. The pmid is bound to the
@@ -451,6 +453,22 @@ public class NetherNetServer {
 
     private void logEndpointClosed() {
         logger.error(LOG_PREFIX + "The NetherNet endpoint closed itself during startup; NetworkM logged why");
+    }
+
+    /**
+     * Warns when the endpoint closes while the server still runs: NetworkM
+     * closes it by itself, as when an advertised name does not resolve, and
+     * logs why, but nothing else tells operators that Bedrock players can no
+     * longer join. Shutdown clears running before it closes the endpoint, so
+     * its own close stays quiet.
+     */
+    static void warnWhenClosedByItself(Channel endpoint, BooleanSupplier running, GeyserLogger logger) {
+        endpoint.closeFuture().addListener(closed -> {
+            if (running.getAsBoolean()) {
+                logger.warning(LOG_PREFIX + "The NetherNet endpoint closed itself, NetworkM logged why: Bedrock players"
+                        + " can no longer join until a restart or reload");
+            }
+        });
     }
 
     /**

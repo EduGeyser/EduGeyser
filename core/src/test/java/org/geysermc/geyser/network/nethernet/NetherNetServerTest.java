@@ -62,10 +62,13 @@ import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.junit.jupiter.api.Assertions.fail;
+import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.contains;
 import static org.mockito.Mockito.RETURNS_DEEP_STUBS;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.timeout;
+import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -84,8 +87,7 @@ class NetherNetServerTest {
         InetSocketAddress address = new InetSocketAddress(InetAddress.getLoopbackAddress(), freePort());
         // As when the engine failed to open the ICE port and NetworkM closed the endpoint. An
         // endpoint that never binds creates no engine.
-        NetherNetServerChannel endpoint = NetherNetChannelFactory.server(() -> fail("no engine needed")).newChannel();
-        group.register(endpoint).sync();
+        NetherNetServerChannel endpoint = registeredEndpoint();
         endpoint.close().sync();
 
         NetherNetHttpSignaling http = NetherNetHttpSignaling.builder(group).build();
@@ -131,6 +133,31 @@ class NetherNetServerTest {
         verify(logger, never()).info(contains("HTTP signaling on TCP port"));
         assertTrue(engineClosed.get(), "the shutdown waited for the endpoint to close the engine it owns");
         assertFalse(server.isRunning());
+    }
+
+    @Test
+    void anEndpointThatClosesItselfWhileRunningIsReportedAndAShutdownIsNot() throws Exception {
+        AtomicBoolean running = new AtomicBoolean(true);
+        NetherNetServerChannel closedItself = registeredEndpoint();
+        NetherNetServer.warnWhenClosedByItself(closedItself, running::get, logger);
+
+        closedItself.close().sync();
+        verify(logger, timeout(2000)).warning(contains("Bedrock players can no longer join until a restart or reload"));
+
+        // As shutdown does before it closes the endpoint
+        running.set(false);
+        NetherNetServerChannel shutDown = registeredEndpoint();
+        NetherNetServer.warnWhenClosedByItself(shutDown, running::get, logger);
+        shutDown.close().sync();
+        shutDown.eventLoop().submit(() -> { }).sync();
+        verify(logger, times(1)).warning(anyString());
+    }
+
+    /** An endpoint that never binds, so it needs no engine. */
+    private NetherNetServerChannel registeredEndpoint() throws InterruptedException {
+        NetherNetServerChannel endpoint = NetherNetChannelFactory.server(() -> fail("no engine needed")).newChannel();
+        group.register(endpoint).sync();
+        return endpoint;
     }
 
     private GeyserImpl geyser(Path configFolder, int port) {
