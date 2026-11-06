@@ -45,6 +45,7 @@ import org.geysermc.geyser.api.GeyserApi;
 import org.geysermc.geyser.api.entity.custom.CustomEntityDefinition;
 import org.geysermc.geyser.api.extension.Extension;
 import org.geysermc.geyser.api.util.MinecraftVersion;
+import org.geysermc.geyser.network.ConnectionRequests;
 import org.geysermc.geyser.network.bedrock.GameProtocol;
 import org.geysermc.geyser.pack.ResourcePackHolder;
 import org.geysermc.geyser.registry.BlockRegistries;
@@ -153,11 +154,7 @@ public class DumpInfo {
             userPlatforms.put(device, userPlatforms.getOrDefault(device, 0) + 1);
         }
 
-        if (geyser.getGeyserServer() != null) {
-            this.connectionAttempts = geyser.getGeyserServer().getConnectionAttempts();
-        } else {
-            this.connectionAttempts = 0; // Fallback if Geyser failed to fully startup
-        }
+        this.connectionAttempts = ConnectionRequests.attempts();
 
         this.bootstrapInfo = geyser.getBootstrap().getDumpInfo();
 

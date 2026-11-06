@@ -31,13 +31,23 @@ import org.geysermc.geyser.api.event.connection.ConnectionRequestEvent;
 import org.geysermc.geyser.text.GeyserLocale;
 
 import java.net.InetSocketAddress;
+import java.util.concurrent.atomic.AtomicInteger;
 
 /**
  * The pre-authentication gate every inbound connection passes, whichever transport carried it.
  */
 public final class ConnectionRequests {
 
+    private static final AtomicInteger ATTEMPTS = new AtomicInteger();
+
     private ConnectionRequests() {
+    }
+
+    /**
+     * @return how many connections asked this gate since the process started, refused ones included
+     */
+    public static int attempts() {
+        return ATTEMPTS.get();
     }
 
     /**
@@ -53,6 +63,7 @@ public final class ConnectionRequests {
      */
     public static boolean accept(GeyserImpl geyser, InetSocketAddress clientAddress,
                                  @Nullable InetSocketAddress proxyAddress) {
+        ATTEMPTS.incrementAndGet();
         String ip = geyser.config().logPlayerIpAddresses() ? String.valueOf(clientAddress) : "<IP address withheld>";
 
         ConnectionRequestEvent requestEvent = new ConnectionRequestEvent(clientAddress, proxyAddress);
