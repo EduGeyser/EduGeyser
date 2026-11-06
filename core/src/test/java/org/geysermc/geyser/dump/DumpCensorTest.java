@@ -29,6 +29,7 @@ import org.geysermc.geyser.configuration.GeyserConfig;
 import org.geysermc.geyser.network.nethernet.NetherNetServer;
 import org.geysermc.geyser.text.AsteriskSerializer;
 import org.junit.jupiter.api.AfterEach;
+import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.ValueSource;
 import org.spongepowered.configurate.CommentedConfigurationNode;
