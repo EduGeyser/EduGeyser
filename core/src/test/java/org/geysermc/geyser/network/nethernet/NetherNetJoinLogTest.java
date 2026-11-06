@@ -63,6 +63,7 @@ import static org.junit.jupiter.api.Assertions.fail;
 import static org.mockito.ArgumentMatchers.contains;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.timeout;
+import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 
 class NetherNetJoinLogTest {
@@ -118,15 +119,20 @@ class NetherNetJoinLogTest {
     }
 
     @Test
-    void aClientThatRejectsTheCertificateIsLogged() throws Exception {
+    void aClientThatRejectsTheCertificateIsLoggedAndTheNextOnesGoToDebug() throws Exception {
         NetherNetJoinLog log = new NetherNetJoinLog(logger, true);
         SslContext served = Credentials.create().serverContext();
         serve(log.observe(name -> served));
 
-        // Trusts another certificate, so it refuses the one served
-        connect(Credentials.create().clientContext());
+        // Trusts another certificate, so each client refuses the one served
+        SslContext rejecting = Credentials.create().clientContext();
+        for (int i = 0; i < 3; i++) {
+            connect(rejecting);
+        }
 
-        verify(logger, timeout(WAIT.toMillis())).info(contains("TLS handshake for HTTP signaling failed (no server name)"));
+        String failed = "TLS handshake for HTTP signaling failed (no server name)";
+        verify(logger, timeout(WAIT.toMillis()).times(2)).debug(contains(failed));
+        verify(logger, times(1)).info(contains(failed));
     }
 
     @Test

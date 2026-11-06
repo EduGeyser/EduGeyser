@@ -87,6 +87,7 @@ final class NetherNetJoinLog {
     private final GeyserLogger logger;
     private final boolean logAddresses;
     private final Duration keptAfterClose;
+    private final NetherNetRateLimitedLog handshakeFailures;
     /** Client addresses of TLS connections, each with its connection, so a reused address is not dropped early. */
     private final Map<InetSocketAddress, Channel> tlsConnections = new ConcurrentHashMap<>();
 
@@ -98,12 +99,13 @@ final class NetherNetJoinLog {
         this.logger = logger;
         this.logAddresses = logAddresses;
         this.keptAfterClose = keptAfterClose;
+        this.handshakeFailures = new NetherNetRateLimitedLog(logger);
     }
 
     /**
      * Wraps a TLS selector so that every TLS connection it serves is
      * remembered once its handshake completes, and a failed handshake is
-     * logged.
+     * logged through a {@link NetherNetRateLimitedLog}.
      */
     TlsContextSelector observe(TlsContextSelector selector) {
         return serverName -> {
@@ -141,8 +143,9 @@ final class NetherNetJoinLog {
         } else if (handshake.cause() instanceof SSLException failure) {
             // A client that rejects the certificate ends up here. NetworkM
             // hands the handler no peer address, so only the name it asked
-            // for tells such clients apart.
-            logger.info(LOG_PREFIX + "TLS handshake for HTTP signaling failed ("
+            // for tells such clients apart. Anyone can fail handshakes
+            // before any join throttle, hence the limit.
+            handshakeFailures.log(LOG_PREFIX + "TLS handshake for HTTP signaling failed ("
                     + (serverName == null ? "no server name" : "server name " + serverName) + "): "
                     + failure.getMessage());
         }
