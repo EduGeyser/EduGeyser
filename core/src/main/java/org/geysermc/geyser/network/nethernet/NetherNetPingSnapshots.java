@@ -35,7 +35,7 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.Executor;
 import java.util.concurrent.RejectedExecutionException;
 import java.util.concurrent.TimeUnit;
-import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicLong;
 import java.util.function.Function;
 import java.util.function.LongSupplier;
 
@@ -53,10 +53,8 @@ import java.util.function.LongSupplier;
  * Bounds, since anyone who reaches the port can send any Host: at most {@link #MAX_HOSTS} hosts
  * have a snapshot of their own, besides the one for requests that name none. A host that no
  * request named for {@link #IDLE_NANOS} gives up its place once a new host needs one; while all
- * places are taken, a new host is answered from the host-less snapshot. Each snapshot refreshes
- * at most once per {@link #MAX_AGE_NANOS} and has at most one refresh queued or running, so the
- * Java server is asked at most {@code MAX_HOSTS + 1} times per second, one ask at a time on a
- * single-threaded refresher, whatever the requests do.
+ * places are taken, a new host is answered from the host-less snapshot. Each snapshot asks at
+ * most once per {@link #MAX_AGE_NANOS} and has at most one ask queued or running.
  */
 final class NetherNetPingSnapshots {
 
@@ -72,6 +70,8 @@ final class NetherNetPingSnapshots {
      * retail server list, so a list that misses a poll keeps its host's snapshot.
      */
     static final long IDLE_NANOS = TimeUnit.SECONDS.toNanos(90);
+    /** A snapshot's ask state while its ask is queued or running. */
+    private static final long ASKING = Long.MIN_VALUE;
 
     private static final String LOG_PREFIX = "[Nethernet] ";
 
@@ -103,7 +103,7 @@ final class NetherNetPingSnapshots {
 
     /** Schedules the host-less snapshot's first ask, so the first requests find an answer. */
     void prime() {
-        refresh(hostless, null);
+        refreshIfStale(hostless, null);
     }
 
     /**
@@ -118,12 +118,12 @@ final class NetherNetPingSnapshots {
         Snapshot own = host == null || host.isBlank() ? hostless : forHost(JoinAddress.parse(host, defaultPort), now);
         if (own != null) {
             own.requestedNanos = now;
-            Answer answer = refreshIfStale(own, host, now);
+            Answer answer = refreshIfStale(own, host);
             if (answer != null) {
                 return answer.info();
             }
         }
-        Answer fallback = refreshIfStale(hostless, null, now);
+        Answer fallback = refreshIfStale(hostless, null);
         return fallback != null ? fallback.info() : null;
     }
 
@@ -152,17 +152,21 @@ final class NetherNetPingSnapshots {
         }
     }
 
-    private @Nullable Answer refreshIfStale(Snapshot snapshot, @Nullable String host, long now) {
-        if (now - snapshot.askedNanos >= MAX_AGE_NANOS) {
-            refresh(snapshot, host);
+    /**
+     * Schedules an ask when the snapshot is stale and none is queued or running. The snapshot is
+     * claimed against the very time judged stale, so a request that saw it stale while another
+     * ask finished does not ask again right after.
+     */
+    private @Nullable Answer refreshIfStale(Snapshot snapshot, @Nullable String host) {
+        long asked = snapshot.asked.get();
+        if (asked != ASKING && clock.getAsLong() - asked >= MAX_AGE_NANOS
+                && snapshot.asked.compareAndSet(asked, ASKING)) {
+            ask(snapshot, host, asked);
         }
         return snapshot.answer;
     }
 
-    private void refresh(Snapshot snapshot, @Nullable String host) {
-        if (!snapshot.refreshing.compareAndSet(false, true)) {
-            return;
-        }
+    private void ask(Snapshot snapshot, @Nullable String host, long asked) {
         try {
             refresher.execute(() -> {
                 try {
@@ -172,13 +176,12 @@ final class NetherNetPingSnapshots {
                 } finally {
                     // Advanced on failure too, so a throwing passthrough is asked once a
                     // second rather than as fast as requests arrive
-                    snapshot.askedNanos = clock.getAsLong();
-                    snapshot.refreshing.set(false);
+                    snapshot.asked.set(clock.getAsLong());
                 }
             });
         } catch (RejectedExecutionException e) {
-            // Shutdown raced the request; the snapshot it found serves fine
-            snapshot.refreshing.set(false);
+            // Shutdown raced the request; the answer the snapshot has serves fine
+            snapshot.asked.set(asked);
         }
     }
 
@@ -187,14 +190,16 @@ final class NetherNetPingSnapshots {
     }
 
     private static final class Snapshot {
-        final AtomicBoolean refreshing = new AtomicBoolean();
+        /**
+         * When the last ask finished, or {@link #ASKING} while one is queued or running. Starts
+         * stale, so the first request asks.
+         */
+        final AtomicLong asked;
         volatile @Nullable Answer answer;
-        /** When the last ask finished; starts stale, so the first request asks. */
-        volatile long askedNanos;
         volatile long requestedNanos;
 
         Snapshot(long now) {
-            this.askedNanos = now - MAX_AGE_NANOS;
+            this.asked = new AtomicLong(now - MAX_AGE_NANOS);
             this.requestedNanos = now;
         }
     }

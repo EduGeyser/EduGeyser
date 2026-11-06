@@ -50,9 +50,21 @@ class NetherNetPingSnapshotsTest {
     /** The hosts the Java server was asked about, in order; "-" for none. */
     private final List<String> asked = new ArrayList<>();
     private RuntimeException failure;
+    /** Runs once on the clock read that counts it down to zero, then clears itself. */
+    private Runnable onRead;
+    private int readsUntilOnRead;
 
     private final NetherNetPingSnapshots snapshots = new NetherNetPingSnapshots(this::ask, refresher::add,
-            BEDROCK_PORT, clock::get, mock(GeyserLogger.class));
+            BEDROCK_PORT, this::now, mock(GeyserLogger.class));
+
+    private long now() {
+        if (onRead != null && --readsUntilOnRead == 0) {
+            Runnable hook = onRead;
+            onRead = null;
+            hook.run();
+        }
+        return clock.get();
+    }
 
     private GeyserPingInfo ask(@Nullable String host) {
         asked.add(host == null ? "-" : host);
@@ -161,5 +173,21 @@ class NetherNetPingSnapshotsTest {
         runRefresher();
         assertEquals("late.example.com", motd(snapshots.latest("late.example.com")));
         assertEquals("host0.example.com", motd(snapshots.latest("host0.example.com")));
+    }
+
+    @Test
+    void aRequestThatSawTheSnapshotStaleDoesNotAskAgainOnceAnotherAskFinished() {
+        // The request reads the clock on entry, then again between its look at the snapshot and
+        // its claim on it. In that window another request asks and its ask finishes.
+        onRead = () -> {
+            snapshots.latest(null);
+            runRefresher();
+        };
+        readsUntilOnRead = 2;
+
+        snapshots.latest(null);
+
+        assertEquals(List.of("-"), asked, "the other request's ask answered for both");
+        assertTrue(refresher.isEmpty(), "no second ask within the same second");
     }
 }
