@@ -45,10 +45,11 @@ dependencies {
     shadowBundle(libs.protocol.connection)
     shadowBundle(libs.protocol.common)
     shadowBundle(libs.protocol.codec)
-    // RakNet API dependency, so it must be relocated along with it
+    // NetworkM is relocated, so every module of it must be shaded: transport-common for the
+    // NetherNet transport, and RakNet only for the Protocol library's references to it
     shadowBundle(libs.netty.transport.common)
-    shadowBundle(libs.raknet)
     shadowBundle(libs.nethernet)
+    shadowBundle(libs.netty.transport.raknet)
     shadowBundle(libs.mcprotocollib)
 
     // Shade + relocate configurate as we're using a fork

@@ -21,7 +21,9 @@ plugins {
 
 dependencies {
     constraints {
-        implementation(libs.raknet) // Ensure protocol does not override the RakNet version
+        // The Protocol library brings it (see the version catalog); keep it on the NetworkM release
+        // the NetherNet transport and transport-common come from
+        implementation(libs.netty.transport.raknet)
     }
 
     api(projects.common)
@@ -55,11 +57,7 @@ dependencies {
         exclude("net.raphimc", "MinecraftAuth")
     }
 
-    implementation(libs.raknet) {
-        exclude("io.netty", "*")
-    }
-
-    // Nethernet (WebRTC) transport for Education Edition and Xbox peer connections
+    // Nethernet (WebRTC) transport, the only Bedrock transport
     implementation(libs.nethernet) {
         exclude("io.netty", "*")
     }
@@ -81,10 +79,11 @@ dependencies {
 
     // Network dependencies we are updating ourselves
     api(libs.netty.handler)
+    // PROXY protocol on HTTP signaling, and on the Java connection
     implementation(libs.netty.codec.haproxy)
-    // Required by the Nethernet signaling WebSocket (TextWebSocketFrame etc.).
-    // The nethernet library excludes all io.netty deps above, so platforms that
-    // do not provide their own netty-codec-http (e.g. Standalone) need it bundled.
+    // HTTP signaling and the Xbox signaling WebSocket. The nethernet library's
+    // io.netty dependencies are excluded above, so platforms that do not
+    // provide their own netty-codec-http (e.g. Standalone) need it bundled.
     api(libs.netty.codec.http)
 
     api(libs.netty.transport.native.epoll) { artifact { classifier = "linux-x86_64" } }
