@@ -469,7 +469,8 @@ public class NetherNetServer {
             tlsMode = "automatic certificate management";
         }
         NetherNetHttpSignaling http = NetherNetHttpSignaling.builder(workerGroup)
-                .tls(joinLog.observe(tlsSelector))
+                .tls(tlsSelector)
+                .tlsHandshakeFailures(joinLog::tlsHandshakeFailed)
                 .statusProvider(this::serveServerStatus)
                 .build();
         try {

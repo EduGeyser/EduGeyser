@@ -27,208 +27,80 @@ package org.geysermc.geyser.network.nethernet;
 
 import io.github.sendablemetatype.netty.channel.nethernet.address.AddressSource;
 import io.github.sendablemetatype.netty.channel.nethernet.address.SourcedAddress;
-import io.github.sendablemetatype.netty.channel.nethernet.signaling.http.TlsContextSelector;
-import io.netty.bootstrap.Bootstrap;
-import io.netty.bootstrap.ServerBootstrap;
-import io.netty.channel.Channel;
-import io.netty.channel.ChannelInitializer;
-import io.netty.channel.EventLoopGroup;
-import io.netty.channel.MultiThreadIoEventLoopGroup;
-import io.netty.channel.nio.NioIoHandler;
-import io.netty.channel.socket.SocketChannel;
-import io.netty.channel.socket.nio.NioServerSocketChannel;
-import io.netty.channel.socket.nio.NioSocketChannel;
-import io.netty.handler.ssl.SslContext;
-import io.netty.handler.ssl.SslContextBuilder;
-import io.netty.handler.ssl.SslHandler;
+import io.github.sendablemetatype.netty.channel.nethernet.signaling.Join;
+import io.github.sendablemetatype.netty.channel.nethernet.signaling.http.TlsHandshakeFailure;
 import org.geysermc.geyser.GeyserLogger;
 import org.geysermc.geyser.network.nethernet.NetherNetJoinLog.Signaling;
-import org.junit.jupiter.api.AfterEach;
-import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
-import org.shredzone.acme4j.util.CertificateUtils;
 
-import java.net.InetAddress;
+import javax.net.ssl.SSLHandshakeException;
 import java.net.InetSocketAddress;
-import java.security.KeyPair;
-import java.security.KeyPairGenerator;
-import java.security.cert.X509Certificate;
-import java.time.Duration;
-import java.time.Instant;
-import java.util.concurrent.TimeUnit;
-import java.util.function.Supplier;
+import java.nio.channels.ClosedChannelException;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
-import static org.junit.jupiter.api.Assertions.fail;
-import static org.mockito.ArgumentMatchers.contains;
+import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.mock;
-import static org.mockito.Mockito.timeout;
-import static org.mockito.Mockito.times;
+import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 
 class NetherNetJoinLogTest {
 
-    private static final Duration WAIT = Duration.ofSeconds(5);
+    private static final InetSocketAddress CLIENT = new InetSocketAddress("198.51.100.9", 50000);
+    private static final SourcedAddress SIGNALED = new SourcedAddress(CLIENT, AddressSource.SIGNALING, null);
 
     private final GeyserLogger logger = mock(GeyserLogger.class);
-    private EventLoopGroup group;
-    private Channel server;
 
-    @BeforeEach
-    void setUp() {
-        group = new MultiThreadIoEventLoopGroup(2, NioIoHandler.newFactory());
-    }
-
-    @AfterEach
-    void tearDown() {
-        if (server != null) {
-            server.close().syncUninterruptibly();
-        }
-        group.shutdownGracefully(0, 1, TimeUnit.SECONDS).syncUninterruptibly();
+    @Test
+    void anHttpJoinIsHttpsOnlyWhenItsConnectionSpokeTls() {
+        assertEquals(Signaling.HTTPS, NetherNetJoinLog.signalingOf(addressed(true), SIGNALED));
+        assertEquals(Signaling.HTTP, NetherNetJoinLog.signalingOf(addressed(false), SIGNALED));
     }
 
     @Test
-    void aJoinFromAConnectionThatCompletedTlsCameOverHttps() throws Exception {
+    void joinsWithoutAnAddressCameOverXboxSignalingAndOthersFromAnotherSource() {
+        assertEquals(Signaling.XBOX_RPC, NetherNetJoinLog.signalingOf(null, SourcedAddress.unknown()));
+        assertEquals(Signaling.OTHER, NetherNetJoinLog.signalingOf(null,
+                new SourcedAddress(CLIENT, AddressSource.SIGNALING_LAN, null)));
+    }
+
+    @Test
+    void theJoinLineNamesTheAddressOnlyWhenAddressesAreLogged() {
+        new NetherNetJoinLog(logger, true).joined("1", addressed(true), SIGNALED);
+        new NetherNetJoinLog(logger, false).joined("2", addressed(false), SIGNALED);
+
+        verify(logger).info("[Nethernet] Join 1 signaled over HTTPS from 198.51.100.9:50000");
+        verify(logger).info("[Nethernet] Join 2 signaled over plain HTTP from <IP address withheld>");
+    }
+
+    @Test
+    void aFailedHandshakeNamesTheClientOnlyWhenAddressesAreLogged() {
+        SSLHandshakeException rejected = new SSLHandshakeException("Received fatal alert: certificate_unknown");
+
+        new NetherNetJoinLog(logger, true).tlsHandshakeFailed(new TlsHandshakeFailure(CLIENT, null, rejected));
+        new NetherNetJoinLog(logger, false).tlsHandshakeFailed(
+                new TlsHandshakeFailure(CLIENT, "play.example.com", rejected));
+
+        verify(logger).info("[Nethernet] TLS handshake for HTTP signaling from 198.51.100.9:50000 failed"
+                + " (no server name): Received fatal alert: certificate_unknown");
+        verify(logger).info("[Nethernet] TLS handshake for HTTP signaling from <IP address withheld> failed"
+                + " (server name play.example.com): Received fatal alert: certificate_unknown");
+    }
+
+    @Test
+    void failedHandshakesAreRateLimitedAndClosedConnectionsAreNotLogged() {
         NetherNetJoinLog log = new NetherNetJoinLog(logger, true);
-        Credentials credentials = Credentials.create();
-        SslContext served = credentials.serverContext();
-        serve(log.observe(name -> served));
+        SSLHandshakeException rejected = new SSLHandshakeException("Received fatal alert: bad_certificate");
 
-        Channel client = connect(credentials.clientContext());
-        SourcedAddress signaled = signaling((InetSocketAddress) client.localAddress());
+        log.tlsHandshakeFailed(new TlsHandshakeFailure(CLIENT, null, new ClosedChannelException()));
+        verify(logger, never()).info(anyString());
 
-        awaitSignaling(Signaling.HTTPS, () -> log.signalingOf(signaled));
-        assertEquals(Signaling.HTTP, log.signalingOf(signaling(new InetSocketAddress(InetAddress.getLoopbackAddress(), 1))),
-                "another client address never spoke TLS");
-        client.close().sync();
+        log.tlsHandshakeFailed(new TlsHandshakeFailure(CLIENT, null, rejected));
+        log.tlsHandshakeFailed(new TlsHandshakeFailure(CLIENT, null, rejected));
+        verify(logger).info(anyString());
+        verify(logger).debug(anyString());
     }
 
-    @Test
-    void aJoinFromTheAddressOfAClosedTlsConnectionIsNotLabeledHttps() throws Exception {
-        NetherNetJoinLog log = new NetherNetJoinLog(logger, true);
-        Credentials credentials = Credentials.create();
-        SslContext served = credentials.serverContext();
-        serve(log.observe(name -> served));
-
-        Channel client = connect(credentials.clientContext());
-        SourcedAddress signaled = signaling((InetSocketAddress) client.localAddress());
-        awaitSignaling(Signaling.HTTPS, () -> log.signalingOf(signaled));
-
-        // A plain HTTP join from the same IP and port can follow now
-        client.close().sync();
-        awaitSignaling(Signaling.HTTP_OR_HTTPS, () -> log.signalingOf(signaled));
-    }
-
-    @Test
-    void aClosedTlsConnectionIsForgottenOnceItsGraceEnds() throws Exception {
-        NetherNetJoinLog log = new NetherNetJoinLog(logger, true, Duration.ZERO);
-        Credentials credentials = Credentials.create();
-        SslContext served = credentials.serverContext();
-        serve(log.observe(name -> served));
-
-        Channel client = connect(credentials.clientContext());
-        SourcedAddress signaled = signaling((InetSocketAddress) client.localAddress());
-        awaitSignaling(Signaling.HTTPS, () -> log.signalingOf(signaled));
-
-        client.close().sync();
-        awaitSignaling(Signaling.HTTP, () -> log.signalingOf(signaled));
-    }
-
-    @Test
-    void aClientThatRejectsTheCertificateIsLoggedAndTheNextOnesGoToDebug() throws Exception {
-        NetherNetJoinLog log = new NetherNetJoinLog(logger, true);
-        SslContext served = Credentials.create().serverContext();
-        serve(log.observe(name -> served));
-
-        // Trusts another certificate, so each client refuses the one served
-        SslContext rejecting = Credentials.create().clientContext();
-        for (int i = 0; i < 3; i++) {
-            connect(rejecting);
-        }
-
-        String failed = "TLS handshake for HTTP signaling failed (no server name)";
-        verify(logger, timeout(WAIT.toMillis()).times(2)).debug(contains(failed));
-        verify(logger, times(1)).info(contains(failed));
-    }
-
-    @Test
-    void joinsWithoutAnAddressCameOverXboxSignaling() {
-        NetherNetJoinLog log = new NetherNetJoinLog(logger, true);
-
-        assertEquals(Signaling.XBOX_RPC, log.signalingOf(SourcedAddress.unknown()));
-    }
-
-    private static SourcedAddress signaling(InetSocketAddress address) {
-        return new SourcedAddress(address, AddressSource.SIGNALING, null);
-    }
-
-    private void serve(TlsContextSelector selector) {
-        server = new ServerBootstrap()
-                .group(group)
-                .channel(NioServerSocketChannel.class)
-                .childHandler(new ChannelInitializer<SocketChannel>() {
-                    @Override
-                    protected void initChannel(SocketChannel channel) {
-                        // As NetworkM's HTTP signaling does for a client that sent no server name
-                        channel.pipeline().addLast(selector.select(null).newHandler(channel.alloc()));
-                    }
-                })
-                .bind(new InetSocketAddress(InetAddress.getLoopbackAddress(), 0))
-                .syncUninterruptibly()
-                .channel();
-    }
-
-    /** Connects and starts the TLS handshake, without waiting for it to finish. */
-    private Channel connect(SslContext clientContext) throws InterruptedException {
-        return new Bootstrap()
-                .group(group)
-                .channel(NioSocketChannel.class)
-                .handler(new ChannelInitializer<SocketChannel>() {
-                    @Override
-                    protected void initChannel(SocketChannel channel) {
-                        SslHandler handler = clientContext.newHandler(channel.alloc());
-                        channel.pipeline().addLast(handler);
-                    }
-                })
-                .connect(server.localAddress())
-                .sync()
-                .channel();
-    }
-
-    /** The server side may finish its handshake after the client's, so this waits for it. */
-    private static void awaitSignaling(Signaling expected, Supplier<Signaling> actual) throws InterruptedException {
-        long deadline = System.nanoTime() + WAIT.toNanos();
-        while (actual.get() != expected) {
-            if (System.nanoTime() > deadline) {
-                fail("expected " + expected + " within " + WAIT + ", still " + actual.get());
-            }
-            Thread.sleep(10);
-        }
-    }
-
-    private record Credentials(KeyPair keys, X509Certificate certificate) {
-
-        static Credentials create() throws Exception {
-            // RSA: acme4j signs its test certificates with SHA256withRSA
-            KeyPairGenerator generator = KeyPairGenerator.getInstance("RSA");
-            generator.initialize(2048);
-            KeyPair keys = generator.generateKeyPair();
-            Instant now = Instant.now();
-            X509Certificate certificate = CertificateUtils.createTestRootCertificate("CN=EduGeyser test",
-                    now.minus(Duration.ofHours(1)), now.plus(Duration.ofDays(1)), keys);
-            return new Credentials(keys, certificate);
-        }
-
-        SslContext serverContext() throws Exception {
-            return SslContextBuilder.forServer(keys.getPrivate(), certificate).build();
-        }
-
-        SslContext clientContext() throws Exception {
-            // The certificate names no address, and only the trust decides here
-            return SslContextBuilder.forClient()
-                    .trustManager(certificate)
-                    .endpointIdentificationAlgorithm(null)
-                    .build();
-        }
+    private static Join.Addressed addressed(boolean tls) {
+        return new Join.Addressed("203.0.113.1:19132", 19132, false, tls, null);
     }
 }
