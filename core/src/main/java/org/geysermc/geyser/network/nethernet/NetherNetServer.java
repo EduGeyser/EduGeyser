@@ -473,20 +473,38 @@ public class NetherNetServer {
                 .statusProvider(this::serveServerStatus)
                 .build();
         try {
-            http.bind(bedrockAddress());
-        } catch (ConnectException e) {
-            // A failed bind closes the signaling and leaves no state behind.
+            listen(endpoint, http, bedrockAddress());
+        } catch (ConnectException | RuntimeException e) {
             if (certificateManager != null) {
                 certificateManager.close();
                 certificateManager = null;
             }
             throw e;
         }
-        endpoint.addSource(http);
         this.httpSignaling = http;
         logger.info(LOG_PREFIX + "HTTP signaling on TCP port " + http.boundAddress().getPort() + " (" + tlsMode + ")");
         if (certificateManager != null) {
             certificateManager.start();
+        }
+    }
+
+    /**
+     * Binds HTTP signaling and adds it to the endpoint. Any failure leaves
+     * it closed, its TCP listener included: NetworkM closes the endpoint by
+     * itself when the engine cannot open the ICE port, and a listener left
+     * bound for that endpoint would keep the TCP port from the next start.
+     *
+     * @throws IllegalStateException if the endpoint closed meanwhile
+     */
+    static void listen(NetherNetServerChannel endpoint, NetherNetHttpSignaling http, InetSocketAddress address)
+            throws ConnectException {
+        // A failed bind closes the signaling and leaves no state behind
+        http.bind(address);
+        try {
+            endpoint.addSource(http);
+        } catch (RuntimeException e) {
+            http.close();
+            throw e;
         }
     }
 
