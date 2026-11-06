@@ -53,34 +53,43 @@ import java.util.concurrent.TimeUnit;
  * NetworkM keeps to itself whether an HTTP signaling connection speaks TLS,
  * so HTTPS joins are told apart by address. {@link #observe} wraps the HTTP
  * signaling TLS selector, and every connection whose TLS handshake completes
- * is remembered by its client address until shortly after it closes. An HTTP
- * join's signaled address is the client address of the connection its offer
- * came over (EduGeyser trusts no signaling proxy), and the endpoint sets up
- * the join's channel while that connection still waits for the answer, so a
- * join from a remembered address came over HTTPS.
+ * is kept by its client address. An HTTP join's signaled address is the
+ * client address of the connection its offer came over (EduGeyser trusts no
+ * signaling proxy), and the endpoint sets up the join's channel before it
+ * answers, while that connection still waits. TCP allows one connection per
+ * pair of addresses, so a TLS connection still open from the join's address
+ * is the one its offer came over, and the join came over HTTPS. The only
+ * case this can get wrong is a client holding connections from one IP and
+ * port to two of the server's addresses at once, one of them TLS.
+ *
+ * A TLS connection that closed is kept a little longer: a join from its
+ * address is then logged as not told apart, since its client either left the
+ * connection before its answer, which ends the join, or reused the address
+ * for a plain HTTP connection since.
  */
 final class NetherNetJoinLog {
 
     private static final String LOG_PREFIX = "[Nethernet] ";
-    /**
-     * How long a closed TLS connection is still remembered. The join's
-     * channel is set up before the answer goes out, so this only covers a
-     * channel set up unusually late.
-     */
+    /** How long a join from the address of a closed TLS connection is logged as not told apart. */
     private static final Duration KEPT_AFTER_CLOSE = Duration.ofSeconds(10);
 
     /** The signaling a join came over. */
     enum Signaling {
-        XBOX_RPC("Xbox RPC"),
-        HTTP("plain HTTP"),
-        HTTPS("HTTPS"),
+        XBOX_RPC("Xbox RPC", ""),
+        HTTP("plain HTTP", ""),
+        HTTPS("HTTPS", ""),
+        /** HTTP from the address of a TLS connection that closed just before; see the class comment. */
+        HTTP_OR_HTTPS("plain HTTP or HTTPS",
+                " (not told apart: an HTTPS connection from this address closed before the join was set up)"),
         /** A join source EduGeyser does not run, such as LAN or a signaling proxy. */
-        OTHER("another source");
+        OTHER("another source", "");
 
         private final String label;
+        private final String note;
 
-        Signaling(String label) {
+        Signaling(String label, String note) {
             this.label = label;
+            this.note = note;
         }
     }
 
@@ -121,14 +130,17 @@ final class NetherNetJoinLog {
         String from = signaling == Signaling.XBOX_RPC ? ""
                 : " from " + (logAddresses ? describe(signaled.address()) : "<IP address withheld>");
         logger.info(LOG_PREFIX + "Join " + child.attr(NetherNetChildChannel.CONNECTION_ID).get()
-                + " signaled over " + signaling.label + from);
+                + " signaled over " + signaling.label + from + signaling.note);
     }
 
     Signaling signalingOf(SourcedAddress signaled) {
         return switch (signaled.source()) {
             // Xbox joins carry no address
             case UNKNOWN -> Signaling.XBOX_RPC;
-            case SIGNALING -> tlsConnections.containsKey(signaled.address()) ? Signaling.HTTPS : Signaling.HTTP;
+            case SIGNALING -> {
+                Channel tls = tlsConnections.get(signaled.address());
+                yield tls == null ? Signaling.HTTP : tls.isOpen() ? Signaling.HTTPS : Signaling.HTTP_OR_HTTPS;
+            }
             default -> Signaling.OTHER;
         };
     }

@@ -104,6 +104,22 @@ class NetherNetJoinLogTest {
     }
 
     @Test
+    void aJoinFromTheAddressOfAClosedTlsConnectionIsNotLabeledHttps() throws Exception {
+        NetherNetJoinLog log = new NetherNetJoinLog(logger, true);
+        Credentials credentials = Credentials.create();
+        SslContext served = credentials.serverContext();
+        serve(log.observe(name -> served));
+
+        Channel client = connect(credentials.clientContext());
+        SourcedAddress signaled = signaling((InetSocketAddress) client.localAddress());
+        awaitSignaling(Signaling.HTTPS, () -> log.signalingOf(signaled));
+
+        // A plain HTTP join from the same IP and port can follow now
+        client.close().sync();
+        awaitSignaling(Signaling.HTTP_OR_HTTPS, () -> log.signalingOf(signaled));
+    }
+
+    @Test
     void aClosedTlsConnectionIsForgottenOnceItsGraceEnds() throws Exception {
         NetherNetJoinLog log = new NetherNetJoinLog(logger, true, Duration.ZERO);
         Credentials credentials = Credentials.create();
