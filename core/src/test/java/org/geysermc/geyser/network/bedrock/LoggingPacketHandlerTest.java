@@ -25,35 +25,29 @@
 
 package org.geysermc.geyser.network.bedrock;
 
+import io.github.sendablemetatype.netty.channel.TransportDisconnectReason;
 import org.cloudburstmc.protocol.bedrock.BedrockDisconnectReasons;
-import org.geysermc.geyser.text.GeyserLocale;
 import org.geysermc.geyser.text.MinecraftLocale;
-import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
 
-import java.util.Map;
-
 import static org.junit.jupiter.api.Assertions.assertEquals;
-import static org.mockito.Mockito.mockStatic;
+import static org.junit.jupiter.api.Assertions.assertNull;
 
 class LoggingPacketHandlerTest {
 
-    @AfterEach
-    void tearDown() {
-        MinecraftLocale.LOCALE_MAPPINGS.remove("en_us");
-    }
-
     @Test
-    void aLostConnectionIsLoggedWithTheJavaEditionsTextAndOtherReasonsAsTheyAre() {
-        // As in the Java edition's en_us.json, which Geyser always loads
-        MinecraftLocale.LOCALE_MAPPINGS.put("en_us", Map.of("disconnect.lost", "Connection Lost"));
-        try (var locale = mockStatic(GeyserLocale.class)) {
-            locale.when(GeyserLocale::getDefaultLocale).thenReturn("en_US");
+    void theTransportsReasonsReadWithoutAJavaLocale() {
+        // As before the Java locale download finished, or after it failed
+        assertNull(MinecraftLocale.getLocaleStringIfPresent(BedrockDisconnectReasons.UNKNOWN, "en_us"));
 
-            assertEquals("Connection Lost", LoggingPacketHandler.transportReasonText(BedrockDisconnectReasons.UNKNOWN));
-            assertEquals("disconnect.removed", LoggingPacketHandler.transportReasonText(BedrockDisconnectReasons.REMOVED),
-                    "the Java edition has no text for it");
-            assertEquals("Kicked for flying", LoggingPacketHandler.transportReasonText("Kicked for flying"));
-        }
+        assertEquals("Bedrock client connection lost",
+                LoggingPacketHandler.transportReasonText(BedrockDisconnectReasons.getReason(TransportDisconnectReason.TRANSPORT_FAILED)));
+        assertEquals("Bedrock client sent an invalid packet",
+                LoggingPacketHandler.transportReasonText(BedrockDisconnectReasons.getReason(TransportDisconnectReason.BAD_PACKET)));
+        assertEquals("Too much data queued on the Bedrock client's connection",
+                LoggingPacketHandler.transportReasonText(BedrockDisconnectReasons.getReason(TransportDisconnectReason.QUEUE_TOO_LONG)));
+        assertEquals("Bedrock client sent more split packets than could be reassembled",
+                LoggingPacketHandler.transportReasonText(BedrockDisconnectReasons.getReason(TransportDisconnectReason.SPLIT_QUEUE_TOO_LONG)));
+        assertEquals("Kicked for flying", LoggingPacketHandler.transportReasonText("Kicked for flying"));
     }
 }

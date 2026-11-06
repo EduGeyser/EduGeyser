@@ -25,13 +25,15 @@
 
 package org.geysermc.geyser.network.bedrock;
 
+import io.github.sendablemetatype.netty.channel.TransportDisconnectReason;
 import org.cloudburstmc.protocol.bedrock.BedrockDisconnectReasons;
 import org.cloudburstmc.protocol.bedrock.packet.*;
 import org.cloudburstmc.protocol.common.PacketSignal;
 import org.geysermc.geyser.GeyserImpl;
 import org.geysermc.geyser.session.GeyserSession;
 import org.geysermc.geyser.text.GeyserLocale;
-import org.geysermc.geyser.text.MinecraftLocale;
+
+import java.util.Map;
 
 /**
  * Bare bones implementation of BedrockPacketHandler suitable for extension.
@@ -40,8 +42,22 @@ import org.geysermc.geyser.text.MinecraftLocale;
  * packets of interest and limit boilerplate code.
  */
 public class LoggingPacketHandler implements BedrockPacketHandler {
-    /** The prefix of the translation keys the protocol library reports disconnect reasons with. */
-    private static final String DISCONNECT_KEY_PREFIX = "disconnect.";
+    /**
+     * Text for the reasons a NetherNet transport ends a connection with that
+     * Geyser's languages have none for, by what the protocol library reports:
+     * a Bedrock translation key, or the transport reason's name where it maps
+     * none. Built in and English, not the Java edition's text: Geyser
+     * downloads Java locales in the background, and a failed download does
+     * not stop startup, so they may be missing.
+     */
+    private static final Map<String, String> TRANSPORT_REASON_TEXT = Map.of(
+            // A failed transport, or a connection that ended without a reason
+            BedrockDisconnectReasons.UNKNOWN, "Bedrock client connection lost",
+            // What the library reports for a bad packet
+            BedrockDisconnectReasons.REMOVED, "Bedrock client sent an invalid packet",
+            TransportDisconnectReason.QUEUE_TOO_LONG.name(), "Too much data queued on the Bedrock client's connection",
+            TransportDisconnectReason.SPLIT_QUEUE_TOO_LONG.name(),
+            "Bedrock client sent more split packets than could be reassembled");
 
     protected final GeyserImpl geyser;
     protected final GeyserSession session;
@@ -63,28 +79,20 @@ public class LoggingPacketHandler implements BedrockPacketHandler {
     }
 
     /**
-     * The text logged for the reason a connection ended with. The protocol
-     * library names the reasons the transport ends a connection for with
-     * Bedrock translation keys. A closed and a timed out connection get
-     * Geyser's own text; other keys get the Java edition's text for the same
-     * key, such as "Connection Lost" for disconnect.lost, which a failed
-     * NetherNet transport ends with. Anything else is logged as it is.
+     * The text logged for the reason a connection ended with. A closed and a
+     * timed out connection get Geyser's own text, the other reasons the
+     * transport ends a connection for the built in text above. Anything else,
+     * such as a kick message, is logged as it is.
      */
     static String transportReasonText(CharSequence reason) {
-        if (BedrockDisconnectReasons.CLOSED.contentEquals(reason)) {
+        String text = reason.toString();
+        if (BedrockDisconnectReasons.CLOSED.equals(text)) {
             return GeyserLocale.getLocaleStringLog("geyser.network.disconnect.closed_by_remote_peer");
         }
-        if (BedrockDisconnectReasons.TIMEOUT.contentEquals(reason)) {
+        if (BedrockDisconnectReasons.TIMEOUT.equals(text)) {
             return GeyserLocale.getLocaleStringLog("geyser.network.disconnect.timed_out");
         }
-        String text = reason.toString();
-        if (text.startsWith(DISCONNECT_KEY_PREFIX)) {
-            String translated = MinecraftLocale.getLocaleStringIfPresent(text, GeyserLocale.getDefaultLocale());
-            if (translated != null) {
-                return translated;
-            }
-        }
-        return text;
+        return TRANSPORT_REASON_TEXT.getOrDefault(text, text);
     }
 
     @Override
