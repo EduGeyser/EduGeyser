@@ -28,7 +28,8 @@ package org.geysermc.geyser.dump;
 import org.geysermc.geyser.configuration.GeyserConfig;
 import org.geysermc.geyser.text.AsteriskSerializer;
 import org.junit.jupiter.api.AfterEach;
-import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 import org.spongepowered.configurate.CommentedConfigurationNode;
 import org.spongepowered.configurate.interfaces.InterfaceDefaultOptions;
 import org.spongepowered.configurate.yaml.YamlConfigurationLoader;
@@ -42,6 +43,8 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 class DumpCensorTest {
     private static final String CONFIG = """
         haproxy-protocol-whitelisted-ips: ["198.51.100.1", "192.168.1.5", "0.0.0.0", "127.0.0.1"]
+        signaling-trusted-proxies: ["198.51.100.1", "192.168.1.5", "0.0.0.0", "127.0.0.1"]
+        webrtc-proxy-protocol-relays: ["198.51.100.1", "192.168.1.5", "0.0.0.0", "127.0.0.1"]
         """;
 
     @AfterEach
@@ -61,17 +64,19 @@ class DumpCensorTest {
         return node;
     }
 
-    @Test
-    void censorsPublicWhitelistedProxyAddresses() throws Exception {
+    @ParameterizedTest
+    @ValueSource(strings = {"haproxy-protocol-whitelisted-ips", "signaling-trusted-proxies", "webrtc-proxy-protocol-relays"})
+    void censorsPublicProxyAddresses(String key) throws Exception {
         // Local and wildcard entries stay readable, as with the bind address
         assertEquals(List.of("***", "192.168.1.5", "0.0.0.0", "127.0.0.1"),
-            dumped().node("haproxy-protocol-whitelisted-ips").getList(String.class));
+            dumped().node(key).getList(String.class));
     }
 
-    @Test
-    void showsThemInAFullDump() throws Exception {
+    @ParameterizedTest
+    @ValueSource(strings = {"haproxy-protocol-whitelisted-ips", "signaling-trusted-proxies", "webrtc-proxy-protocol-relays"})
+    void showsThemInAFullDump(String key) throws Exception {
         AsteriskSerializer.showSensitive = true;
         assertEquals(List.of("198.51.100.1", "192.168.1.5", "0.0.0.0", "127.0.0.1"),
-            dumped().node("haproxy-protocol-whitelisted-ips").getList(String.class));
+            dumped().node(key).getList(String.class));
     }
 }

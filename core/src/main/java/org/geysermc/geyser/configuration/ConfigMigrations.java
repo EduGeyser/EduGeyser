@@ -25,13 +25,18 @@
 
 package org.geysermc.geyser.configuration;
 
+import org.checkerframework.checker.nullness.qual.Nullable;
 import org.geysermc.geyser.GeyserBootstrap;
+import org.geysermc.geyser.GeyserLogger;
+import org.spongepowered.configurate.CommentedConfigurationNode;
 import org.spongepowered.configurate.ConfigurateException;
 import org.spongepowered.configurate.ConfigurationNode;
+import org.spongepowered.configurate.serialize.SerializationException;
 import org.spongepowered.configurate.transformation.ConfigurationTransformation;
 import org.spongepowered.configurate.transformation.TransformAction;
 
 import java.util.Arrays;
+import java.util.List;
 import java.util.Objects;
 import java.util.UUID;
 import java.util.function.BiFunction;
@@ -41,6 +46,25 @@ import static org.spongepowered.configurate.transformation.TransformAction.remov
 import static org.spongepowered.configurate.transformation.TransformAction.rename;
 
 public class ConfigMigrations {
+
+    /** Geyser's default until August 2026, which named the HAProxy switch "use-proxy-protocol". */
+    private static final String OLD_HAPROXY_LIST_COMMENT = """
+        A list of allowed HAPROXY protocol speaking proxy IP addresses/subnets. Only effective when "use-proxy-protocol" is enabled, and
+        should really only be used when you are not able to use a proper firewall (usually true with shared hosting providers etc.).
+        Keeping this list empty means there is no IP address whitelist.
+        IP addresses, subnets, and links to plain text files are supported.""";
+    /** The default up to config version 7, from when the Bedrock port was RakNet's, UDP only. */
+    private static final String OLD_PORT_COMMENT = """
+        The port that Geyser will listen on for incoming Bedrock connections.
+        Since Minecraft: Bedrock Edition uses UDP, this port must allow UDP traffic.""";
+    /** The default up to config version 7, which had operators firewall the Bedrock port on UDP only. */
+    private static final String OLD_VALIDATE_LOGIN_COMMENT = """
+        This option disables the auth step Geyser performs for connecting Bedrock players.
+        It can be used to allow connections from ProxyPass and WaterdogPE. In these cases, make sure that users
+        cannot directly connect to this Geyser instance. See https://www.spigotmc.org/wiki/firewall-guide/ for
+        assistance - and use UDP instead of TCP.
+        Disabling Bedrock authentication for other use-cases is NOT SUPPORTED, as it allows anyone to spoof usernames, and is therefore a security risk.
+        All Floodgate functionality (including skin uploading and account linking) will also not work when this option is disabled.""";
 
     public static final BiFunction<Class<? extends GeyserConfig>, GeyserBootstrap, ConfigurationTransformation.Versioned> TRANSFORMER = (configClass, bootstrap) ->
         ConfigurationTransformation.versionedBuilder()
@@ -187,7 +211,73 @@ public class ConfigMigrations {
             .addVersion(7, ConfigurationTransformation.builder()
                 .addAction(path("gameplay", "show-cooldown"), rename(new Object[] { "gameplay", "cooldown-type" }))
                 .build())
+            // RakNet is gone: listing HAProxy proxies turns the protocol on for HTTP signaling, and the keys only
+            // RakNet read ("mtu", "broadcast-port") are not written back
+            .addVersion(8, ConfigurationTransformation.builder()
+                .addAction(path("advanced", "bedrock"), (path, value) -> {
+                    foldHaproxySwitch(value, bootstrap == null ? null : bootstrap.getGeyserLogger());
+                    // 0, the default, broadcast the Bedrock port
+                    if (value.node("broadcast-port").getInt(0) != 0 && bootstrap != null) {
+                        bootstrap.getGeyserLogger().warning("\"broadcast-port\" under \"advanced.bedrock\" has been removed: "
+                            + "NetherNet has no broadcast port, players connect to the port they enter.");
+                    }
+                    return null;
+                })
+                .addAction(path("bedrock", "port"), replaceOldComment(OLD_PORT_COMMENT))
+                .addAction(path("advanced", "bedrock", "validate-bedrock-login"), replaceOldComment(OLD_VALIDATE_LOGIN_COMMENT))
+                .build())
         .build();
+
+    /**
+     * Folds the "use-haproxy-protocol" switch into "haproxy-protocol-whitelisted-ips", which turns HAProxy protocol on
+     * by naming proxies. Fails closed: a list kept while the switch was off is emptied, and a switch that was on with
+     * an empty list, which took a header from any address, leaves HAProxy protocol off.
+     */
+    private static void foldHaproxySwitch(ConfigurationNode advancedBedrock, @Nullable GeyserLogger logger) throws SerializationException {
+        ConfigurationNode proxies = advancedBedrock.node("haproxy-protocol-whitelisted-ips");
+        // A comment naming the removed switch is stale, so the current one is written instead. The old default named
+        // it wrong, so only that exact text goes, not a comment of the user's own.
+        if (proxies instanceof CommentedConfigurationNode commented && commented.comment() != null
+                && (commented.comment().contains("use-haproxy-protocol") || isComment(commented, OLD_HAPROXY_LIST_COMMENT))) {
+            commented.comment(null);
+        }
+
+        ConfigurationNode useHaproxy = advancedBedrock.node("use-haproxy-protocol");
+        if (useHaproxy.virtual()) {
+            return;
+        }
+        if (!useHaproxy.getBoolean(false)) {
+            // Ignored while it was off, and would turn it on now. Emptied rather than removed, so a comment of the user's own stays
+            if (!proxies.virtual()) {
+                proxies.setList(String.class, List.of());
+            }
+        } else if (logger != null) {
+            if (proxies.getList(String.class, List.of()).isEmpty()) {
+                logger.warning("\"use-haproxy-protocol\" has been removed: listing proxies in \"haproxy-protocol-whitelisted-ips\" "
+                    + "under \"advanced.bedrock\" now turns HAProxy protocol on. Yours was on with an empty list, which took a "
+                    + "HAProxy header from any address, so it is off until you list your proxies there.");
+            } else {
+                logger.warning("\"use-haproxy-protocol\" has been removed: the proxies in \"haproxy-protocol-whitelisted-ips\" "
+                    + "under \"advanced.bedrock\" now apply to HTTP signaling, the TCP side of the Bedrock port. A UDP proxy that "
+                    + "sends PROXY protocol in front of NetherNet has to be listed in \"webrtc-proxy-protocol-relays\".");
+            }
+        }
+        useHaproxy.raw(null);
+    }
+
+    /** Drops a comment that is still an old default, so the current one is written; a comment of the user's own stays. */
+    private static TransformAction replaceOldComment(String oldDefault) {
+        return (path, value) -> {
+            if (value instanceof CommentedConfigurationNode commented && isComment(commented, oldDefault)) {
+                commented.comment(null);
+            }
+            return null;
+        };
+    }
+
+    private static boolean isComment(CommentedConfigurationNode node, String text) {
+        return node.comment() != null && node.comment().strip().equals(text.strip());
+    }
 
     static TransformAction renameAndMove(String... newPath) {
         return ((path, value) -> Arrays.stream(newPath).toArray());

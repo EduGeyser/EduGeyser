@@ -49,10 +49,12 @@ public interface BedrockListener {
 
     /**
      * Gets the broadcast port that's sent to Bedrock clients with the motd.
-     * This is the port that Bedrock clients will connect with. It usually does not differ from the listening port.
      *
-     * @return the broadcast port
+     * @return the listening port
+     * @deprecated Bedrock players connect over NetherNet, which has no broadcast port. This returns
+     * {@link #port()}.
      */
+    @Deprecated
     int broadcastPort();
 
     /**

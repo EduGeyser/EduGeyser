@@ -29,15 +29,16 @@ import org.geysermc.geyser.GeyserImpl;
 import org.geysermc.geyser.api.util.TriState;
 import org.geysermc.geyser.command.GeyserCommand;
 import org.geysermc.geyser.command.GeyserCommandSource;
+import org.geysermc.geyser.configuration.GeyserConfig;
 import org.incendo.cloud.CommandManager;
 import org.incendo.cloud.context.CommandContext;
 
 import static org.incendo.cloud.parser.standard.StringParser.greedyStringParser;
 
 /**
- * Explains why the connection test is not available. It pinged the server over RakNet through
- * GeyserMC's checker, and this server serves NetherNet only, so every test would report the
- * server unreachable.
+ * Explains why the connection test is not available, and points out proxy settings that keep
+ * players out. The test pinged the server through GeyserMC's checker, which pings over RakNet,
+ * and EduGeyser serves NetherNet only, so every test would report the server unreachable.
  */
 public class ConnectionTestCommand extends GeyserCommand {
 
@@ -62,9 +63,21 @@ public class ConnectionTestCommand extends GeyserCommand {
     public void execute(CommandContext<GeyserCommandSource> context) {
         int port = geyser.config().bedrock().port();
         GeyserCommandSource source = context.sender();
-        source.sendMessage("The connection test pings over RakNet, which this server no longer serves, so it cannot "
-                + "check this server.");
+        source.sendMessage("The connection test is not available: it pinged over RakNet, which EduGeyser does not "
+                + "serve, so it cannot check this server.");
         source.sendMessage("Bedrock players join over NetherNet: make sure UDP port " + port + " (ICE) and TCP port "
                 + port + " (HTTP signaling) are open and forwarded to this server.");
+
+        GeyserConfig.AdvancedBedrockConfig bedrock = geyser.config().advanced().bedrock();
+        // Issue: did someone list HAProxy proxies, and they didn't mean it?
+        if (!bedrock.haproxyProtocolWhitelistedIps().isEmpty()) {
+            source.sendMessage("You have proxies listed in the `haproxy-protocol-whitelisted-ips` setting, which turns HAProxy protocol on. "
+                    + "Unless you're deliberately using additional software that REQUIRES this setting, you may not need it.");
+        }
+        // Issue: did someone list WebRTC relays, and they didn't mean it?
+        if (!bedrock.webrtcProxyProtocolRelays().isEmpty()) {
+            source.sendMessage("You have relays listed in the `webrtc-proxy-protocol-relays` setting, so players can only reach NetherNet through them. "
+                    + "Unless you're deliberately using additional software that REQUIRES this setting, you may not need it.");
+        }
     }
 }
