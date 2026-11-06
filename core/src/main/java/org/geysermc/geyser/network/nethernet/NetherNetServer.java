@@ -25,13 +25,19 @@
 
 package org.geysermc.geyser.network.nethernet;
 
-import io.github.sendablemetatype.netty.channel.nethernet.NetherNetAnswerDecorator;
 import io.github.sendablemetatype.netty.channel.nethernet.NetherNetChannelFactory;
+import io.github.sendablemetatype.netty.channel.nethernet.NetherNetServerChannel;
 import io.github.sendablemetatype.netty.channel.nethernet.NetherNetServerStatus;
 import io.github.sendablemetatype.netty.channel.nethernet.config.NetherChannelOption;
+import io.github.sendablemetatype.netty.channel.nethernet.engine.webrtc.WebRtcEngine;
 import io.github.sendablemetatype.netty.channel.nethernet.signaling.NetherNetHttpSignaling;
 import io.github.sendablemetatype.netty.channel.nethernet.signaling.NetherNetXboxRpcSignaling;
-import io.github.sendablemetatype.webrtc.PeerConnectionFactory;
+import io.github.sendablemetatype.netty.channel.nethernet.signaling.SignalingHealth;
+import io.github.sendablemetatype.netty.channel.nethernet.signaling.SignalingState;
+import io.github.sendablemetatype.netty.channel.nethernet.signaling.http.StatusAnswer;
+import io.github.sendablemetatype.netty.channel.nethernet.signaling.http.StatusRequest;
+import io.github.sendablemetatype.netty.channel.nethernet.signaling.http.TlsContextSelector;
+import io.github.sendablemetatype.netty.util.nethernet.ServerIdentity;
 import io.netty.bootstrap.ServerBootstrap;
 import io.netty.channel.Channel;
 import io.netty.channel.ChannelFuture;
@@ -40,63 +46,53 @@ import io.netty.channel.MultiThreadIoEventLoopGroup;
 import io.netty.channel.group.ChannelGroup;
 import io.netty.channel.group.DefaultChannelGroup;
 import io.netty.channel.nio.NioIoHandler;
-import io.netty.handler.ssl.SslContext;
 import io.netty.util.concurrent.GlobalEventExecutor;
 import org.cloudburstmc.protocol.bedrock.BedrockPong;
 import org.geysermc.geyser.GeyserImpl;
 import org.geysermc.geyser.GeyserLogger;
 import org.geysermc.geyser.network.BedrockPingHandler;
 
+import java.io.IOException;
+import java.net.ConnectException;
 import java.net.InetAddress;
 import java.net.InetSocketAddress;
 import java.nio.file.Files;
 import java.nio.file.Path;
-import java.util.ArrayList;
-import java.util.List;
+import java.security.GeneralSecurityException;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CompletionException;
+import java.util.concurrent.CompletionStage;
+import java.util.concurrent.ExecutionException;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.RejectedExecutionException;
-import java.util.concurrent.ScheduledExecutorService;
-import java.util.concurrent.ScheduledFuture;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicBoolean;
-import java.util.function.Supplier;
 
 /**
- * Nethernet (WebRTC) server that accepts incoming connections from clients
- * using a connection ID. Connections pipe directly into Geyser's session
- * handling via the Bedrock protocol pipeline.
+ * Nethernet (WebRTC) server: one NetherNet endpoint that takes joins from two
+ * sources. Connections pipe directly into Geyser's session handling via the
+ * Bedrock protocol pipeline.
  *
- * Maintains one signaling connection to Microsoft, Type 7 (JSON-RPC): the
- * messaging endpoint with PmsgId, used by Bedrock 26.20+ and Education
- * 26.30+. (The Type 3 legacy WebSocket for pre-26.x Education died with the
- * 26.32 auto update.) The HTTP signaling front end for retail direct
- * connections is separate and served locally.
+ * Xbox RPC signaling (Type 7, JSON-RPC: the messaging endpoint with PmsgId,
+ * used by Bedrock 26.20+ and Education 26.30+) carries join codes and
+ * connection IDs. HTTP signaling, served locally on TCP under the Bedrock
+ * port, carries direct connections. LAN discovery stays off.
  *
- * Owns the full lifecycle: PlayFab MCToken acquisition, signaling WebSocket
- * management, periodic health checks, and automatic reconnection.
+ * The endpoint admits an offer only when it proves the client's key, attested
+ * by Minecraft's issuer or not (Education's self signed tokens prove theirs
+ * too), on both sources; the Login is then checked against that key in
+ * LoginEncryptionUtils. One server identity signs every answer.
  *
- * A dead signaling WebSocket is reconnected in place with a fresh MCToken:
- * the server channels, WebRTC factories, event loops, and every established
- * peer connection stay untouched, so players never notice a signaling drop.
- * Only new joins are held up until the socket is back. The watchdog backs
- * off exponentially while the signaling service or PlayFab is unreachable.
+ * The Xbox source keeps its signaling socket up by itself: it reconnects in
+ * place with backoff, so the endpoint, the WebRTC engine, and every
+ * established peer connection stay untouched and players never notice a
+ * signaling drop; only new joins wait until the socket is back. This class
+ * supplies its MCTokens and logs its health.
  */
 public class NetherNetServer {
 
-    private static final long SIGNALING_CHECK_INTERVAL_SECONDS = 10;
-    /**
-     * Max tolerated silence before a socket is considered dead. The signaling
-     * layer sends a WebSocket protocol ping every 15 seconds, whose pong is
-     * inbound traffic, so a healthy socket never comes close to this.
-     */
-    private static final long SIGNALING_SILENCE_THRESHOLD_MILLIS = 45_000;
-    // Three missed route probes at the fork's 30s interval. Only the silent
-    // loss case needs this window; a rejected probe or a service side close
-    // is detected on the next watchdog tick.
-    private static final long SIGNALING_ROUTE_SILENCE_THRESHOLD_MILLIS = 90_000;
-    private static final long RECONNECT_BASE_DELAY_MILLIS = 10_000;
-    private static final long RECONNECT_MAX_DELAY_MILLIS = 120_000;
     private static final String LOG_PREFIX = "[Nethernet] ";
     /** ServerData schema version vanilla 1.26.50 reports. */
     private static final int SERVER_DATA_VERSION = 7;
@@ -104,6 +100,19 @@ public class NetherNetServer {
     private static final String STATUS_NONCE = NetherNetServerStatus.randomNonce();
     /** How stale the served status snapshot may grow before a probe triggers a refresh. */
     private static final long STATUS_MAX_AGE_NANOS = TimeUnit.SECONDS.toNanos(1);
+    /**
+     * The name the server identity carries as idp.domain. BDS uses "self" for
+     * self issued server identities; kept so the existing key file and the
+     * pins players hold for it carry on unchanged.
+     */
+    private static final String IDENTITY_DOMAIN = "self";
+    private static final String IDENTITY_KEY_FILE = "identity-key.pem";
+    /**
+     * How long restartSignaling waits for its attempt. The Xbox source gives
+     * every attempt 30 seconds, token included, so this only bounds a source
+     * that never answers.
+     */
+    private static final long RESTART_WAIT_SECONDS = 60;
 
     private final GeyserImpl geyser;
     private final GeyserLogger logger;
@@ -123,21 +132,26 @@ public class NetherNetServer {
     private EventLoopGroup bossGroup;
     private EventLoopGroup workerGroup;
 
-    private Channel rpcChannel;
-    private NetherNetXboxRpcSignaling rpcSignaling;
-
-    private Channel httpChannel;
-    private NetherNetHttpSignaling httpSignaling;
+    private Channel endpointChannel;
+    private volatile NetherNetXboxRpcSignaling xboxSignaling;
     private NetherNetCertificateManager certificateManager;
 
-    private volatile ScheduledExecutorService scheduler;
-    // Status refreshes get their own thread: the build can block unboundedly
-    // on the Java ping passthrough's plugin event chain, and parking the
-    // maintenance scheduler on it would silence the signaling watchdog, the
-    // exact coupling that moving the build off I/O threads must not recreate.
-    // Volatile: probe I/O threads read it to schedule refreshes.
+    // MCToken fetches block on PlayFab for seconds, so they run here, never on
+    // the signaling event loop that asks for them, and one at a time, since
+    // PlayFabTokenManager is not meant for concurrent authentication.
+    private volatile ExecutorService tokenExecutor;
+    // Set by restartSignaling: the next token the Xbox source asks for is a
+    // fresh one, whatever the source says about the last attempt.
+    private final AtomicBoolean freshTokenRequested = new AtomicBoolean();
+    // Only touched by the health listener, which runs on the signaling's
+    // single event loop.
+    private boolean signalingConnectedBefore;
+
+    // Status refreshes get their own thread so that a probe finding a stale
+    // snapshot is answered at once with the previous one: the build can
+    // block unboundedly on the Java ping passthrough's plugin event chain.
+    // Volatile: probe threads read it to schedule refreshes.
     private volatile ExecutorService statusRefreshExecutor;
-    private ScheduledFuture<?> signalingCheckTask;
     private volatile boolean running;
 
     // The served status snapshot; see serveServerStatus. The initial age is
@@ -150,16 +164,6 @@ public class NetherNetServer {
     private volatile AtomicBoolean statusRefreshing = new AtomicBoolean();
     private volatile InetSocketAddress statusPingAddress;
 
-    // Reconnects can block for tens of seconds (PlayFab auth plus the connect
-    // timeout). They serialize on their own lock so shutdown() and start(),
-    // which use the instance monitor, are never held up behind one. A shutdown
-    // racing a reconnect is safe: closing the signaling makes the in-flight
-    // reconnect fail cleanly.
-    private final Object reconnectLock = new Object();
-    // Watchdog reconnect state, only touched under reconnectLock.
-    private long nextReconnectAttemptAt;
-    private int consecutiveReconnectFailures;
-
     public NetherNetServer(GeyserImpl geyser, EventLoopGroup playerEventLoopGroup,
                            String connectionId, String playfabCustomId, String playfabDeviceId) {
         this.geyser = geyser;
@@ -171,8 +175,9 @@ public class NetherNetServer {
     }
 
     /**
-     * Starts the Nethernet server. Acquires an MCToken via PlayFab,
-     * opens the signaling WebSocket, and begins accepting WebRTC connections.
+     * Starts the Nethernet server. Acquires an MCToken via PlayFab, binds the
+     * endpoint with its HTTP and Xbox sources, and begins accepting WebRTC
+     * connections. The Xbox signaling socket connects in the background.
      *
      * @return true if the server started successfully
      */
@@ -181,18 +186,20 @@ public class NetherNetServer {
             return true;
         }
 
+        // Fetched here rather than left to the Xbox source's first attempt:
+        // callers read the pmid as soon as this returns (the extension
+        // registers join codes with it). The first attempt reuses this token.
         String mcToken = tokenManager.authenticate();
         if (mcToken == null) {
             logger.error(LOG_PREFIX + "Failed to obtain MCToken from PlayFab");
             return false;
         }
 
-        if (!bind(mcToken)) {
-            shutdown();
-            return false;
-        }
-
-        scheduler = Executors.newSingleThreadScheduledExecutor();
+        tokenExecutor = Executors.newSingleThreadExecutor(runnable -> {
+            Thread thread = new Thread(runnable, "Nethernet Token");
+            thread.setDaemon(true);
+            return thread;
+        });
         statusRefreshExecutor = Executors.newSingleThreadExecutor(runnable -> {
             Thread thread = new Thread(runnable, "Nethernet Status");
             thread.setDaemon(true);
@@ -203,11 +210,14 @@ public class NetherNetServer {
         // again. A fresh gate both clears that stuck state and keeps any
         // still running refresh from the old generation pointed at its own.
         statusRefreshing = new AtomicBoolean();
-        // Prime the status snapshot so early probes get a document instead
-        // of the empty body reserved for the pre refresh window.
+        // Prime the status snapshot before HTTP signaling listens, so early
+        // probes find a document.
         scheduleStatusRefresh();
-        signalingCheckTask = scheduler.scheduleAtFixedRate(this::checkSignaling,
-                SIGNALING_CHECK_INTERVAL_SECONDS, SIGNALING_CHECK_INTERVAL_SECONDS, TimeUnit.SECONDS);
+
+        if (!bind()) {
+            shutdown();
+            return false;
+        }
 
         running = true;
 
@@ -232,44 +242,40 @@ public class NetherNetServer {
      * Reconnects the signaling WebSocket in place with a fresh MCToken,
      * preserving the same connection ID. Existing WebRTC peer connections and
      * player sessions are unaffected. On failure the server keeps running;
-     * established players keep playing and the watchdog retries.
+     * established players keep playing and the Xbox source keeps retrying.
      *
      * @return true if the signaling socket reconnected successfully
      */
     public boolean restartSignaling() {
-        synchronized (reconnectLock) {
+        NetherNetXboxRpcSignaling xbox;
+        synchronized (this) {
             if (!running) {
                 return start();
             }
+            xbox = this.xboxSignaling;
+        }
+        if (xbox == null) {
+            return false; // racing a shutdown
+        }
 
-            NetherNetXboxRpcSignaling rpc = this.rpcSignaling;
-            if (rpc == null) {
-                return false; // racing a shutdown
-            }
-
-            // A manual restart is usually a response to something being wrong;
-            // don't trust the cached token, get a fresh one.
-            tokenManager.invalidate();
-            boolean ok = reconnectSocket(rpc);
-            if (ok) {
-                logger.info(LOG_PREFIX + "Signaling reconnected (players unaffected)");
-            } else {
-                logger.warning(LOG_PREFIX + "Signaling reconnect failed; will keep retrying in the background");
-            }
-            return ok;
+        // A manual restart is usually a response to something being wrong;
+        // don't trust the cached token, get a fresh one.
+        freshTokenRequested.set(true);
+        try {
+            // The health listener logs the outcome
+            xbox.reconnect().get(RESTART_WAIT_SECONDS, TimeUnit.SECONDS);
+            return true;
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            return false;
+        } catch (ExecutionException | TimeoutException e) {
+            logger.warning(LOG_PREFIX + "Signaling reconnect failed; will keep retrying in the background");
+            return false;
         }
     }
 
     public synchronized void shutdown() {
         running = false;
-        if (signalingCheckTask != null) {
-            signalingCheckTask.cancel(false);
-            signalingCheckTask = null;
-        }
-        if (scheduler != null) {
-            scheduler.shutdown();
-            scheduler = null;
-        }
         if (statusRefreshExecutor != null) {
             // shutdownNow: a refresh can sit blocked on the ping event chain
             // and deserves the interrupt. This can discard a queued refresh
@@ -279,15 +285,20 @@ public class NetherNetServer {
             statusRefreshExecutor = null;
         }
         closeChannels();
+        if (tokenExecutor != null) {
+            // After the Xbox source closed, so no attempt is left to ask
+            tokenExecutor.shutdownNow();
+            tokenExecutor = null;
+        }
     }
 
     public boolean isRunning() {
-        return running && rpcChannel != null && rpcChannel.isActive();
+        return running && endpointChannel != null && endpointChannel.isActive();
     }
 
     public boolean isSignalingAlive() {
-        NetherNetXboxRpcSignaling rpc = rpcSignaling;
-        return rpc != null && rpc.isChannelAlive();
+        NetherNetXboxRpcSignaling xbox = xboxSignaling;
+        return xbox != null && xbox.health().state() == SignalingState.CONNECTED;
     }
 
     public String getConnectionId() {
@@ -298,54 +309,51 @@ public class NetherNetServer {
         return tokenManager.getPmsgId();
     }
 
-    private boolean bind(String mcToken) {
-        this.rpcSignaling = new NetherNetXboxRpcSignaling(connectionId, mcToken);
+    private boolean bind() {
+        ServerIdentity identity;
+        try {
+            identity = ServerIdentity.loadOrCreate(
+                    geyser.getBootstrap().getConfigFolder().resolve("nethernet").resolve(IDENTITY_KEY_FILE),
+                    IDENTITY_DOMAIN);
+        } catch (IOException | GeneralSecurityException e) {
+            // Every client checks the identity on every answer, so there is
+            // nothing to serve without it.
+            logger.error(LOG_PREFIX + "Server identity unavailable: " + e.getMessage());
+            return false;
+        }
+
         this.bossGroup = new MultiThreadIoEventLoopGroup(1, NioIoHandler.newFactory());
         this.workerGroup = new MultiThreadIoEventLoopGroup(workerThreads(), NioIoHandler.newFactory());
 
         NetherNetServerInitializer childHandler = new NetherNetServerInitializer(geyser, playerEventLoopGroup, playerChannels);
 
-        // Each channel creates its factory pool only after its signaling
-        // endpoint bound successfully (the supplier is invoked from doBind),
-        // and owns and disposes that pool in NetherNetServerChannel#doClose.
-        // A failed bind therefore never creates native engine state; there
-        // is nothing to tear down on that path, and no teardown to race
-        // engine initialization. Each channel invokes the supplier once, so
-        // every signaling endpoint still gets its own pool and closing both
-        // channels never disposes one shared native handle twice.
-        //
-        // One PeerConnectionFactory equals one native network thread carrying
-        // the DTLS and SCTP work of every peer connection assigned to it, so
-        // the pool size caps how many threads the data plane can spread
-        // players across.
         try {
-            // 26.40 clients require the a=identity assertion on every answer
-            // and disconnect with "You're not invited to play on this server"
-            // without it, over Xbox RPC signaling as much as over HTTP. If
-            // the identity cannot be loaded the RPC channel still binds and
-            // sends undecorated answers: older clients keep working, and the
-            // join code flow has no RakNet fallback to fail fast for.
-            NetherNetAnswerDecorator identityDecorator;
-            try {
-                identityDecorator = loadIdentityDecorator();
-            } catch (Exception e) {
-                identityDecorator = null;
-                logger.warning(LOG_PREFIX + e.getMessage() + "; 26.40 and newer clients will fail to join");
-            }
-
-            ServerBootstrap rpcBootstrap = new ServerBootstrap();
-            rpcBootstrap.group(bossGroup, workerGroup)
-                    .channelFactory(NetherNetChannelFactory.server(NetherNetServer::createFactoryPool, rpcSignaling))
-                    .option(NetherChannelOption.NETHER_SERVER_ANSWER_DECORATOR, identityDecorator)
+            // The endpoint creates its engine when it binds and closes it with
+            // itself, so a failed bind leaves no native state behind. ICE
+            // takes ports per session: RakNet holds the Bedrock UDP port, and
+            // a separate shared ICE port is not chosen yet.
+            ServerBootstrap bootstrap = new ServerBootstrap();
+            bootstrap.group(bossGroup, workerGroup)
+                    .channelFactory(NetherNetChannelFactory.server(NetherNetServer::createEngine))
+                    .option(NetherChannelOption.NETHER_SERVER_IDENTITY, identity)
+                    .option(NetherChannelOption.NETHER_SERVER_SHARED_ICE_PORT, false)
                     .childHandler(childHandler);
-            this.rpcChannel = bindChannel(rpcBootstrap, new InetSocketAddress(0));
+            this.endpointChannel = bindChannel(bootstrap, new InetSocketAddress(0));
+            NetherNetServerChannel endpoint = (NetherNetServerChannel) endpointChannel;
+
+            // Starts connecting in the background once added; binding never
+            // waits for Xbox, and the source recovers from outages by itself.
+            NetherNetXboxRpcSignaling xbox = new NetherNetXboxRpcSignaling(connectionId, this::signalingToken);
+            xbox.addHealthListener(this::logSignalingHealth);
+            this.xboxSignaling = xbox;
+            endpoint.addSource(xbox);
 
             // HTTP signaling: the direct connection front end, on TCP under
             // the same port RakNet serves on UDP. Purely additive and always
             // attempted; any failure logs a warning and everything else keeps
             // running, since updated clients silently fall back to RakNet.
             try {
-                bindHttpSignaling(childHandler, identityDecorator);
+                bindHttpSignaling(endpoint);
             } catch (Exception e) {
                 logger.warning(LOG_PREFIX + "HTTP signaling unavailable (" + e.getMessage()
                         + "); direct connections will use RakNet");
@@ -354,13 +362,12 @@ public class NetherNetServer {
             return true;
         } catch (Exception e) {
             logger.error(LOG_PREFIX + "Failed to bind: " + e.getMessage());
-            this.rpcSignaling = null;
-            // A successfully bound channel disposes its own factory pool on
-            // close; a channel whose bind failed never created one.
-            if (rpcChannel != null) {
-                rpcChannel.close();
-                rpcChannel = null;
+            // A bound endpoint closes its sources and its engine on close.
+            if (endpointChannel != null) {
+                endpointChannel.close();
+                endpointChannel = null;
             }
+            xboxSignaling = null;
             if (bossGroup != null) { bossGroup.shutdownGracefully(); bossGroup = null; }
             if (workerGroup != null) { workerGroup.shutdownGracefully(); workerGroup = null; }
             return false;
@@ -385,22 +392,12 @@ public class NetherNetServer {
     }
 
     /**
-     * Binds the HTTP signaling front end on the Bedrock port, TCP. Updated
-     * clients (26.30+) probe this before falling back to RakNet, so even a
-     * fast negative answer speeds their joins up; a completed exchange joins
-     * them over NetherNet without RakNet at all.
+     * Binds the HTTP signaling front end on the Bedrock port, TCP, and adds
+     * it to the endpoint. Updated clients (26.30+) probe this before falling
+     * back to RakNet, so even a fast negative answer speeds their joins up; a
+     * completed exchange joins them over NetherNet without RakNet at all.
      */
-    private void bindHttpSignaling(NetherNetServerInitializer childHandler,
-                                   NetherNetAnswerDecorator identityDecorator) throws Exception {
-        // Clients have always refused HTTP signaled answers without the
-        // server identity assertion, so without it every HTTP join would
-        // fail only after full native negotiation. No identity means no
-        // listener: connection refused is the fastest possible RakNet
-        // fallback.
-        if (identityDecorator == null) {
-            throw new IllegalStateException("server identity unavailable");
-        }
-
+    private void bindHttpSignaling(NetherNetServerChannel endpoint) throws ConnectException {
         // Manual certificate files win and are the ACME opt out (never
         // silent ACME enrollment against the operator's intent); only when
         // no files exist at bind does automatic management run. The manual
@@ -410,67 +407,121 @@ public class NetherNetServer {
         Path nethernetDir = geyser.getBootstrap().getConfigFolder().resolve("nethernet");
         Path manualCert = nethernetDir.resolve("cert.pem");
         Path manualKey = nethernetDir.resolve("key.pem");
-        Supplier<SslContext> tlsSupplier;
+        TlsContextSelector tlsSelector;
         String tlsMode;
         if (Files.exists(manualCert) && Files.exists(manualKey)) {
             NetherNetManualTlsSource manualSource = new NetherNetManualTlsSource(manualCert, manualKey, logger);
-            tlsSupplier = manualSource;
+            tlsSelector = serverName -> manualSource.get();
             String problem = manualSource.currentProblem();
             tlsMode = problem == null
                     ? "TLS, manual certificate, reloaded on change"
                     : "plaintext; manual certificate withheld: " + problem;
         } else {
-            this.certificateManager = new NetherNetCertificateManager(
-                    geyser.getBootstrap().getConfigFolder().resolve("nethernet"), logger);
-            tlsSupplier = certificateManager::currentContext;
+            NetherNetCertificateManager manager = new NetherNetCertificateManager(nethernetDir, logger);
+            this.certificateManager = manager;
+            tlsSelector = serverName -> manager.currentContext();
             tlsMode = "automatic certificate management";
         }
-        this.httpSignaling = new NetherNetHttpSignaling(tlsSupplier, workerGroup);
-        // The default validator refuses Education clients and some Bedrock builds, and a refused
-        // offer ends the join with no RakNet fallback. RakNet does not validate clients either.
-        this.httpSignaling.setOfferValidator(null);
-        this.httpSignaling.setStatusSupplier(this::serveServerStatus);
+        NetherNetHttpSignaling http = NetherNetHttpSignaling.builder(workerGroup)
+                .tls(tlsSelector)
+                .statusProvider(this::serveServerStatus)
+                .build();
+        InetSocketAddress bindAddress = new InetSocketAddress(
+                geyser.config().bedrock().address(), geyser.config().bedrock().port());
         try {
-            ServerBootstrap httpBootstrap = new ServerBootstrap();
-            httpBootstrap.group(bossGroup, workerGroup)
-                    .channelFactory(NetherNetChannelFactory.server(NetherNetServer::createFactoryPool, httpSignaling))
-                    .option(NetherChannelOption.NETHER_SERVER_ANSWER_DECORATOR, identityDecorator)
-                    .childHandler(childHandler);
-            InetSocketAddress bindAddress = new InetSocketAddress(
-                    geyser.config().bedrock().address(), geyser.config().bedrock().port());
-            this.httpChannel = bindChannel(httpBootstrap, bindAddress);
-            logger.info(LOG_PREFIX + "HTTP signaling on TCP port " + bindAddress.getPort() + " (" + tlsMode + ")");
-            if (certificateManager != null) {
-                certificateManager.start();
-            }
-        } catch (Exception e) {
-            // The factory pool is created only after a successful bind, so a
-            // failed bind leaves no native state behind.
-            this.httpSignaling = null;
+            http.bind(bindAddress);
+        } catch (ConnectException e) {
+            // A failed bind closes the signaling and leaves no state behind.
             if (certificateManager != null) {
                 certificateManager.close();
                 certificateManager = null;
             }
             throw e;
         }
+        endpoint.addSource(http);
+        logger.info(LOG_PREFIX + "HTTP signaling on TCP port " + bindAddress.getPort() + " (" + tlsMode + ")");
+        if (certificateManager != null) {
+            certificateManager.start();
+        }
     }
 
     /**
-     * Serves the status snapshot answered on the HTTP capability check and
-     * keeps it fresh. The supplier runs per probe on connection I/O threads
-     * shared with player traffic, and building the document can block (the
-     * Java ping passthrough and the ping event's listener chain), so probes
-     * never build inline: a probe finding the snapshot stale schedules one
-     * refresh on the dedicated status thread and serves the previous
-     * snapshot meanwhile. Vanilla behaves the same way, serving one cached record to
-     * every requester. Only probes racing the initial refresh kicked at
-     * startup see no document (an empty 200, the historical answer).
+     * Supplies the Xbox source's MCToken, asked before every connection
+     * attempt. The cached token serves while it is valid, except when the
+     * service refused it, when the last attempt failed (the token may be why,
+     * without the service saying so), or after a manual restart.
      */
-    private NetherNetServerStatus serveServerStatus() {
+    private CompletionStage<String> signalingToken(boolean refresh) {
+        NetherNetXboxRpcSignaling xbox = this.xboxSignaling;
+        boolean lastAttemptFailed = xbox != null && xbox.health().failedAttempts() > 0;
+        boolean fresh = freshTokenRequested.getAndSet(false) || refresh || lastAttemptFailed;
+        ExecutorService executor = this.tokenExecutor;
+        if (executor == null) {
+            return CompletableFuture.failedFuture(new IllegalStateException("Nethernet is shut down"));
+        }
+        try {
+            return CompletableFuture.supplyAsync(() -> {
+                if (fresh) {
+                    tokenManager.invalidate();
+                }
+                String token = tokenManager.authenticate();
+                if (token == null) {
+                    throw new CompletionException(new IOException("could not get an MCToken"));
+                }
+                return token;
+            }, executor);
+        } catch (RejectedExecutionException e) {
+            return CompletableFuture.failedFuture(e);
+        }
+    }
+
+    /** Logs the Xbox source's state changes; runs on its event loop. */
+    private void logSignalingHealth(SignalingHealth health) {
+        switch (health.state()) {
+            case CONNECTED -> {
+                logger.info(LOG_PREFIX + (signalingConnectedBefore
+                        ? "Signaling reconnected (players unaffected)" : "Signaling connected"));
+                signalingConnectedBefore = true;
+            }
+            case STARTING, RECONNECTING -> {
+                Throwable failure = health.lastFailure();
+                if (failure == null) {
+                    return; // a manual reconnect; its outcome is logged when it lands
+                }
+                String retry = health.retryIn() == null ? ""
+                        : ", next attempt in " + Math.max(1, health.retryIn().toSeconds()) + "s";
+                if (health.failedAttempts() == 0) {
+                    logger.info(LOG_PREFIX + "Signaling lost (" + describe(failure) + "), reconnecting in place" + retry);
+                } else {
+                    logger.warning(LOG_PREFIX + "Signaling connection attempt " + health.failedAttempts()
+                            + " failed (" + describe(failure) + ")" + retry);
+                }
+            }
+            case NEW, CLOSED -> {
+            }
+        }
+    }
+
+    private static String describe(Throwable failure) {
+        return failure.getMessage() != null ? failure.getMessage() : failure.getClass().getSimpleName();
+    }
+
+    /**
+     * Answers HTTP status probes with the status snapshot and keeps it fresh.
+     * HTTP signaling calls this off its I/O threads, and building the
+     * document can block (the Java ping passthrough and the ping event's
+     * listener chain), so a probe finding the snapshot stale schedules one
+     * refresh on the dedicated status thread and is served the previous
+     * snapshot meanwhile. Vanilla behaves the same way, serving one cached
+     * record to every requester. Only probes racing the first build after
+     * start find no snapshot; they build one themselves.
+     */
+    private StatusAnswer serveServerStatus(StatusRequest request) {
         if (System.nanoTime() - statusBuiltNanos >= STATUS_MAX_AGE_NANOS) {
             scheduleStatusRefresh();
         }
-        return cachedStatus;
+        NetherNetServerStatus status = cachedStatus;
+        return StatusAnswer.serve(status != null ? status : buildServerStatus());
     }
 
     private void scheduleStatusRefresh() {
@@ -515,13 +566,12 @@ public class NetherNetServer {
      * fallbacks included, so the two transports always describe the server
      * identically.
      *
-     * Both auth bits are true because we accept Microsoft authenticated and
-     * self signed identities alike: client assertions are stripped rather
-     * than validated, RakNet parity being the security bar.
+     * Both auth bits are true because we accept Microsoft attested and self
+     * signed identities alike: the endpoint requires a proven client key, not
+     * an attested token.
      *
-     * Runs only on the dedicated status thread, never on I/O threads and
-     * never on the maintenance scheduler, whose watchdog must not sit
-     * behind a blocking ping passthrough.
+     * Runs on the dedicated status thread, or on the probe's own thread for
+     * probes that find no snapshot yet; never on I/O threads.
      */
     private NetherNetServerStatus buildServerStatus() {
         BedrockPong pong = this.pingResponder.onQuery(0L, statusPingAddress(), null);
@@ -559,7 +609,7 @@ public class NetherNetServer {
      * resolved once and cached on success: a configured hostname would do a
      * blocking DNS lookup per build, and an unresolved address would hand
      * listeners an object whose getAddress() is null. Falls back to
-     * loopback when resolution fails. Runs on the dedicated status thread.
+     * loopback when resolution fails. Runs wherever the status is built.
      */
     private InetSocketAddress statusPingAddress() {
         InetSocketAddress address = this.statusPingAddress;
@@ -582,25 +632,6 @@ public class NetherNetServer {
     }
 
     /**
-     * Loads (or on first use creates) the server identity that signs the
-     * a=identity assertion on every answer. HTTP signaled clients have
-     * always refused answers without it, and since 26.40 clients require
-     * it over Xbox RPC signaling too, it decorates both paths. A failure
-     * here aborts only the HTTP listener (connection refused is the
-     * fastest RakNet fallback); the RPC channel binds regardless so older
-     * clients can still join.
-     */
-    private NetherNetAnswerDecorator loadIdentityDecorator() throws Exception {
-        try {
-            NetherNetServerIdentity identity = NetherNetServerIdentity.loadOrCreate(
-                    geyser.getBootstrap().getConfigFolder().resolve("nethernet"));
-            return identity::decorate;
-        } catch (Exception e) {
-            throw new IllegalStateException("server identity unavailable: " + e.getMessage(), e);
-        }
-    }
-
-    /**
      * Sizes the netty worker group that runs every Nethernet player's Bedrock
      * pipeline. Scales with the host but stays bounded; the previous fixed
      * value of 2 was a bottleneck at high player counts.
@@ -610,17 +641,15 @@ public class NetherNetServer {
     }
 
     /**
-     * Creates the WebRTC factory pool for one signaling endpoint. Each factory
-     * spawns three native threads even when idle, so the pool stays small on
-     * small hosts and caps at four.
+     * Creates the endpoint's WebRTC engine. One factory equals one native
+     * network thread carrying the DTLS and SCTP work of every peer connection
+     * assigned to it, so the pool size caps how many threads the data plane
+     * can spread players across. Each factory spawns three native threads
+     * once used, so the pool stays small on small hosts and caps at four.
      */
-    private static List<PeerConnectionFactory> createFactoryPool() {
-        int size = Math.max(2, Math.min(4, Runtime.getRuntime().availableProcessors() / 2));
-        List<PeerConnectionFactory> pool = new ArrayList<>(size);
-        for (int i = 0; i < size; i++) {
-            pool.add(new PeerConnectionFactory());
-        }
-        return pool;
+    private static WebRtcEngine createEngine() {
+        int factories = Math.max(2, Math.min(4, Runtime.getRuntime().availableProcessors() / 2));
+        return WebRtcEngine.builder().factories(factories).build();
     }
 
     private void closeChannels() {
@@ -635,20 +664,16 @@ public class NetherNetServer {
             playerChannels.close().awaitUninterruptibly(3, TimeUnit.SECONDS);
         }
 
-        if (rpcChannel != null) {
-            rpcChannel.close().syncUninterruptibly();
-            rpcChannel = null;
-        }
-        if (httpChannel != null) {
-            httpChannel.close().syncUninterruptibly();
-            httpChannel = null;
+        // Closes both sources too; the engine follows once every peer is gone.
+        if (endpointChannel != null) {
+            endpointChannel.close().syncUninterruptibly();
+            endpointChannel = null;
         }
         if (certificateManager != null) {
             certificateManager.close();
             certificateManager = null;
         }
-        rpcSignaling = null;
-        httpSignaling = null;
+        xboxSignaling = null;
         if (bossGroup != null) {
             bossGroup.shutdownGracefully(0, 5, TimeUnit.SECONDS).syncUninterruptibly();
             bossGroup = null;
@@ -656,70 +681,6 @@ public class NetherNetServer {
         if (workerGroup != null) {
             workerGroup.shutdownGracefully(0, 5, TimeUnit.SECONDS).syncUninterruptibly();
             workerGroup = null;
-        }
-    }
-
-    /**
-     * Watchdog: checks the signaling socket for liveness (including silent
-     * half-open TCP, via the silence threshold) and reconnects it in place
-     * when dead. Runs on the scheduler thread.
-     */
-    private void checkSignaling() {
-        synchronized (reconnectLock) {
-            if (!running) return;
-            NetherNetXboxRpcSignaling rpc = this.rpcSignaling;
-            if (rpc == null) return;
-
-            boolean socketAlive = rpc.isChannelAlive(SIGNALING_SILENCE_THRESHOLD_MILLIS);
-            if (socketAlive && rpc.isRouteAlive(SIGNALING_ROUTE_SILENCE_THRESHOLD_MILLIS)) {
-                consecutiveReconnectFailures = 0;
-                return;
-            }
-
-            long now = System.currentTimeMillis();
-            if (now < nextReconnectAttemptAt) {
-                return;
-            }
-
-            logger.info(LOG_PREFIX + "Signaling dead (" + (socketAlive ? "route" : "socket") + "), reconnecting in place...");
-
-            if (reconnectSocket(rpc)) {
-                consecutiveReconnectFailures = 0;
-                // Small grace period so a socket that dies again immediately after
-                // connecting doesn't get hammered in a tight loop.
-                nextReconnectAttemptAt = now + RECONNECT_BASE_DELAY_MILLIS;
-            } else {
-                consecutiveReconnectFailures++;
-                // The cached token may be the reason the service refused us.
-                tokenManager.invalidate();
-                long delay = Math.min(RECONNECT_MAX_DELAY_MILLIS,
-                        RECONNECT_BASE_DELAY_MILLIS << Math.min(consecutiveReconnectFailures, 4));
-                nextReconnectAttemptAt = now + delay;
-                logger.warning(LOG_PREFIX + "Signaling reconnect failed (attempt " + consecutiveReconnectFailures
-                        + "), next attempt in " + (delay / 1000) + "s");
-            }
-        }
-    }
-
-    /**
-     * Reconnects the signaling socket in place with a possibly cached MCToken.
-     * Established peer connections are never touched.
-     *
-     * @return true if the socket reconnected successfully
-     */
-    private boolean reconnectSocket(NetherNetXboxRpcSignaling rpc) {
-        String mcToken = tokenManager.authenticate();
-        if (mcToken == null) {
-            logger.warning(LOG_PREFIX + "Signaling reconnect failed: could not get MCToken");
-            return false;
-        }
-        try {
-            rpc.reconnect(mcToken);
-            logger.info(LOG_PREFIX + "Signaling reconnected");
-            return true;
-        } catch (Exception e) {
-            logger.warning(LOG_PREFIX + "Signaling reconnect failed: " + e.getMessage());
-            return false;
         }
     }
 }
