@@ -1,0 +1,13 @@
+advanced:
+  bedrock:
+    # Whether to expect HAPROXY protocol for connecting Bedrock clients.
+    # This is useful only when you are running a UDP reverse proxy in front of your Geyser instance.
+    # IF YOU DON'T KNOW WHAT THIS IS, DON'T TOUCH IT!
+    use-haproxy-protocol: false
+    # A list of allowed HAPROXY protocol speaking proxy IP addresses/subnets. Only effective when "use-haproxy-protocol" is enabled, and
+    # should really only be used when you are not able to use a proper firewall (usually true with shared hosting providers etc.).
+    # Keeping this list empty means there is no IP address whitelist.
+    # IP addresses, subnets, and links to plain text files are supported.
+    haproxy-protocol-whitelisted-ips:
+    - 10.0.0.0/8
+config-version: 7

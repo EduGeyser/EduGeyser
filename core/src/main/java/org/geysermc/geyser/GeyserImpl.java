@@ -357,14 +357,22 @@ public class GeyserImpl implements GeyserApi, EventRegistrar {
         Registries.RESOURCE_PACKS.load();
         Registries.WAYPOINT_STYLE_MAPPINGS.load();
 
-        // Warnings to users who enable options that they might not need.
-        if (config.advanced().bedrock().useHaproxyProtocol()) {
-            logger.warning("\"use-haproxy-protocol\" under the \"advanced/bedrock\" section has no effect: it applies to RakNet, which is off.");
-        }
+        if (!Boolean.getBoolean("Geyser.HideProxyProtocolWarnings")) {
+            // Warnings to users who enable options that they might not need.
+            if (!config.advanced().bedrock().haproxyProtocolWhitelistedIps().isEmpty()) {
+                logger.warning("Geyser is configured to expect HAProxy protocol on HTTP signaling, the TCP side of the Bedrock port.");
+                logger.warning("If you do not know what this is, open the Geyser config, and empty \"haproxy-protocol-whitelisted-ips\" under the \"advanced/bedrock\" section.");
+            }
 
-        if (config.advanced().java().useHaproxyProtocol()) {
-            logger.warning("Geyser is configured to use proxy protocol when connecting to the Java server.");
-            logger.warning("If you do not know what this is, open the Geyser config, and set \"use-haproxy-protocol\" under the  \"advanced/java\" section to \"false\".");
+            if (!config.advanced().bedrock().webrtcProxyProtocolRelays().isEmpty()) {
+                logger.warning("Geyser is configured to expect PROXY protocol on the UDP side of the Bedrock port, so players can only reach NetherNet through the relays in \"webrtc-proxy-protocol-relays\".");
+                logger.warning("If you do not know what this is, open the Geyser config, and empty \"webrtc-proxy-protocol-relays\" under the \"advanced/bedrock\" section.");
+            }
+
+            if (config.advanced().java().useHaproxyProtocol()) {
+                logger.warning("Geyser is configured to use proxy protocol when connecting to the Java server.");
+                logger.warning("If you do not know what this is, open the Geyser config, and set \"use-haproxy-protocol\" under the  \"advanced/java\" section to \"false\".");
+            }
         }
 
         if (!config.advanced().bedrock().validateBedrockLogin()) {
@@ -460,26 +468,6 @@ public class GeyserImpl implements GeyserApi, EventRegistrar {
             }
         }
 
-        // Now that the Bedrock port may have been changed, also check the broadcast port (configurable on all platforms)
-        String broadcastPort = System.getProperty("geyserBroadcastPort", "");
-        if (!broadcastPort.isEmpty()) {
-            try {
-                int parsedPort = Integer.parseInt(broadcastPort);
-                if (parsedPort < 1 || parsedPort > 65535) {
-                    throw new NumberFormatException("The broadcast port must be between 1 and 65535 inclusive!");
-                }
-                config.advanced().bedrock().broadcastPort(parsedPort);
-                logger.info("Broadcast port set from system property: " + parsedPort);
-            } catch (NumberFormatException e) {
-                logger.error(String.format("Invalid broadcast port from system property: %s! Defaulting to configured port.", broadcastPort + " (" + e.getMessage() + ")"));
-            }
-        }
-
-        // It's set to 0 only if no system property or manual config value was set
-        if (config.advanced().bedrock().broadcastPort() == 0) {
-            config.advanced().bedrock().broadcastPort(config.bedrock().port());
-        }
-
         if (!(config instanceof GeyserPluginConfig)) {
             String remoteAddress = config.java().address();
             // Filters whether it is not an IP address or localhost, because otherwise it is not possible to find out an SRV entry.
@@ -504,7 +492,7 @@ public class GeyserImpl implements GeyserApi, EventRegistrar {
             logger.debug("Epoll is not available; Erosion's Unix socket handling will not work.");
         }
 
-        // NetherNet is the only Bedrock transport: RakNet is not bound.
+        // NetherNet is the only Bedrock transport
         startNethernet();
 
         if (config.java().authType() == AuthType.FLOODGATE) {
@@ -618,7 +606,7 @@ public class GeyserImpl implements GeyserApi, EventRegistrar {
 
         if (nethernetManagerImpl == null || !nethernetManagerImpl.start()) {
             log.severe(GeyserLocale.getLocaleStringLog("geyser.core.fail", address, port)
-                    + ": NetherNet did not start, and RakNet is off, so no Bedrock player can join");
+                    + ": NetherNet did not start, so no Bedrock player can join");
             if (!"0.0.0.0".equals(address)) {
                 log.info(Component.text("Suggestion: try setting `address` under `bedrock` in the Geyser config back to 0.0.0.0", NamedTextColor.GREEN));
                 log.info(Component.text("Then, restart this server.", NamedTextColor.GREEN));
@@ -633,7 +621,7 @@ public class GeyserImpl implements GeyserApi, EventRegistrar {
         String where = "0.0.0.0".equals(address) ? "" : address + ", ";
         String ports = "UDP port " + (ice != null ? ice.getPort() : port) + " (ICE)"
                 + (http != null ? " and TCP port " + http.getPort() + " (HTTP signaling)" : ", without HTTP signaling");
-        log.info(brand("Started Geyser on " + where + ports + ", NetherNet only. RakNet is off."));
+        log.info(brand("Started Geyser on " + where + ports));
     }
 
     private record NethernetIds(String connectionId, String playfabCustomId, String playfabDeviceId) {
@@ -1015,7 +1003,24 @@ public class GeyserImpl implements GeyserApi, EventRegistrar {
             metrics.addCustomChart(new SimplePie("defaultLocale", GeyserLocale::getDefaultLocale));
             metrics.addCustomChart(new SimplePie("version", () -> GeyserImpl.VERSION));
             metrics.addCustomChart(new SimplePie("javaHaProxyProtocol", () -> String.valueOf(config.advanced().java().useHaproxyProtocol())));
-            metrics.addCustomChart(new SimplePie("bedrockHaProxyProtocol", () -> String.valueOf(config.advanced().bedrock().useHaproxyProtocol())));
+            metrics.addCustomChart(new AdvancedPie("bedrockProxies", () -> {
+                // Every kind configured counts, so a server running several shows up under each
+                GeyserConfig.AdvancedBedrockConfig bedrock = config.advanced().bedrock();
+                Map<String, Integer> proxies = new HashMap<>();
+                if (!bedrock.haproxyProtocolWhitelistedIps().isEmpty()) {
+                    proxies.put("haproxy", 1);
+                }
+                if (!bedrock.signalingTrustedProxies().isEmpty()) {
+                    proxies.put("x-forwarded-for", 1);
+                }
+                if (!bedrock.webrtcProxyProtocolRelays().isEmpty()) {
+                    proxies.put("webrtc-relays", 1);
+                }
+                if (proxies.isEmpty()) {
+                    proxies.put("none", 1);
+                }
+                return proxies;
+            }));
             metrics.addCustomChart(new AdvancedPie("playerPlatform", () -> {
                 Map<String, Integer> valueMap = new HashMap<>();
                 for (GeyserSession session : sessionManager.getAllSessions()) {

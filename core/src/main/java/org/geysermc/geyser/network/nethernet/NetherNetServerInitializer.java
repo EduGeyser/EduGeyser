@@ -40,12 +40,11 @@ import org.geysermc.geyser.network.GeyserServerInitializer;
 import org.geysermc.geyser.network.netty.BedrockEncryptionControl;
 
 /**
- * Channel initializer for incoming Nethernet (WebRTC) connections. Session
- * setup is shared with RakNet through GeyserServerInitializer, but NetherNet
- * is a first class transport here: no FrameIdCodec (the 0xFE byte is RakNet
- * framing; data channel payloads are bare batch bytes) and no RakMessage
- * wrapping. The channel itself splits and reassembles messages, so each read
- * is one whole batch. The pipeline is:
+ * Channel initializer for incoming Nethernet (WebRTC) connections, the only
+ * Bedrock transport. Data channel payloads are bare batch bytes, without the
+ * 0xFE frame ID the Protocol library's initializer expects. The channel
+ * itself splits and reassembles messages, so each read is one whole batch.
+ * The pipeline is:
  *
  * NetherNetBatchWrapperCodec (whole messages to batch wrappers)
  *   -> CompressionCodec (NOOP until NetworkSettings negotiates, rak v11 semantics)
@@ -72,7 +71,8 @@ public class NetherNetServerInitializer extends GeyserServerInitializer {
 
     @Override
     protected void preInitChannel(Channel channel) {
-        // No super call: the parent adds the RakNet framing.
+        // No super call: the parent adds the 0xFE frame ID codec, which
+        // NetherNet does not use.
 
         // Runs as the endpoint exposes the join, before ICE, so joins that
         // never connect are logged too.

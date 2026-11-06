@@ -135,8 +135,9 @@ public interface GeyserConfig {
         String address();
 
         @Comment("""
-            The port that Geyser will listen on for incoming Bedrock connections.
-            Since Minecraft: Bedrock Edition uses UDP, this port must allow UDP traffic.""")
+            The port that Geyser listens on for Bedrock players, on both TCP and UDP. Open and forward both.
+            TCP carries HTTP signaling, which direct connections and joins from the Education server list need.
+            UDP carries every player's NetherNet traffic, join codes and connection IDs included.""")
         @Override
         @DefaultNumeric(19132)
         @NumericRange(from = 0, to = 65535)
@@ -144,7 +145,9 @@ public interface GeyserConfig {
 
         @Comment("""
                 Some hosting services change your Java port everytime you start the server and require the same port to be used for Bedrock.
-                This option makes the Bedrock port the same as the Java port every time you start the server.""")
+                This option makes the Bedrock port the same as the Java port every time you start the server.
+                The Java server then holds the TCP side of that port, so HTTP signaling cannot start:
+                direct connections and joins from the Education server list do not work, only join codes and connection IDs.""")
         @DefaultBoolean
         @PluginSpecific
         boolean cloneRemotePort();
@@ -152,10 +155,14 @@ public interface GeyserConfig {
         void address(String address);
         void port(int port);
 
+        /**
+         * @deprecated NetherNet has no broadcast port: players connect to {@link #port()}
+         */
         @Exclude
         @Override
+        @Deprecated
         default int broadcastPort() {
-            return GeyserImpl.getInstance().config().advanced().bedrock().broadcastPort();
+            return port();
         }
 
         @Exclude
@@ -358,16 +365,6 @@ public interface GeyserConfig {
     @ConfigSerializable
     interface AdvancedBedrockConfig {
         @Comment("""
-                The port to broadcast to Bedrock clients with the MOTD that they should use to connect to the server.
-                A value of 0 will broadcast the port specified above.
-                DO NOT change this unless Geyser runs on a different port than the one that is used to connect.""")
-        @DefaultNumeric(0)
-        @NumericRange(from = 0, to = 65535)
-        int broadcastPort();
-
-        void broadcastPort(int port);
-
-        @Comment("""
                 How much to compress network traffic to the Bedrock client. The higher the number, the more CPU usage used, but
                 the smaller the bandwidth used. Does not have any effect below -1 or above 9. Set to -1 to disable.""")
         @DefaultNumeric(6)
@@ -375,21 +372,54 @@ public interface GeyserConfig {
         int compressionLevel();
 
         @Comment("""
-                Whether to expect HAPROXY protocol for connecting Bedrock clients.
-                This is useful only when you are running a UDP reverse proxy in front of your Geyser instance.
+                Proxies in front of HTTP signaling (the TCP side of the Bedrock port) that send a HAPROXY protocol header
+                with each player's address. Listing one turns HAPROXY protocol on, so leave this empty unless you run such a proxy.
+                HTTP signaling reads the header only from these proxies, and still accepts their connections without one.
+                Players behind a listed proxy count toward the per-address connection limit by the address it sends.
+                This does not cover NetherNet's UDP traffic, see "webrtc-proxy-protocol-relays".
+                IP addresses, subnets, host names (looked up at startup) and https:// links to plain text lists are supported.
                 IF YOU DON'T KNOW WHAT THIS IS, DON'T TOUCH IT!""")
-        @DefaultBoolean
-        boolean useHaproxyProtocol();
-
-        @Comment("""
-                A list of allowed HAPROXY protocol speaking proxy IP addresses/subnets. Only effective when "use-haproxy-protocol" is enabled, and
-                should really only be used when you are not able to use a proper firewall (usually true with shared hosting providers etc.).
-                Keeping this list empty means there is no IP address whitelist.
-                IP addresses, subnets, and links to plain text files are supported.""")
         @AsteriskSerializer.Asterisk
         default List<String> haproxyProtocolWhitelistedIps() {
             return Collections.emptyList();
         }
+
+        @Comment("""
+                Reverse proxies in front of HTTP signaling, such as an HTTP load balancer, that send each player's address in the
+                "X-Forwarded-For" header. HTTP signaling reads the header only from these proxies. This is separate from HAPROXY protocol.
+                Players behind a listed proxy count toward the per-address connection limit by the address it sends.
+                With more than one proxy in front of signaling, such as a CDN in front of nginx, list every one of them,
+                or have the last one send only the player's address in "X-Forwarded-For".
+                IP addresses, subnets, host names (looked up at startup) and https:// links to plain text lists are supported.
+                IF YOU DON'T KNOW WHAT THIS IS, DON'T TOUCH IT!""")
+        @AsteriskSerializer.Asterisk
+        default List<String> signalingTrustedProxies() {
+            return Collections.emptyList();
+        }
+
+        @Comment("""
+                UDP relays in front of NetherNet's traffic on the UDP side of the Bedrock port that send a PROXY protocol v2 header
+                with each player's address. Leave this empty unless you run such a relay.
+                While set, players can only reach the UDP side through these relays, and answers no longer name this machine's addresses:
+                players need the relays' public addresses announced to them ("advertise-addresses"), or they can only connect
+                through a TURN server, which only join codes and connection IDs hand out.
+                NetherNet does not start if none of the listed relays can be read, as when a linked list cannot be downloaded.
+                This is separate from the two lists above, which only cover HTTP signaling.
+                IP addresses, subnets, host names (looked up at startup) and https:// links to plain text lists are supported.
+                IF YOU DON'T KNOW WHAT THIS IS, DON'T TOUCH IT!""")
+        @AsteriskSerializer.Asterisk
+        default List<String> webrtcProxyProtocolRelays() {
+            return Collections.emptyList();
+        }
+
+        @Comment("""
+                Use the player address that a proxy in front of HTTP signaling sends ("haproxy-protocol-whitelisted-ips" or
+                "signaling-trusted-proxies") instead of the one NetherNet's UDP traffic comes from. Enable this when the UDP side
+                of the Bedrock port is forwarded without PROXY protocol, so every player would otherwise show the forwarder's address.
+                A player connected through a TURN server shows the TURN server's address either way.
+                IF YOU DON'T KNOW WHAT THIS IS, DON'T TOUCH IT!""")
+        @DefaultBoolean
+        boolean preferSignalingProxyAddress();
 
         @Comment("""
                Should be enabled if this Geyser instance is behind a WaterdogPE proxy. If enabled, Geyser will
@@ -399,16 +429,10 @@ public interface GeyserConfig {
         boolean useWaterdogpeForwarding();
 
         @Comment("""
-            The internet supports a maximum MTU of 1492 but could cause issues with packet fragmentation.
-            1400 is the default.""")
-        @DefaultNumeric(1400)
-        int mtu();
-
-        @Comment("""
             This option disables the auth step Geyser performs for connecting Bedrock players.
             It can be used to allow connections from ProxyPass and WaterdogPE. In these cases, make sure that users
             cannot directly connect to this Geyser instance. See https://www.spigotmc.org/wiki/firewall-guide/ for
-            assistance - and use UDP instead of TCP.
+            assistance, and block the Bedrock port on both TCP and UDP.
             Disabling Bedrock authentication for other use-cases is NOT SUPPORTED, as it allows anyone to spoof usernames, and is therefore a security risk.
             All Floodgate functionality (including skin uploading and account linking) will also not work when this option is disabled.""")
         @DefaultBoolean(true)

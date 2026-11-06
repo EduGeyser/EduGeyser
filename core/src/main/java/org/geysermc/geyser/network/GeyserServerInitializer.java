@@ -27,10 +27,6 @@ package org.geysermc.geyser.network;
 
 import io.netty.channel.Channel;
 import io.netty.channel.EventLoopGroup;
-import io.netty.channel.MultiThreadIoEventLoopGroup;
-import io.netty.channel.local.LocalIoHandler;
-import io.netty.util.concurrent.DefaultThreadFactory;
-import lombok.Getter;
 import org.checkerframework.checker.nullness.qual.NonNull;
 import org.cloudburstmc.protocol.bedrock.BedrockPeer;
 import org.cloudburstmc.protocol.bedrock.BedrockServerSession;
@@ -42,20 +38,15 @@ import org.geysermc.geyser.network.bedrock.LoginPacketHandler;
 import org.geysermc.geyser.session.GeyserSession;
 
 /**
- * Shared by every Bedrock transport: turns each new Bedrock session into a {@link GeyserSession}.
- * Subclasses only set up the transport specific part of the pipeline.
+ * Turns each new Bedrock session into a {@link GeyserSession}. Subclasses set up the transport
+ * specific part of the pipeline.
  */
 public abstract class GeyserServerInitializer extends BedrockServerInitializer {
     protected final GeyserImpl geyser;
-    @Getter
     private final EventLoopGroup eventLoopGroup;
 
-    protected GeyserServerInitializer(GeyserImpl geyser, String playerThreadName) {
-        this(geyser, new MultiThreadIoEventLoopGroup(new DefaultThreadFactory(playerThreadName), LocalIoHandler.newFactory()));
-    }
-
     /**
-     * For a transport whose sessions run on the player threads of another.
+     * @param eventLoopGroup the player threads every session ticks on
      */
     protected GeyserServerInitializer(GeyserImpl geyser, EventLoopGroup eventLoopGroup) {
         this.geyser = geyser;

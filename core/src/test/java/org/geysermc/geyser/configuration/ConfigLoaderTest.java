@@ -172,12 +172,10 @@ public class ConfigLoaderTest {
         assertEquals("keyyy.pem", config.advanced().floodgateKeyFile());
 
         // Verify advanced bedrock subsection
-        assertEquals(19133, config.advanced().bedrock().broadcastPort());
         assertEquals(5, config.advanced().bedrock().compressionLevel());
-        assertTrue(config.advanced().bedrock().useHaproxyProtocol());
+        // On with a list, which now turns HAProxy protocol on by itself
         assertEquals(List.of("127.0.0.1", "172.18.0.0/13"), config.advanced().bedrock().haproxyProtocolWhitelistedIps());
         assertTrue(config.advanced().bedrock().validateBedrockLogin());
-        assertEquals(1399, config.advanced().bedrock().mtu());
 
         // Verify advanced java subsection
         assertTrue(config.advanced().java().useHaproxyProtocol());
@@ -225,6 +223,107 @@ public class ConfigLoaderTest {
         // When emote-offhand-workaround was "no-emotes", it should become emotes-enabled: false
         assertFalse(config.gameplay().emotesEnabled());
         assertEquals(Constants.CONFIG_VERSION, config.configVersion());
+    }
+
+    @ParameterizedTest
+    @MethodSource("platformTypes")
+    void testHaproxySwitchMigration(PlatformType platformType, Class<? extends GeyserConfig> configClass) throws Exception {
+        // Listed while off, the proxies were ignored, and would turn it on now
+        GeyserConfig off = new ConfigLoader(copyResourceToTempFile("tests", "v7-haproxy-off.yml"), platformType)
+            .load0(configClass);
+        assertEquals(List.of(), off.advanced().bedrock().haproxyProtocolWhitelistedIps());
+
+        // On with no list took a header from anywhere, which no list says, so it is off until proxies are listed
+        GeyserConfig any = new ConfigLoader(copyResourceToTempFile("tests", "v7-haproxy-any.yml"), platformType)
+            .load0(configClass);
+        assertEquals(List.of(), any.advanced().bedrock().haproxyProtocolWhitelistedIps());
+        assertEquals(Constants.CONFIG_VERSION, any.configVersion());
+
+        // On with a list keeps it, for HTTP signaling now
+        GeyserConfig on = new ConfigLoader(copyResourceToTempFile("tests", "v7-haproxy-old-comment.yml"), platformType)
+            .load0(configClass);
+        assertEquals(List.of("10.0.0.0/8"), on.advanced().bedrock().haproxyProtocolWhitelistedIps());
+    }
+
+    @ParameterizedTest
+    @MethodSource("platformTypes")
+    void testHaproxyCommentMigration(PlatformType platformType, Class<? extends GeyserConfig> configClass) throws Exception {
+        CommentedConfigurationNode latest = new ConfigLoader(tempDirectory.resolve("haproxy-latest-" + platformType + ".yml").toFile(), platformType)
+            .loadConfigurationNode(configClass);
+        String latestComment = latest.node("advanced", "bedrock", "haproxy-protocol-whitelisted-ips").comment();
+
+        // The comment up to version 7 explains the removed switch, so the current one replaces it
+        CommentedConfigurationNode migrated = new ConfigLoader(copyResourceToTempFile("tests", "v7-haproxy-off.yml"), platformType)
+            .loadConfigurationNode(configClass);
+        assertEquals(latestComment, migrated.node("advanced", "bedrock", "haproxy-protocol-whitelisted-ips").comment());
+
+        // The default before August 2026 named the switch "use-proxy-protocol"
+        CommentedConfigurationNode older = new ConfigLoader(copyResourceToTempFile("tests", "v7-haproxy-old-comment.yml"), platformType)
+            .loadConfigurationNode(configClass);
+        assertEquals(latestComment, older.node("advanced", "bedrock", "haproxy-protocol-whitelisted-ips").comment());
+    }
+
+    @Test
+    void testHaproxySwitchMigrationKeepsAnOwnComment() throws Exception {
+        File file = tempDirectory.resolve("haproxy-own-comment.yml").toFile();
+        Files.writeString(file.toPath(), """
+            advanced:
+              bedrock:
+                use-haproxy-protocol: false
+                # Our load balancer, once it sends PROXY protocol
+                haproxy-protocol-whitelisted-ips:
+                - 10.0.0.0/8
+            config-version: 7
+            """);
+        CommentedConfigurationNode migrated = new ConfigLoader(file, PlatformType.STANDALONE)
+            .loadConfigurationNode(GeyserRemoteConfig.class);
+
+        CommentedConfigurationNode proxies = migrated.node("advanced", "bedrock", "haproxy-protocol-whitelisted-ips");
+        assertEquals(List.of(), proxies.getList(String.class));
+        assertEquals("Our load balancer, once it sends PROXY protocol", proxies.comment().strip());
+    }
+
+    @Test
+    void testHaproxyListWithoutTheSwitchIsEmptied() throws Exception {
+        // The switch defaulted to off, so the list was ignored, and kept it would let any sender declare a client now
+        File current = tempDirectory.resolve("haproxy-no-switch.yml").toFile();
+        Files.writeString(current.toPath(), """
+            advanced:
+              bedrock:
+                # Kept from an old setup
+                haproxy-protocol-whitelisted-ips:
+                - 0.0.0.0/0
+            config-version: 7
+            """);
+        CommentedConfigurationNode migrated = new ConfigLoader(current, PlatformType.STANDALONE)
+            .loadConfigurationNode(GeyserRemoteConfig.class);
+        CommentedConfigurationNode proxies = migrated.node("advanced", "bedrock", "haproxy-protocol-whitelisted-ips");
+        assertEquals(List.of(), proxies.getList(String.class));
+        assertEquals("Kept from an old setup", proxies.comment().strip());
+
+        // Version 5 moves the list of an older config there, without a switch when the config had none
+        File older = tempDirectory.resolve("haproxy-no-switch-v4.yml").toFile();
+        Files.writeString(older.toPath(), """
+            bedrock:
+              proxy-protocol-whitelisted-ips: [ "0.0.0.0/0" ]
+            config-version: 4
+            """);
+        GeyserConfig migratedOlder = new ConfigLoader(older, PlatformType.STANDALONE).load0(GeyserRemoteConfig.class);
+        assertEquals(List.of(), migratedOlder.advanced().bedrock().haproxyProtocolWhitelistedIps());
+    }
+
+    @ParameterizedTest
+    @MethodSource("platformTypes")
+    void testUdpOnlyPortCommentMigration(PlatformType platformType, Class<? extends GeyserConfig> configClass) throws Exception {
+        // The comments up to version 7 describe the Bedrock port as UDP only, which it no longer is
+        CommentedConfigurationNode migrated = new ConfigLoader(copyResourceToTempFile("tests", "v7-udp-port-comments.yml"), platformType)
+            .loadConfigurationNode(configClass);
+        CommentedConfigurationNode latest = new ConfigLoader(tempDirectory.resolve("port-latest-" + platformType + ".yml").toFile(), platformType)
+            .loadConfigurationNode(configClass);
+
+        assertEquals(latest.node("bedrock", "port").comment(), migrated.node("bedrock", "port").comment());
+        assertEquals(latest.node("advanced", "bedrock", "validate-bedrock-login").comment(),
+            migrated.node("advanced", "bedrock", "validate-bedrock-login").comment());
     }
 
     @ParameterizedTest

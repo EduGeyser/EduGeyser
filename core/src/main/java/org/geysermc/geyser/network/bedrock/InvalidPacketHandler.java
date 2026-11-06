@@ -33,6 +33,7 @@ import org.geysermc.geyser.GeyserImpl;
 import org.geysermc.geyser.GeyserLogger;
 import org.geysermc.geyser.session.GeyserSession;
 
+import java.io.IOException;
 import java.util.stream.Stream;
 
 /**
@@ -40,7 +41,7 @@ import java.util.stream.Stream;
  * before the first packet has created the session.
  */
 public class InvalidPacketHandler extends ChannelInboundHandlerAdapter {
-    public static final String NAME = "rak-error-handler";
+    public static final String NAME = "bedrock-error-handler";
 
     @Setter
     private @Nullable GeyserSession session;
@@ -57,6 +58,18 @@ public class InvalidPacketHandler extends ChannelInboundHandlerAdapter {
         GeyserLogger logger = GeyserImpl.getInstance().getLogger();
         if (session == null) {
             logger.debug("Closed a connection on an exception before its session existed: " + cause);
+            ctx.channel().close();
+            return;
+        }
+
+        if (cause instanceof IOException) {
+            // The transport lost the connection, as when a player quits while a send is in flight, so nobody is at
+            // fault. NetherNet fires the reason the transport ended with before failing the pending sends, and closing
+            // keeps it, where a disconnect would replace it. The name is only a placeholder before login, so the
+            // address tells connections apart
+            String address = GeyserImpl.getInstance().config().logPlayerIpAddresses()
+                ? String.valueOf(session.getSocketAddress()) : "<IP address withheld>";
+            logger.debug("The connection of " + session.bedrockUsername() + " from " + address + " failed: " + cause);
             ctx.channel().close();
             return;
         }

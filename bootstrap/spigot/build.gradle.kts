@@ -65,8 +65,11 @@ tasks.withType<com.github.jengelman.gradle.plugins.shadow.tasks.ShadowJar> {
     dependencies {
         exclude(dependency("com.google.*:.*"))
 
-        // Needed because older Spigot builds do not provide the haproxy module
-        exclude("io.netty", libs.netty.codec.haproxy)
+        // Netty is provided by the server, except for the haproxy module (missing on older Spigot
+        // builds) and the HTTP codec. HTTP and Xbox signaling need the codec, the only ways in for
+        // Bedrock players; vanilla 1.21.11 and 26.3 list it among their libraries, and the copy
+        // here covers a server that leaves it out. The server's own classes load first.
+        exclude("io.netty", libs.netty.codec.haproxy, libs.netty.codec.http)
 
         // Commodore includes Brigadier
         exclude(dependency("com.mojang:.*"))

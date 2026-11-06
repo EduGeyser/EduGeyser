@@ -32,7 +32,7 @@ import org.geysermc.geyser.api.pack.UrlPackCodec;
 /**
  * Can be used for resource packs created with the {@link UrlPackCodec}.
  * When a Bedrock client is unable to download a resource pack from a URL, Geyser will, by default,
- * serve the resource pack over raknet (as packs are served with the {@link PathPackCodec}).
+ * serve the resource pack over the Bedrock connection (as packs are served with the {@link PathPackCodec}).
  * This option can be used to disable that behavior, and disconnect the player instead.
  * By default, the {@link UrlFallbackOption#TRUE} option is set.
  * @since 2.6.2
@@ -43,7 +43,7 @@ public interface UrlFallbackOption extends ResourcePackOption<Boolean> {
     UrlFallbackOption FALSE = fallback(false);
 
     /**
-     * Whether to fall back to serving packs over the raknet connection
+     * Whether to fall back to serving packs over the Bedrock connection
      *
      * @param fallback whether to fall back
      * @return a UrlFallbackOption with the specified behavior

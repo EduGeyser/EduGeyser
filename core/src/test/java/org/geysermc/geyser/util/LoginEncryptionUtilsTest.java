@@ -74,7 +74,7 @@ class LoginEncryptionUtilsTest {
     }
 
     @Test
-    void aLoginOverRakNetIsLeftToItsHandshake() throws Exception {
+    void aLoginOnAChannelWithoutABindingGoesOn() throws Exception {
         GeyserSession session = sessionOn(new EmbeddedChannel());
 
         assertTrue(LoginEncryptionUtils.transportAcceptsLoginKey(session, p384Key()));
