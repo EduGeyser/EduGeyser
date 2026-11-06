@@ -25,19 +25,21 @@
 
 package org.geysermc.geyser.network.nethernet;
 
+import io.github.sendablemetatype.netty.channel.nethernet.NetherNetChannel;
+import io.github.sendablemetatype.netty.channel.nethernet.address.SourcedAddress;
 import io.netty.channel.ChannelHandler;
 import io.netty.channel.ChannelHandlerContext;
 import io.netty.channel.ChannelInboundHandlerAdapter;
 import org.geysermc.geyser.GeyserImpl;
 import org.geysermc.geyser.network.ConnectionRequests;
 
-import java.net.InetSocketAddress;
-
 /**
- * Applies the {@link ConnectionRequests} gate to NetherNet connections when the transport opens. The channel is
- * handed to the initializer before ICE finishes, while an Xbox signaled connection only carries a placeholder
- * address, and its session only starts with the first packet after activation. For a relayed connection the
- * address is the TURN relay's.
+ * Applies the {@link ConnectionRequests} gate to NetherNet connections when the transport opens, with the address
+ * the channel reports from then on and where it came from. The channel is handed to the initializer before ICE
+ * finishes, while an Xbox signaled connection only carries a placeholder address, and its session only starts with
+ * the first packet after activation. The address is the remote side of the selected ICE pair: the TURN relay for a
+ * relayed connection, and behind PROXY protocol relays the player the relay declared, with the relay as the proxy.
+ * With "prefer-signaling-proxy-address" it is the player a trusted signaling proxy declared, with that proxy.
  */
 @ChannelHandler.Sharable
 final class NetherNetConnectionGate extends ChannelInboundHandlerAdapter {
@@ -51,9 +53,9 @@ final class NetherNetConnectionGate extends ChannelInboundHandlerAdapter {
 
     @Override
     public void channelActive(ChannelHandlerContext ctx) throws Exception {
-        // NetherNet carries no PROXY protocol, so the peer address is the client address
-        if (ctx.channel().remoteAddress() instanceof InetSocketAddress clientAddress
-                && !ConnectionRequests.accept(this.geyser, clientAddress, null)) {
+        // The endpoint only creates NetherNet channels
+        SourcedAddress reported = ((NetherNetChannel) ctx.channel()).reportedAddress();
+        if (!ConnectionRequests.accept(this.geyser, reported.address(), reported.via(), reported.source().name())) {
             ctx.close();
             return;
         }

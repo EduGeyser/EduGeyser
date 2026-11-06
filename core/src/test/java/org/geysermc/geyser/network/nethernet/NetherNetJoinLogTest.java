@@ -152,6 +152,23 @@ class NetherNetJoinLogTest {
     }
 
     @Test
+    void aJoinAProxyDeclaredIsToldApartByTheProxyConnection() throws Exception {
+        NetherNetJoinLog log = new NetherNetJoinLog(logger, true);
+        Credentials credentials = Credentials.create();
+        SslContext served = credentials.serverContext();
+        serve(log.observe(name -> served));
+
+        // The proxy passes the player's TLS through and declares the player in a PROXY protocol header
+        Channel proxy = connect(credentials.clientContext());
+        InetSocketAddress player = new InetSocketAddress("203.0.113.7", 50123);
+        SourcedAddress signaled = new SourcedAddress(player, AddressSource.SIGNALING_PROXY_PROTOCOL,
+                (InetSocketAddress) proxy.localAddress());
+
+        awaitSignaling(Signaling.HTTPS, () -> log.signalingOf(signaled));
+        proxy.close().sync();
+    }
+
+    @Test
     void joinsWithoutAnAddressCameOverXboxSignaling() {
         NetherNetJoinLog log = new NetherNetJoinLog(logger, true);
 

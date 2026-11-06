@@ -25,88 +25,108 @@
 
 package org.geysermc.geyser.network.nethernet;
 
+import io.github.sendablemetatype.netty.channel.nethernet.NetherNetChannel;
+import io.github.sendablemetatype.netty.channel.nethernet.address.AddressSource;
+import io.github.sendablemetatype.netty.channel.nethernet.address.SourcedAddress;
 import io.netty.channel.ChannelHandlerContext;
-import io.netty.channel.ChannelInboundHandlerAdapter;
-import io.netty.channel.embedded.EmbeddedChannel;
+import io.netty.channel.ChannelPipeline;
 import org.geysermc.geyser.GeyserImpl;
+import org.geysermc.geyser.GeyserLogger;
 import org.geysermc.geyser.api.event.connection.ConnectionRequestEvent;
 import org.geysermc.geyser.configuration.GeyserConfig;
 import org.geysermc.geyser.event.GeyserEventBus;
-import org.geysermc.geyser.scoreboard.network.util.EmptyGeyserLogger;
 import org.geysermc.geyser.text.GeyserLocale;
 import org.junit.jupiter.api.Test;
+import org.mockito.ArgumentCaptor;
 
 import java.net.InetSocketAddress;
-import java.net.SocketAddress;
 import java.util.ArrayList;
 import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
-import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.mockStatic;
+import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 class NetherNetConnectionGateTest {
 
-    private static final InetSocketAddress CLIENT = new InetSocketAddress("203.0.113.7", 50123);
+    private static final InetSocketAddress PLAYER = new InetSocketAddress("203.0.113.7", 50123);
+    private static final InetSocketAddress RELAY = new InetSocketAddress("198.51.100.20", 40000);
+
+    private final List<ConnectionRequestEvent> events = new ArrayList<>();
+    private final GeyserLogger logger = mock(GeyserLogger.class);
+    private final ChannelPipeline pipeline = mock(ChannelPipeline.class);
 
     @Test
     void refusedConnectionClosesBeforeTheRestOfThePipelineActivates() throws Exception {
-        List<String> downstream = new ArrayList<>();
-        EmbeddedChannel channel = activate(geyser(true, new ArrayList<>()), downstream);
+        NetherNetConnectionGate gate = new NetherNetConnectionGate(geyser(true, true));
+        ChannelHandlerContext ctx = context(new SourcedAddress(PLAYER, AddressSource.ICE, null));
 
-        assertFalse(channel.isOpen());
-        assertTrue(downstream.isEmpty());
+        gate.channelActive(ctx);
+
+        verify(ctx).close();
+        verify(ctx, never()).fireChannelActive();
     }
 
     @Test
-    void acceptedConnectionReportsThePeerAndStepsAside() throws Exception {
-        List<ConnectionRequestEvent> events = new ArrayList<>();
-        List<String> downstream = new ArrayList<>();
-        EmbeddedChannel channel;
+    void acceptedConnectionReportsWhereItsAddressCameFromAndStepsAside() throws Exception {
+        NetherNetConnectionGate gate = new NetherNetConnectionGate(geyser(false, true));
+        ChannelHandlerContext ctx = context(new SourcedAddress(PLAYER, AddressSource.ICE_PROXY_PROTOCOL, RELAY));
+
         // The accepted path logs a locale string, and no locale is loaded here
         try (var locale = mockStatic(GeyserLocale.class)) {
-            channel = activate(geyser(false, events), downstream);
+            gate.channelActive(ctx);
         }
 
-        assertTrue(channel.isOpen());
-        assertEquals(List.of("active"), downstream);
-        assertNull(channel.pipeline().get(NetherNetConnectionGate.NAME));
+        verify(pipeline).remove(gate);
+        verify(ctx).fireChannelActive();
         assertEquals(1, events.size());
-        assertEquals(CLIENT, events.getFirst().inetSocketAddress());
-        assertNull(events.getFirst().proxyIp());
-        channel.finishAndReleaseAll();
+        assertEquals(PLAYER, events.getFirst().inetSocketAddress());
+        assertEquals(RELAY, events.getFirst().proxyIp());
+        assertTrue(debugLine().contains("(ICE_PROXY_PROTOCOL via " + RELAY + ")"), debugLine());
     }
 
-    private static EmbeddedChannel activate(GeyserImpl geyser, List<String> downstream) throws Exception {
-        EmbeddedChannel channel = new EmbeddedChannel(false, false) {
-            @Override
-            protected SocketAddress remoteAddress0() {
-                return CLIENT;
-            }
-        };
-        channel.pipeline()
-                .addLast(NetherNetConnectionGate.NAME, new NetherNetConnectionGate(geyser))
-                .addLast(new ChannelInboundHandlerAdapter() {
-                    @Override
-                    public void channelActive(ChannelHandlerContext ctx) {
-                        downstream.add("active");
-                    }
-                });
-        channel.register();
-        return channel;
+    @Test
+    void theRelayIsWithheldWithThePlayerAddress() throws Exception {
+        NetherNetConnectionGate gate = new NetherNetConnectionGate(geyser(false, false));
+        ChannelHandlerContext ctx = context(new SourcedAddress(PLAYER, AddressSource.ICE_PROXY_PROTOCOL, RELAY));
+
+        try (var locale = mockStatic(GeyserLocale.class)) {
+            gate.channelActive(ctx);
+            locale.verify(() -> GeyserLocale.getLocaleStringLog("geyser.network.attempt_connect", "<IP address withheld>"));
+        }
+
+        assertTrue(debugLine().contains("(ICE_PROXY_PROTOCOL via <Proxy IP address withheld>)"), debugLine());
+        assertFalse(debugLine().contains(RELAY.getAddress().getHostAddress()), debugLine());
     }
 
-    private static GeyserImpl geyser(boolean refuse, List<ConnectionRequestEvent> events) {
+    private ChannelHandlerContext context(SourcedAddress reported) {
+        NetherNetChannel channel = mock(NetherNetChannel.class);
+        when(channel.reportedAddress()).thenReturn(reported);
+        ChannelHandlerContext ctx = mock(ChannelHandlerContext.class);
+        when(ctx.channel()).thenReturn(channel);
+        when(ctx.pipeline()).thenReturn(pipeline);
+        return ctx;
+    }
+
+    private String debugLine() {
+        ArgumentCaptor<String> line = ArgumentCaptor.forClass(String.class);
+        verify(logger).debug(line.capture());
+        return line.getValue();
+    }
+
+    private GeyserImpl geyser(boolean refuse, boolean logAddresses) {
         GeyserImpl geyser = mock(GeyserImpl.class);
         GeyserConfig config = mock(GeyserConfig.class);
+        when(config.logPlayerIpAddresses()).thenReturn(logAddresses);
         when(geyser.config()).thenReturn(config);
-        when(geyser.getLogger()).thenReturn(new EmptyGeyserLogger());
+        when(geyser.getLogger()).thenReturn(logger);
         GeyserEventBus eventBus = mock(GeyserEventBus.class);
         when(geyser.eventBus()).thenReturn(eventBus);
         doAnswer(invocation -> {

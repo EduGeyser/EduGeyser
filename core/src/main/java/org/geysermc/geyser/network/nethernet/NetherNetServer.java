@@ -37,6 +37,7 @@ import io.github.sendablemetatype.netty.channel.nethernet.signaling.SignalingSta
 import io.github.sendablemetatype.netty.channel.nethernet.signaling.http.StatusAnswer;
 import io.github.sendablemetatype.netty.channel.nethernet.signaling.http.StatusRequest;
 import io.github.sendablemetatype.netty.channel.nethernet.signaling.http.TlsContextSelector;
+import io.github.sendablemetatype.netty.util.address.TrustedProxies;
 import io.github.sendablemetatype.netty.util.nethernet.ServerIdentity;
 import io.netty.bootstrap.ServerBootstrap;
 import io.netty.channel.Channel;
@@ -51,6 +52,7 @@ import org.checkerframework.checker.nullness.qual.Nullable;
 import org.cloudburstmc.protocol.bedrock.BedrockPong;
 import org.geysermc.geyser.GeyserImpl;
 import org.geysermc.geyser.GeyserLogger;
+import org.geysermc.geyser.configuration.GeyserConfig;
 import org.geysermc.geyser.network.BedrockPingHandler;
 
 import java.io.IOException;
@@ -85,6 +87,10 @@ import java.util.concurrent.atomic.AtomicBoolean;
  * by Minecraft's issuer or not (Education's self signed tokens prove theirs
  * too), on both sources; the Login is then checked against that key in
  * LoginEncryptionUtils. One server identity signs every answer.
+ *
+ * Behind proxies, HTTP signaling takes the player's address from the
+ * proxies the config lists for it, and the ICE port from its PROXY protocol
+ * relays; {@link NetherNetProxies} keeps the roles apart.
  *
  * The Xbox source keeps its signaling socket up by itself: it reconnects in
  * place with backoff, so the endpoint, the WebRTC engine, and every
@@ -344,6 +350,22 @@ public class NetherNetServer {
             return false;
         }
 
+        GeyserConfig.AdvancedBedrockConfig advanced = geyser.config().advanced().bedrock();
+        NetherNetProxies proxies;
+        try {
+            proxies = NetherNetProxies.parse(advanced);
+        } catch (IllegalArgumentException e) {
+            // Starting without a list the operator gave would show every
+            // player at the proxy's address, or leave the relays unreadable
+            logger.error(LOG_PREFIX + "NetherNet will not start: " + e.getMessage());
+            return false;
+        }
+        if (advanced.preferSignalingProxyAddress() && !proxies.signalingProxied()) {
+            logger.warning(LOG_PREFIX + "\"prefer-signaling-proxy-address\" does nothing, as neither"
+                    + " \"haproxy-protocol-whitelisted-ips\" nor \"signaling-trusted-proxies\" names a proxy"
+                    + " in front of HTTP signaling");
+        }
+
         this.bossGroup = new MultiThreadIoEventLoopGroup(1, NioIoHandler.newFactory());
         this.workerGroup = new MultiThreadIoEventLoopGroup(workerThreads(), NioIoHandler.newFactory());
         this.engine = createEngine();
@@ -362,20 +384,33 @@ public class NetherNetServer {
                     .channelFactory(NetherNetChannelFactory.server(engine))
                     .option(NetherChannelOption.NETHER_SERVER_IDENTITY, identity)
                     .option(NetherChannelOption.NETHER_SERVER_SHARED_ICE_PORT, true)
+                    // The relays only: a proxy trusted on HTTP signaling gains
+                    // no trust on the ICE port
+                    .option(NetherChannelOption.NETHER_SERVER_TRUSTED_PROXIES, proxies.relays())
+                    .option(NetherChannelOption.NETHER_SERVER_PREFER_PROXIED_ADDRESS,
+                            advanced.preferSignalingProxyAddress())
                     .childHandler(childHandler);
             this.endpointChannel = bindChannel(bootstrap, bedrockAddress());
+        } catch (IllegalStateException e) {
+            // NetworkM refuses a configuration it cannot serve before it
+            // touches a socket, such as STUN discovery behind PROXY protocol
+            // relays, which would announce an address players cannot reach
+            logger.error(LOG_PREFIX + "NetherNet will not start: " + e.getMessage());
+            return false;
         } catch (Exception e) {
             // The caller's shutdown releases what was created
             logger.error(LOG_PREFIX + "Failed to bind UDP " + describe(bedrockAddress()) + ": " + describe(e));
             return false;
         }
-        logger.info(LOG_PREFIX + "ICE on UDP port " + iceAddress().getPort() + ", shared by every player");
+        int relays = proxies.relays().proxyProtocol().entries().size();
+        logger.info(LOG_PREFIX + "ICE on UDP port " + iceAddress().getPort() + ", shared by every player"
+                + (relays == 0 ? "" : ", reached through the PROXY protocol relays in " + ranges(relays)));
 
         // HTTP signaling: the only way into this server for direct connections
         // and Education server list joins. A failure leaves the endpoint
         // running for Xbox signaling.
         try {
-            bindHttpSignaling((NetherNetServerChannel) endpointChannel);
+            bindHttpSignaling((NetherNetServerChannel) endpointChannel, proxies.signaling());
         } catch (Exception e) {
             logger.error(LOG_PREFIX + "HTTP signaling unavailable on TCP " + describe(bedrockAddress()) + " ("
                     + describe(e) + "): direct and server list joins will not work, only join codes and"
@@ -441,8 +476,11 @@ public class NetherNetServer {
      * tries HTTPS first and plain HTTP after a refused TLS connection, and
      * would fall back to RakNet only after both, which EduGeyser does not
      * serve.
+     *
+     * @param proxies the proxies in front of HTTP signaling, never the ICE
+     *                port's relays
      */
-    private void bindHttpSignaling(NetherNetServerChannel endpoint) throws ConnectException {
+    private void bindHttpSignaling(NetherNetServerChannel endpoint, TrustedProxies proxies) throws ConnectException {
         // Manual certificate files win and are the ACME opt out (never
         // silent ACME enrollment against the operator's intent); only when
         // no files exist at bind does automatic management run. The manual
@@ -470,6 +508,7 @@ public class NetherNetServer {
         NetherNetHttpSignaling http = NetherNetHttpSignaling.builder(workerGroup)
                 .tls(joinLog.observe(tlsSelector))
                 .statusProvider(this::serveServerStatus)
+                .trustedProxies(proxies)
                 .build();
         try {
             listen(endpoint, http, bedrockAddress());
@@ -481,10 +520,23 @@ public class NetherNetServer {
             throw e;
         }
         this.httpSignaling = http;
-        logger.info(LOG_PREFIX + "HTTP signaling on TCP port " + http.boundAddress().getPort() + " (" + tlsMode + ")");
+        logger.info(LOG_PREFIX + "HTTP signaling on TCP port " + http.boundAddress().getPort() + " (" + tlsMode
+                + describeProxies(proxies) + ")");
         if (certificateManager != null) {
             certificateManager.start();
         }
+    }
+
+    /** Which proxies HTTP signaling trusts, for its startup line; counts only, never addresses. */
+    private static String describeProxies(TrustedProxies proxies) {
+        int proxyProtocol = proxies.proxyProtocol().entries().size();
+        int forwardedFor = proxies.forwardedFor().entries().size();
+        return (proxyProtocol == 0 ? "" : "; PROXY protocol from " + ranges(proxyProtocol))
+                + (forwardedFor == 0 ? "" : "; X-Forwarded-For from " + ranges(forwardedFor));
+    }
+
+    private static String ranges(int count) {
+        return count + (count == 1 ? " range" : " ranges");
     }
 
     /**
