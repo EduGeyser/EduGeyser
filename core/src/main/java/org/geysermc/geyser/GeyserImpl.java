@@ -28,9 +28,7 @@ package org.geysermc.geyser;
 import com.google.gson.Gson;
 import com.google.gson.reflect.TypeToken;
 import io.netty.channel.epoll.Epoll;
-import io.netty.util.NettyRuntime;
 import io.netty.util.concurrent.DefaultThreadFactory;
-import io.netty.util.internal.SystemPropertyUtil;
 import lombok.AccessLevel;
 import lombok.Getter;
 import lombok.Setter;
@@ -83,7 +81,6 @@ import org.geysermc.geyser.extension.GeyserExtensionManager;
 import org.geysermc.geyser.impl.MinecraftVersionImpl;
 import org.geysermc.geyser.level.BedrockDimension;
 import org.geysermc.geyser.level.WorldManager;
-import org.geysermc.geyser.network.RaknetServer;
 import org.geysermc.geyser.network.bedrock.GameProtocol;
 import org.geysermc.geyser.network.nethernet.NethernetManagerImpl;
 import org.geysermc.geyser.ping.GeyserLegacyPingPassthrough;
@@ -189,7 +186,6 @@ public class GeyserImpl implements GeyserApi, EventRegistrar {
 
     private ScoreboardUpdater scoreboardUpdater;
 
-    private RaknetServer geyserServer;
     private NethernetManagerImpl nethernetManagerImpl;
     private EducationUuidScheme educationUuidScheme = EducationUuidScheme.MODERN;
     private final GeyserBootstrap bootstrap;
@@ -363,8 +359,7 @@ public class GeyserImpl implements GeyserApi, EventRegistrar {
 
         // Warnings to users who enable options that they might not need.
         if (config.advanced().bedrock().useHaproxyProtocol()) {
-            logger.warning("Geyser is configured to expect HAProxy protocol for incoming Bedrock connections.");
-            logger.warning("If you do not know what this is, open the Geyser config, and set \"use-haproxy-protocol\" under the  \"advanced/bedrock\" section to \"false\".");
+            logger.warning("\"use-haproxy-protocol\" under the \"advanced/bedrock\" section has no effect: it applies to RakNet, which is off.");
         }
 
         if (config.advanced().java().useHaproxyProtocol()) {
@@ -509,36 +504,8 @@ public class GeyserImpl implements GeyserApi, EventRegistrar {
             logger.debug("Epoll is not available; Erosion's Unix socket handling will not work.");
         }
 
-        int bedrockThreadCount = Integer.getInteger("Geyser.BedrockNetworkThreads", -1);
-        if (bedrockThreadCount == -1) {
-            // Copy the code from Netty's default thread count fallback
-            bedrockThreadCount = Math.max(1, SystemPropertyUtil.getInt("io.netty.eventLoopThreads", NettyRuntime.availableProcessors() * 2));
-        }
-
-        this.geyserServer = new RaknetServer(this, bedrockThreadCount);
-        this.geyserServer.bind(new InetSocketAddress(config.bedrock().address(), config.bedrock().port()))
-            .whenComplete((avoid, throwable) -> {
-                String address = config.bedrock().address();
-                String port = String.valueOf(config.bedrock().port()); // otherwise we get commas
-
-                if (throwable == null) {
-                    if ("0.0.0.0".equals(address)) {
-                        // basically just hide it in the log because some people get confused and try to change it
-                        logger.info(brand(GeyserLocale.getLocaleStringLog("geyser.core.start.ip_suppressed", port)));
-                    } else {
-                        logger.info(brand(GeyserLocale.getLocaleStringLog("geyser.core.start", address, port)));
-                    }
-                } else {
-                    logger.severe(GeyserLocale.getLocaleStringLog("geyser.core.fail", address, port));
-                    if (!"0.0.0.0".equals(address)) {
-                        logger.info(Component.text("Suggestion: try setting `address` under `bedrock` in the Geyser config back to 0.0.0.0", NamedTextColor.GREEN));
-                        logger.info(Component.text("Then, restart this server.", NamedTextColor.GREEN));
-                    }
-                }
-            }).join();
-
-        // Initialize Nethernet (WebRTC) transport
-        initializeNethernet();
+        // NetherNet is the only Bedrock transport: RakNet is not bound.
+        startNethernet();
 
         if (config.java().authType() == AuthType.FLOODGATE) {
             try {
@@ -629,25 +596,44 @@ public class GeyserImpl implements GeyserApi, EventRegistrar {
         return session.transfer(address, port);
     }
 
-    private void initializeNethernet() {
+    /**
+     * Creates the NetherNet manager and starts its server, which takes the
+     * Bedrock address and port: ICE on UDP, HTTP signaling on TCP. Any
+     * failure here leaves Bedrock players no way in.
+     */
+    private void startNethernet() {
         GeyserLogger log = getLogger();
+        String address = config().bedrock().address();
+        String port = String.valueOf(config().bedrock().port()); // otherwise we get commas
         try {
             NethernetIds ids = loadOrGenerateNethernetIds(log);
-            if (ids == null) {
-                return;
+            if (ids != null) {
+                this.nethernetManagerImpl = new NethernetManagerImpl(this,
+                        ids.connectionId(), ids.playfabCustomId(), ids.playfabDeviceId());
             }
-
-            var playerGroup = this.geyserServer.getInitializer().getEventLoopGroup();
-            this.nethernetManagerImpl = new NethernetManagerImpl(this, playerGroup,
-                    ids.connectionId(), ids.playfabCustomId(), ids.playfabDeviceId());
-            log.debug("[Nethernet] Transport initialized");
         } catch (Throwable t) {
-            log.warning("[Nethernet] Transport unavailable: " + t.getMessage());
-            if (config().debugMode()) {
-                t.printStackTrace();
-            }
+            log.severe("[Nethernet] Transport unavailable: " + t.getMessage(), t);
             this.nethernetManagerImpl = null;
         }
+
+        if (nethernetManagerImpl == null || !nethernetManagerImpl.start()) {
+            log.severe(GeyserLocale.getLocaleStringLog("geyser.core.fail", address, port)
+                    + ": NetherNet did not start, and RakNet is off, so no Bedrock player can join");
+            if (!"0.0.0.0".equals(address)) {
+                log.info(Component.text("Suggestion: try setting `address` under `bedrock` in the Geyser config back to 0.0.0.0", NamedTextColor.GREEN));
+                log.info(Component.text("Then, restart this server.", NamedTextColor.GREEN));
+            }
+            return;
+        }
+
+        InetSocketAddress ice = nethernetManagerImpl.iceAddress();
+        InetSocketAddress http = nethernetManagerImpl.httpSignalingAddress();
+        // The address stays out of the line for 0.0.0.0, as before: people
+        // seeing it tend to change it
+        String where = "0.0.0.0".equals(address) ? "" : address + ", ";
+        String ports = "UDP port " + (ice != null ? ice.getPort() : port) + " (ICE)"
+                + (http != null ? " and TCP port " + http.getPort() + " (HTTP signaling)" : ", without HTTP signaling");
+        log.info(brand("Started Geyser on " + where + ports + ", NetherNet only. RakNet is off."));
     }
 
     private record NethernetIds(String connectionId, String playfabCustomId, String playfabDeviceId) {
@@ -746,7 +732,6 @@ public class GeyserImpl implements GeyserApi, EventRegistrar {
         runIfNonNull(metrics, MetricsBase::shutdown);
         runIfNonNull(scheduledThread, ScheduledExecutorService::shutdown);
         runIfNonNull(scoreboardUpdater, ScoreboardUpdater::shutdown);
-        runIfNonNull(geyserServer, RaknetServer::shutdown);
         SkinProvider.shutdown();
         runIfNonNull(skinUploader, FloodgateSkinUploader::close);
         runIfNonNull(newsHandler, NewsHandler::shutdown);

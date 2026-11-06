@@ -125,8 +125,8 @@ import java.util.concurrent.atomic.AtomicReference;
  * validation kills its authorization (RFC 8555), so the preferred type also
  * alternates across retries for redundancy against one blocked port. Any
  * failure (ports busy, NAT, rate limits, no public IPv4) logs a warning,
- * backs off, and leaves the listener serving plaintext; clients silently
- * fall back to RakNet and nobody is locked out.
+ * backs off, and leaves the listener serving plaintext: TLS is refused, so
+ * clients fall back to plain HTTP and nobody is locked out.
  *
  * Deliberately configuration free: manual certificate files are the opt
  * out (they take precedence and this manager is never created), the
@@ -251,8 +251,9 @@ public final class NetherNetCertificateManager implements TlsContextSelector, Au
      * The TLS context to serve, or null while no valid certificate exists.
      * An expired certificate is withdrawn rather than served: clients treat
      * an invalid certificate as terminal for signaling and go to RakNet,
-     * while a server that refuses TLS outright sends 26.40 and later
-     * clients to plain HTTP and their TOFU flow, keeping NetherNet alive.
+     * which this server does not serve, while a server that refuses TLS
+     * outright sends clients to plain HTTP (26.40 and later with their TOFU
+     * flow), keeping NetherNet alive.
      * Consulted per connection, so withdrawal needs no rebind and reverses
      * itself the moment a renewal succeeds.
      */
@@ -276,7 +277,8 @@ public final class NetherNetCertificateManager implements TlsContextSelector, Au
      * Publishes a freshly adopted or issued certificate atomically with its
      * expiry, unless a stock client would reject it, in which case TLS is
      * withdrawn instead: serving rejected material sends clients to RakNet,
-     * refusing TLS sends 26.40 and later to plain HTTP and their TOFU flow.
+     * which this server does not serve, while refusing TLS sends them to plain
+     * HTTP (26.40 and later with their TOFU flow).
      * For a certificate this manager just obtained from Let's Encrypt a
      * rejection is pathological (a JVM trust store without the ISRG root),
      * but the same gate applies to every certificate regardless of origin.
@@ -462,8 +464,8 @@ public final class NetherNetCertificateManager implements TlsContextSelector, Au
             }
             String message = LOG_PREFIX + "Certificate maintenance failed (" + detail
                     + "); retrying in " + backoffMinutes + " minutes. HTTP signaling stays "
-                    + (currentContext() != null ? "on the previous certificate" : "plaintext")
-                    + " and clients fall back to RakNet as needed";
+                    + (currentContext() != null ? "on the previous certificate"
+                            : "plaintext, so clients fall back to plain HTTP");
             // Warn once per failure streak; permanently unreachable servers
             // (LAN only) otherwise repeat this every backoff period forever.
             if (failureWarned) {

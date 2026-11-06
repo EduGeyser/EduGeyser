@@ -60,8 +60,8 @@ import java.util.concurrent.TimeUnit;
  * before being served, and expiry is re-checked per connection, because a
  * certificate a stock client rejects is strictly worse than none: the 26.40
  * client treats an invalid certificate as terminal for signaling and goes to
- * RakNet, while a server that refuses TLS outright sends it to plain HTTP and
- * its TOFU flow. Returning null here is that refusal. For the same reason a
+ * RakNet, which this server does not serve, while a server that refuses TLS
+ * outright sends it to plain HTTP and its TOFU flow. Returning null here is that refusal. For the same reason a
  * connection is only served a certificate that names what the client asked
  * for: the domain it sent as SNI, or an IP address when it sent none, which
  * clients do when they dial an IP.

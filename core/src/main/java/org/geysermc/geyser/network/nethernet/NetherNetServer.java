@@ -47,6 +47,7 @@ import io.netty.channel.group.ChannelGroup;
 import io.netty.channel.group.DefaultChannelGroup;
 import io.netty.channel.nio.NioIoHandler;
 import io.netty.util.concurrent.GlobalEventExecutor;
+import org.checkerframework.checker.nullness.qual.Nullable;
 import org.cloudburstmc.protocol.bedrock.BedrockPong;
 import org.geysermc.geyser.GeyserImpl;
 import org.geysermc.geyser.GeyserLogger;
@@ -71,12 +72,15 @@ import java.util.concurrent.atomic.AtomicBoolean;
 /**
  * Nethernet (WebRTC) server: one NetherNet endpoint that takes joins from two
  * sources. Connections pipe directly into Geyser's session handling via the
- * Bedrock protocol pipeline.
+ * Bedrock protocol pipeline. This is Geyser's only Bedrock transport: RakNet
+ * is not bound.
  *
  * Xbox RPC signaling (Type 7, JSON-RPC: the messaging endpoint with PmsgId,
  * used by Bedrock 26.20+ and Education 26.30+) carries join codes and
- * connection IDs. HTTP signaling, served locally on TCP under the Bedrock
- * port, carries direct connections. LAN discovery stays off.
+ * connection IDs. HTTP signaling, served on TCP at the Bedrock address and
+ * port, carries direct connections and joins from the Education server list.
+ * Every player's ICE traffic arrives on one UDP port, the Bedrock port, for
+ * joins from either source. LAN discovery stays off.
  *
  * The endpoint admits an offer only when it proves the client's key, attested
  * by Minecraft's issuer or not (Education's self signed tokens prove theirs
@@ -112,6 +116,11 @@ public class NetherNetServer {
      * answer.
      */
     private static final Duration RESTART_WAIT = Duration.ofSeconds(60);
+    /**
+     * How long shutdown waits for the WebRTC engine to release its peers and
+     * the ICE port, so that a start right after it can bind the port again.
+     */
+    private static final Duration ENGINE_CLOSE_WAIT = Duration.ofSeconds(10);
 
     private final GeyserImpl geyser;
     private final GeyserLogger logger;
@@ -131,8 +140,13 @@ public class NetherNetServer {
     private EventLoopGroup bossGroup;
     private EventLoopGroup workerGroup;
 
+    // Owned here rather than by the endpoint: closing the endpoint closes the
+    // ICE port later, on the engine's threads, and only the engine's close
+    // stage says when the port is free again.
+    private WebRtcEngine engine;
     private Channel endpointChannel;
     private volatile NetherNetXboxRpcSignaling xboxSignaling;
+    private volatile NetherNetHttpSignaling httpSignaling;
     private NetherNetCertificateManager certificateManager;
 
     private volatile XboxSignalingTokens signalingTokens;
@@ -168,9 +182,13 @@ public class NetherNetServer {
     }
 
     /**
-     * Starts the Nethernet server. Acquires an MCToken via PlayFab, binds the
-     * endpoint with its HTTP and Xbox sources, and begins accepting WebRTC
-     * connections. The Xbox signaling socket connects in the background.
+     * Starts the Nethernet server: binds the endpoint and its ICE port, serves
+     * HTTP signaling, acquires an MCToken via PlayFab, and adds Xbox
+     * signaling, whose socket connects in the background.
+     *
+     * Without a token Xbox signaling keeps retrying in the background, so
+     * this still returns true; only the endpoint itself failing to bind
+     * fails the start.
      *
      * @return true if the server started successfully
      */
@@ -179,16 +197,6 @@ public class NetherNetServer {
             return true;
         }
 
-        // Fetched here rather than left to the Xbox source's first attempt:
-        // callers read the pmid as soon as this returns (the extension
-        // registers join codes with it). The first attempt reuses this token.
-        String mcToken = tokenManager.authenticate();
-        if (mcToken == null) {
-            logger.error(LOG_PREFIX + "Failed to obtain MCToken from PlayFab");
-            return false;
-        }
-
-        signalingTokens = new XboxSignalingTokens(tokenManager);
         statusRefreshExecutor = Executors.newSingleThreadExecutor(runnable -> {
             Thread thread = new Thread(runnable, "Nethernet Status");
             thread.setDaemon(true);
@@ -210,6 +218,14 @@ public class NetherNetServer {
 
         running = true;
 
+        // Fetched here, after HTTP signaling serves, rather than left to the
+        // Xbox source's first attempt: callers read the pmid as soon as this
+        // returns (the extension registers join codes with it). The source
+        // starts only afterwards, since PlayFabTokenManager takes one
+        // authentication at a time; its first attempt reuses this token.
+        String mcToken = tokenManager.authenticate();
+        startXboxSignaling();
+
         // The connection ID clients type is the connection id followed by the
         // 32 hex pmid of the signaling MCToken. The pmid is bound to the
         // anonymous PlayFab account (verified: a full re-auth with the same
@@ -217,12 +233,15 @@ public class NetherNetServer {
         // persisted in connection-id.yml, so this value is stable across
         // restarts.
         String pmid = tokenManager.getPmsgId();
-        if (pmid != null) {
+        if (mcToken == null) {
+            logger.warning(LOG_PREFIX + "No MCToken from PlayFab yet: join codes and connection IDs wait until"
+                    + " Xbox signaling gets one, which it keeps trying in the background");
+        } else if (pmid != null) {
             logger.info(LOG_PREFIX + "Listening on connection ID: "
                     + connectionId + pmid.replace("-", "").toLowerCase());
         } else {
             logger.warning(LOG_PREFIX + "The MCToken has no pmid claim: there is no connection ID to give out"
-                    + " and Nethernet joins will not work (connection id number: " + connectionId + ")");
+                    + " and joins through Xbox signaling will not work (connection id number: " + connectionId + ")");
         }
         return true;
     }
@@ -300,6 +319,18 @@ public class NetherNetServer {
         return tokenManager.getPmsgId();
     }
 
+    /** Where the endpoint takes ICE traffic: the Bedrock address and port, UDP; null when not bound. */
+    public @Nullable InetSocketAddress iceAddress() {
+        Channel endpoint = endpointChannel;
+        return endpoint != null ? (InetSocketAddress) endpoint.localAddress() : null;
+    }
+
+    /** Where HTTP signaling listens, TCP; null when it is not bound. */
+    public @Nullable InetSocketAddress httpSignalingAddress() {
+        NetherNetHttpSignaling http = httpSignaling;
+        return http != null ? http.boundAddress() : null;
+    }
+
     private boolean bind() {
         ServerIdentity identity;
         try {
@@ -315,54 +346,73 @@ public class NetherNetServer {
 
         this.bossGroup = new MultiThreadIoEventLoopGroup(1, NioIoHandler.newFactory());
         this.workerGroup = new MultiThreadIoEventLoopGroup(workerThreads(), NioIoHandler.newFactory());
+        this.engine = createEngine();
 
         NetherNetServerInitializer childHandler = new NetherNetServerInitializer(geyser, playerEventLoopGroup, playerChannels);
 
         try {
-            // The endpoint creates its engine when it binds and closes it with
-            // itself, so a failed bind leaves no native state behind. ICE
-            // takes ports per session: RakNet holds the Bedrock UDP port, and
-            // a separate shared ICE port is not chosen yet.
+            // Bound at the Bedrock address and port: with the shared ICE port
+            // every peer gathers its host candidates there, UDP, next to HTTP
+            // signaling on TCP. The bind fails at once when the UDP port is
+            // taken; the engine opens it afterwards on its own threads.
             ServerBootstrap bootstrap = new ServerBootstrap();
             bootstrap.group(bossGroup, workerGroup)
-                    .channelFactory(NetherNetChannelFactory.server(NetherNetServer::createEngine))
+                    .channelFactory(NetherNetChannelFactory.server(engine))
                     .option(NetherChannelOption.NETHER_SERVER_IDENTITY, identity)
-                    .option(NetherChannelOption.NETHER_SERVER_SHARED_ICE_PORT, false)
+                    .option(NetherChannelOption.NETHER_SERVER_SHARED_ICE_PORT, true)
                     .childHandler(childHandler);
-            this.endpointChannel = bindChannel(bootstrap, new InetSocketAddress(0));
-            NetherNetServerChannel endpoint = (NetherNetServerChannel) endpointChannel;
-
-            // Starts connecting in the background once added; binding never
-            // waits for Xbox, and the source recovers from outages by itself.
-            NetherNetXboxRpcSignaling xbox = new NetherNetXboxRpcSignaling(connectionId, signalingTokens);
-            xbox.addHealthListener(this::logSignalingHealth);
-            this.xboxSignaling = xbox;
-            endpoint.addSource(xbox);
-
-            // HTTP signaling: the direct connection front end, on TCP under
-            // the same port RakNet serves on UDP. Purely additive and always
-            // attempted; any failure logs a warning and everything else keeps
-            // running, since updated clients silently fall back to RakNet.
-            try {
-                bindHttpSignaling(endpoint);
-            } catch (Exception e) {
-                logger.warning(LOG_PREFIX + "HTTP signaling unavailable (" + e.getMessage()
-                        + "); direct connections will use RakNet");
-            }
-
-            return true;
+            this.endpointChannel = bindChannel(bootstrap, bedrockAddress());
         } catch (Exception e) {
-            logger.error(LOG_PREFIX + "Failed to bind: " + e.getMessage());
-            // A bound endpoint closes its sources and its engine on close.
-            if (endpointChannel != null) {
-                endpointChannel.close();
-                endpointChannel = null;
-            }
-            xboxSignaling = null;
-            if (bossGroup != null) { bossGroup.shutdownGracefully(); bossGroup = null; }
-            if (workerGroup != null) { workerGroup.shutdownGracefully(); workerGroup = null; }
+            // The caller's shutdown releases what was created
+            logger.error(LOG_PREFIX + "Failed to bind UDP " + describe(bedrockAddress()) + ": " + describe(e));
             return false;
         }
+        logger.info(LOG_PREFIX + "ICE on UDP port " + iceAddress().getPort() + ", shared by every player");
+
+        // HTTP signaling: the only way into this server for direct connections
+        // and Education server list joins. A failure leaves the endpoint
+        // running for Xbox signaling.
+        try {
+            bindHttpSignaling((NetherNetServerChannel) endpointChannel);
+        } catch (Exception e) {
+            logger.error(LOG_PREFIX + "HTTP signaling unavailable on TCP " + describe(bedrockAddress()) + " ("
+                    + describe(e) + "): direct and server list joins will not work, only join codes and"
+                    + " connection IDs" + (geyser.config().bedrock().port() == geyser.config().java().port()
+                    ? ". The Bedrock port is the Java server's port, whose TCP side a Java server on this machine"
+                    + " holds (clone-remote-port does this)" : ""));
+        }
+        return true;
+    }
+
+    /**
+     * Adds Xbox signaling to the endpoint. Its socket connects in the
+     * background and recovers from outages by itself, asking for a token on
+     * every attempt.
+     */
+    private void startXboxSignaling() {
+        XboxSignalingTokens tokens = new XboxSignalingTokens(tokenManager);
+        NetherNetXboxRpcSignaling xbox = new NetherNetXboxRpcSignaling(connectionId, tokens);
+        xbox.addHealthListener(this::logSignalingHealth);
+        try {
+            ((NetherNetServerChannel) endpointChannel).addSource(xbox);
+        } catch (IllegalStateException e) {
+            // The endpoint closed itself meanwhile, as when the engine could
+            // not open the ICE port after all; it logged why.
+            logger.error(LOG_PREFIX + "Xbox signaling not started: " + e.getMessage());
+            xbox.close();
+            tokens.close();
+            return;
+        }
+        this.signalingTokens = tokens;
+        this.xboxSignaling = xbox;
+    }
+
+    private InetSocketAddress bedrockAddress() {
+        return new InetSocketAddress(geyser.config().bedrock().address(), geyser.config().bedrock().port());
+    }
+
+    private static String describe(InetSocketAddress address) {
+        return address.getHostString() + ":" + address.getPort();
     }
 
     /**
@@ -383,10 +433,12 @@ public class NetherNetServer {
     }
 
     /**
-     * Binds the HTTP signaling front end on the Bedrock port, TCP, and adds
-     * it to the endpoint. Updated clients (26.30+) probe this before falling
-     * back to RakNet, so even a fast negative answer speeds their joins up; a
-     * completed exchange joins them over NetherNet without RakNet at all.
+     * Binds the HTTP signaling front end on the Bedrock address and port,
+     * TCP, and adds it to the endpoint. Retail clients joining by address and
+     * Education clients joining from the server list signal here; Education
+     * tries HTTPS first and plain HTTP after a refused TLS connection, and
+     * would fall back to RakNet only after both, which this server no longer
+     * serves.
      */
     private void bindHttpSignaling(NetherNetServerChannel endpoint) throws ConnectException {
         // Manual certificate files win and are the ACME opt out (never
@@ -417,10 +469,8 @@ public class NetherNetServer {
                 .tls(tlsSelector)
                 .statusProvider(this::serveServerStatus)
                 .build();
-        InetSocketAddress bindAddress = new InetSocketAddress(
-                geyser.config().bedrock().address(), geyser.config().bedrock().port());
         try {
-            http.bind(bindAddress);
+            http.bind(bedrockAddress());
         } catch (ConnectException e) {
             // A failed bind closes the signaling and leaves no state behind.
             if (certificateManager != null) {
@@ -430,7 +480,8 @@ public class NetherNetServer {
             throw e;
         }
         endpoint.addSource(http);
-        logger.info(LOG_PREFIX + "HTTP signaling on TCP port " + bindAddress.getPort() + " (" + tlsMode + ")");
+        this.httpSignaling = http;
+        logger.info(LOG_PREFIX + "HTTP signaling on TCP port " + http.boundAddress().getPort() + " (" + tlsMode + ")");
         if (certificateManager != null) {
             certificateManager.start();
         }
@@ -522,10 +573,8 @@ public class NetherNetServer {
     /**
      * Builds the status document: the NetherNet equivalent of the RakNet
      * unconnected pong, matching vanilla's fourteen member ServerData
-     * document. Built by the same {@link BedrockPingHandler} the RakNet
-     * listener answers pings with, MOTD passthrough, the ping event, and the
-     * fallbacks included, so the two transports always describe the server
-     * identically.
+     * document. Built by {@link BedrockPingHandler}, MOTD passthrough, the
+     * ping event, and the fallbacks included, as the RakNet pong was.
      *
      * Both auth bits are true because we accept Microsoft attested and self
      * signed identities alike: the endpoint requires a proven client key, not
@@ -602,7 +651,7 @@ public class NetherNetServer {
     }
 
     /**
-     * Creates the endpoint's WebRTC engine. One factory equals one native
+     * Creates the WebRTC engine for one start. One factory equals one native
      * network thread carrying the DTLS and SCTP work of every peer connection
      * assigned to it, so the pool size caps how many threads the data plane
      * can spread players across. Each factory spawns three native threads
@@ -625,16 +674,30 @@ public class NetherNetServer {
             playerChannels.close().awaitUninterruptibly(3, TimeUnit.SECONDS);
         }
 
-        // Closes both sources too; the engine follows once every peer is gone.
+        // Closes both sources too
         if (endpointChannel != null) {
             endpointChannel.close().syncUninterruptibly();
             endpointChannel = null;
+        }
+        if (engine != null) {
+            // Waits for every peer and the ICE port, so a start right after
+            // this, as a restart or a reload does, can bind the port again.
+            try {
+                engine.close().toCompletableFuture().get(ENGINE_CLOSE_WAIT.toMillis(), TimeUnit.MILLISECONDS);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+            } catch (ExecutionException | TimeoutException e) {
+                logger.warning(LOG_PREFIX + "The WebRTC engine did not close cleanly within "
+                        + ENGINE_CLOSE_WAIT.toSeconds() + " s; the ICE port may still be held");
+            }
+            engine = null;
         }
         if (certificateManager != null) {
             certificateManager.close();
             certificateManager = null;
         }
         xboxSignaling = null;
+        httpSignaling = null;
         if (bossGroup != null) {
             bossGroup.shutdownGracefully(0, 5, TimeUnit.SECONDS).syncUninterruptibly();
             bossGroup = null;
