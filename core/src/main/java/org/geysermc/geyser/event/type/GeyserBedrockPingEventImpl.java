@@ -37,10 +37,27 @@ import java.util.Objects;
 public class GeyserBedrockPingEventImpl implements GeyserBedrockPingEvent {
     private final InetSocketAddress address;
     private final BedrockPong pong;
+    private final String initialPrimaryMotd;
+    private final String initialSecondaryMotd;
+    private final int initialPlayerCount;
+    private final int initialMaxPlayerCount;
 
     public GeyserBedrockPingEventImpl(BedrockPong pong, InetSocketAddress address) {
         this.address = address;
         this.pong = pong;
+        this.initialPrimaryMotd = pong.motd();
+        this.initialSecondaryMotd = pong.subMotd();
+        this.initialPlayerCount = pong.playerCount();
+        this.initialMaxPlayerCount = pong.maximumPlayerCount();
+    }
+
+    /**
+     * @return whether listeners left the pong different from how it was built. A listener sees
+     * {@link #address()}, so a changed pong may have been chosen for that address alone.
+     */
+    public boolean changedPong() {
+        return !Objects.equals(initialPrimaryMotd, pong.motd()) || !Objects.equals(initialSecondaryMotd, pong.subMotd())
+            || initialPlayerCount != pong.playerCount() || initialMaxPlayerCount != pong.maximumPlayerCount();
     }
 
     @Override

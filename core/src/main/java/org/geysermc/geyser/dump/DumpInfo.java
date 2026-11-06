@@ -47,6 +47,8 @@ import org.geysermc.geyser.api.extension.Extension;
 import org.geysermc.geyser.api.util.MinecraftVersion;
 import org.geysermc.geyser.network.ConnectionRequests;
 import org.geysermc.geyser.network.bedrock.GameProtocol;
+import org.geysermc.geyser.network.nethernet.NetherNetServer;
+import org.geysermc.geyser.network.nethernet.NethernetManagerImpl;
 import org.geysermc.geyser.pack.ResourcePackHolder;
 import org.geysermc.geyser.registry.BlockRegistries;
 import org.geysermc.geyser.registry.Registries;
@@ -74,10 +76,12 @@ import java.time.ZoneId;
 import java.time.format.DateTimeFormatter;
 import java.time.temporal.ChronoUnit;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.Set;
 import java.util.stream.Collectors;
 
 @Getter
@@ -103,6 +107,7 @@ public class DumpInfo {
     private final List<ExtensionInfo> extensionInfo;
     private final List<PackInfo> packInfo;
     private final MappingInfo mappingInfo;
+    private final @Nullable NetherNetInfo netherNetInfo;
 
     public DumpInfo(GeyserImpl geyser, boolean addLog) {
         this.versionInfo = new VersionInfo();
@@ -173,6 +178,9 @@ public class DumpInfo {
             Registries.ITEMS.forVersion(GameProtocol.DEFAULT_BEDROCK_PROTOCOL).getCustomIdMappings().size(),
             Registries.BEDROCK_ENTITY_DEFINITIONS.get().values().stream().filter(def -> def instanceof CustomEntityDefinition).toArray().length
         );
+
+        this.netherNetInfo = geyser.nethernetManager() instanceof NethernetManagerImpl manager
+            ? NetherNetInfo.of(manager.announced()) : null;
     }
 
     private JsonElement toGson(ConfigurationNode node) {
@@ -368,11 +376,30 @@ public class DumpInfo {
     }
 
     /**
-     * E.G. `-Xmx1024M` - all runtime JVM flags on this machine
+     * E.G. `-Xmx1024M` - all runtime JVM flags on this machine. The values of the system properties that carry
+     * addresses are censored like the addresses in the config.
      */
     public record FlagsInfo(List<String> flags) {
+        /** The system properties whose values are comma separated addresses or address-like entries. */
+        private static final Set<String> ADDRESS_PROPERTIES =
+            Set.of("geyserAdvertiseAddresses", "geyserStunServers", "geyserUdpAddress", "pluginUdpAddress");
+
+        public FlagsInfo {
+            flags = flags.stream().map(FlagsInfo::censor).toList();
+        }
+
         public FlagsInfo() {
             this(ManagementFactory.getRuntimeMXBean().getInputArguments());
+        }
+
+        private static String censor(String flag) {
+            int equals = flag.indexOf('=');
+            if (!flag.startsWith("-D") || equals < 0 || !ADDRESS_PROPERTIES.contains(flag.substring(2, equals))) {
+                return flag;
+            }
+            return flag.substring(0, equals + 1) + Arrays.stream(flag.substring(equals + 1).split(",", -1))
+                .map(entry -> AsteriskSerializer.censor(entry.strip()))
+                .collect(Collectors.joining(","));
         }
     }
 
@@ -393,5 +420,25 @@ public class DumpInfo {
     }
 
     public record MappingInfo(int customBlocks, int customSkulls, int customItems, int customEntities) {
+    }
+
+    /**
+     * What NetherNet answers announce about this server, see {@link NetherNetServer#announced()}.
+     * Addresses are censored like the configured ones unless the dump is full.
+     *
+     * @param advertised    the advertised addresses. When empty, answers carry this machine's own
+     *                      addresses, the address an HTTP join's Host header names, and {@code discovered}
+     * @param stunDiscovery whether STUN discovery runs
+     * @param discovered    the public addresses STUN discovery currently finds
+     */
+    public record NetherNetInfo(List<String> advertised, boolean stunDiscovery, List<String> discovered) {
+        static @Nullable NetherNetInfo of(NetherNetServer.@Nullable Announced announced) {
+            return announced == null ? null : new NetherNetInfo(censor(announced.advertised()),
+                announced.stunDiscovery(), censor(announced.discovered()));
+        }
+
+        private static List<String> censor(List<InetSocketAddress> addresses) {
+            return addresses.stream().map(AsteriskSerializer::censor).toList();
+        }
     }
 }

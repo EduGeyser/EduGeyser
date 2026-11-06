@@ -124,6 +124,31 @@ public interface GeyserConfig {
     }
 
     @ConfigSerializable
+    interface SignalingConfig {
+        @Comment("""
+            The addresses sent to joining players for the NetherNet connection, however they join,
+            e.g. play.example.com, 198.51.100.1 or [2001:db8::1]:19133. If no port is given, the Bedrock port is used.
+            A host name is looked up when NetherNet starts, and NetherNet stops if it does not resolve.
+            You can list an address this machine does not have, such as your public IP, if your router forwards
+            the Bedrock port (UDP) to this machine. You need to set up the port forwarding yourself.
+            Listing any address turns "stun-discovery" off.
+            Leave empty to use this machine's own addresses, plus the public address found with "stun-discovery".""")
+        @AsteriskSerializer.Asterisk
+        default List<String> advertiseAddresses() {
+            return List.of();
+        }
+
+        @Comment("""
+            Finds this server's public address by asking public STUN servers from the Bedrock port (UDP), when
+            "advertise-addresses" is empty. Players on other networks need that address when this server is behind a
+            router, and joins by join code or connection ID do not say which address the player reached.""")
+        @DefaultBoolean(true)
+        boolean stunDiscovery();
+
+        void stunDiscovery(boolean stunDiscovery);
+    }
+
+    @ConfigSerializable
     interface BedrockConfig extends BedrockListener {
         @Comment("""
                 The IP address that Geyser will bind on to listen for incoming Bedrock connections.
@@ -151,6 +176,11 @@ public interface GeyserConfig {
         @DefaultBoolean
         @PluginSpecific
         boolean cloneRemotePort();
+
+        @Comment("""
+            Signaling is how Bedrock players set up their NetherNet connection to this server: over HTTP on the
+            Bedrock port (TCP) for direct and server list joins, and over Xbox Live for join codes and connection IDs.""")
+        SignalingConfig signaling();
 
         void address(String address);
         void port(int port);
@@ -401,7 +431,7 @@ public interface GeyserConfig {
                 UDP relays in front of NetherNet's traffic on the UDP side of the Bedrock port that send a PROXY protocol v2 header
                 with each player's address. Leave this empty unless you run such a relay.
                 While set, players can only reach the UDP side through these relays, and answers no longer name this machine's addresses:
-                players need the relays' public addresses announced to them ("advertise-addresses"), or they can only connect
+                players need the relays' public addresses announced to them ("advertise-addresses" under "bedrock.signaling"), or they can only connect
                 through a TURN server, which only join codes and connection IDs hand out.
                 NetherNet does not start if none of the listed relays can be read, as when a linked list cannot be downloaded.
                 This is separate from the two lists above, which only cover HTTP signaling.

@@ -328,6 +328,28 @@ public class ConfigLoaderTest {
 
     @ParameterizedTest
     @MethodSource("platformTypes")
+    void testVersion7ConfigMigration(PlatformType platformType, Class<? extends GeyserConfig> configClass) throws Exception {
+        File file = copyResourceToTempFile("tests", "v7.yml");
+        GeyserConfig config = new ConfigLoader(file, platformType).load0(configClass);
+
+        assertNotNull(config);
+        // Version 8 adds the signaling section: no advertised addresses, STUN discovery on
+        assertEquals(List.of(), config.bedrock().signaling().advertiseAddresses());
+        assertTrue(config.bedrock().signaling().stunDiscovery());
+        // Version 7 values stay
+        assertEquals(19133, config.bedrock().port());
+        assertEquals("Version 7", config.motd().primaryMotd());
+        assertEquals(CooldownUtils.CooldownType.HOTBAR, config.gameplay().cooldownType());
+        assertEquals(Constants.CONFIG_VERSION, config.configVersion());
+
+        // The migrated file is written with the new section
+        CommentedConfigurationNode written = new ConfigLoader(file, platformType).loadConfigurationNode(configClass);
+        assertTrue(written.node("bedrock", "signaling", "advertise-addresses").isList());
+        assertTrue(written.node("bedrock", "signaling", "stun-discovery").getBoolean());
+    }
+
+    @ParameterizedTest
+    @MethodSource("platformTypes")
     void testPlatformSpecificFieldsInNode(PlatformType platformType, Class<? extends GeyserConfig> configClass) throws Exception {
         File file = tempDirectory.resolve("platform-test-" + platformType + ".yml").toFile();
         CommentedConfigurationNode config = new ConfigLoader(file, platformType).loadConfigurationNode(configClass);

@@ -113,4 +113,9 @@ record NetherNetProxies(TrustedProxies signaling, TrustedProxies relays) {
     boolean signalingProxied() {
         return !signaling.proxyProtocol().isEmpty() || !signaling.forwardedFor().isEmpty();
     }
+
+    /** @return Whether PROXY protocol relays front the ICE port, which rules out STUN discovery */
+    boolean relayed() {
+        return !relays.proxyProtocol().isEmpty();
+    }
 }

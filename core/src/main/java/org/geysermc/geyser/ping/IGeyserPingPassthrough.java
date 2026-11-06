@@ -55,4 +55,12 @@ public interface IGeyserPingPassthrough {
         return getPingInformation(inetSocketAddress);
     }
 
+    /**
+     * @return whether {@link #getPingInformation(InetSocketAddress, InetSocketAddress)} can answer differently per
+     * virtual host, so a caller that caches answers keeps one per host
+     */
+    default boolean usesVirtualHost() {
+        return false;
+    }
+
 }

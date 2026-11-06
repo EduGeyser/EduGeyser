@@ -213,6 +213,7 @@ public class ConfigMigrations {
                 .build())
             // RakNet is gone: listing HAProxy proxies turns the protocol on for HTTP signaling, and the keys only
             // RakNet read ("mtu", "broadcast-port") are not written back
+            // Version 8 also adds bedrock.signaling (advertise-addresses, stun-discovery), which needs no action
             .addVersion(8, ConfigurationTransformation.builder()
                 .addAction(path("advanced", "bedrock"), (path, value) -> {
                     foldHaproxySwitch(value, bootstrap == null ? null : bootstrap.getGeyserLogger());

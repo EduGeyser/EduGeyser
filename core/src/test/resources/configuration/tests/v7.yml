@@ -1,0 +1,8 @@
+bedrock:
+  address: 0.0.0.0
+  port: 19133
+motd:
+  primary-motd: "Version 7"
+gameplay:
+  cooldown-type: hotbar
+config-version: 7

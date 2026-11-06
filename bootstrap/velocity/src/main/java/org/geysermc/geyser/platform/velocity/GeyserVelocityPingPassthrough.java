@@ -56,6 +56,12 @@ public class GeyserVelocityPingPassthrough implements IGeyserPingPassthrough {
     }
 
     @Override
+    public boolean usesVirtualHost() {
+        // Listeners of the proxy ping event see the virtual host and can answer by it
+        return true;
+    }
+
+    @Override
     public GeyserPingInfo getPingInformation(InetSocketAddress inetSocketAddress, @Nullable InetSocketAddress virtualHost) {
         ProxyPingEvent event;
         try {

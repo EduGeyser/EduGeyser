@@ -468,6 +468,18 @@ public class GeyserImpl implements GeyserApi, EventRegistrar {
             }
         }
 
+        String stunDiscoveryProperty = System.getProperty("geyserStunDiscovery", "");
+        if (!stunDiscoveryProperty.isEmpty()) {
+            if (stunDiscoveryProperty.equalsIgnoreCase("true") || stunDiscoveryProperty.equalsIgnoreCase("false")) {
+                boolean stunDiscovery = Boolean.parseBoolean(stunDiscoveryProperty);
+                config.bedrock().signaling().stunDiscovery(stunDiscovery);
+                logger.info("STUN discovery set from system property: " + stunDiscovery);
+            } else {
+                logger.error("Invalid STUN discovery from system property: " + stunDiscoveryProperty
+                        + "! Use \"true\" or \"false\". Defaulting to the configured STUN discovery.");
+            }
+        }
+
         if (!(config instanceof GeyserPluginConfig)) {
             String remoteAddress = config.java().address();
             // Filters whether it is not an IP address or localhost, because otherwise it is not possible to find out an SRV entry.
