@@ -25,6 +25,8 @@
 
 package org.geysermc.geyser.util;
 
+import io.github.sendablemetatype.netty.util.nethernet.TransportIdentityBinding;
+import io.netty.channel.Channel;
 import net.raphimc.minecraftauth.msa.model.MsaDeviceCode;
 import org.cloudburstmc.protocol.bedrock.codec.BedrockCodec;
 import org.cloudburstmc.protocol.bedrock.data.auth.AuthPayload;
@@ -110,6 +112,10 @@ public class LoginEncryptionUtils {
             }
 
             PublicKey identityPublicKey = result.identityClaims().parsedIdentityPublicKey();
+
+            if (!transportAcceptsLoginKey(session, identityPublicKey)) {
+                return false;
+            }
 
             byte[] clientDataPayload = EncryptionUtils.verifyClientData(jwt, identityPublicKey);
             if (clientDataPayload == null) {
@@ -234,6 +240,28 @@ public class LoginEncryptionUtils {
             session.disconnect("disconnectionScreen.internalError.cantConnect");
             throw new RuntimeException("Unable to complete login", ex);
         }
+    }
+
+    /**
+     * Checks the login's identity key against the key the NetherNet offer proved. NetherNet skips
+     * the encryption handshake that binds a RakNet login to its key, so without this a Login
+     * captured from another player could be replayed over a new connection. Real clients sign the
+     * Login with the offer's key on every path, Education included (captured 2026-11-05). RakNet
+     * connections, and NetherNet ones whose offer proved no key, pass.
+     *
+     * @return whether the login may go on; if not, the session is being disconnected
+     */
+    static boolean transportAcceptsLoginKey(GeyserSession session, PublicKey identityPublicKey) {
+        Channel channel = session.getUpstream().getSession().getPeer().getChannel();
+        TransportIdentityBinding.Result binding = TransportIdentityBinding.verifyLogin(channel, identityPublicKey);
+        return switch (binding) {
+            case ACCEPTED, UNBOUND, NOT_NETHERNET -> true;
+            case MISMATCH, SPENT -> {
+                session.getGeyser().getLogger().debug("Login key refused by the NetherNet transport (" + binding + ")");
+                session.disconnect("The login is not signed with the key this connection was opened with.");
+                yield false;
+            }
+        };
     }
 
     /**
