@@ -244,10 +244,10 @@ public class LoginEncryptionUtils {
 
     /**
      * Checks the login's identity key against the key the NetherNet offer proved. NetherNet skips
-     * the encryption handshake that binds a RakNet login to its key, so without this a Login
+     * Bedrock encryption, whose handshake would bind the login to its key, so without this a Login
      * captured from another player could be replayed over a new connection. Real clients sign the
-     * Login with the offer's key on every path, Education included (captured 2026-11-05). RakNet
-     * connections, and NetherNet ones whose offer proved no key, pass.
+     * Login with the offer's key on every path, Education included (captured 2026-11-05). A
+     * channel without a binding, and one whose offer proved no key, passes.
      *
      * @return whether the login may go on; if not, the session is being disconnected
      */

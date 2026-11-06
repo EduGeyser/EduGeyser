@@ -38,44 +38,26 @@ import org.geysermc.geyser.text.GeyserLocale;
 import org.geysermc.geyser.translator.text.MessageTranslator;
 
 import java.net.InetSocketAddress;
-import java.nio.charset.StandardCharsets;
 
 /**
- * Handles Bedrock pings (either via raknet, or providing to the signaling server for nethernet).
+ * Builds the server status that NetherNet's HTTP signaling serves, from the MOTD settings, ping
+ * passthrough and the ping event.
  */
 public final class BedrockPingHandler {
     private static final boolean PRINT_DEBUG_PINGS = Boolean.parseBoolean(System.getProperty("Geyser.PrintPingsInDebugMode", "true"));
 
-    /*
-    The following constants are all used to ensure the ping does not reach a length where it is unparsable by the Bedrock client
-     */
-    private static final String PING_VERSION = GameProtocol.DEFAULT_BEDROCK_VERSION;
-    private static final int PING_VERSION_BYTES_LENGTH = PING_VERSION.getBytes(StandardCharsets.UTF_8).length;
-    private static final int BRAND_BYTES_LENGTH = GeyserImpl.NAME.getBytes(StandardCharsets.UTF_8).length;
-    /**
-     * The MOTD, sub-MOTD and Minecraft version ({@link #PING_VERSION_BYTES_LENGTH}) combined cannot reach this length.
-     */
-    private static final int MAGIC_RAKNET_LENGTH = 338;
-
     private final GeyserImpl geyser;
-
-    /**
-     * The port to broadcast in the pong. This can be different from the port the server is bound to, e.g. due to port forwarding.
-     */
-    private final int broadcastPort;
 
     public BedrockPingHandler(GeyserImpl geyser) {
         this.geyser = geyser;
-        this.broadcastPort = geyser.config().advanced().bedrock().broadcastPort();
     }
 
     /**
-     * @param serverId the server ID to advertise; the RakNet GUID when answering a RakNet ping
      * @param inetSocketAddress the address the query came from
-     * @param hostname the hostname the client queried, such as an HTTP Host header; null if unknown, e.g. for RakNet pings
-     * @return the pong to answer the query with
+     * @param hostname the hostname the client queried, such as an HTTP Host header; null if unknown
+     * @return the status to answer the query with
      */
-    public BedrockPong onQuery(long serverId, InetSocketAddress inetSocketAddress, @Nullable String hostname) {
+    public BedrockPong onQuery(InetSocketAddress inetSocketAddress, @Nullable String hostname) {
         // TODO probably pointless now with nethernet?
         if (geyser.config().debugMode() && PRINT_DEBUG_PINGS) {
             String ip = geyser.config().logPlayerIpAddresses() ? inetSocketAddress.toString() : "<IP address withheld>";
@@ -95,14 +77,9 @@ public final class BedrockPingHandler {
         }
 
         BedrockPong pong = new BedrockPong()
-                .edition("MCPE")
                 .gameType("Survival") // Can only be Survival or Creative as of 1.16.210.59
-                .nintendoLimited(false)
                 .protocolVersion(GameProtocol.DEFAULT_BEDROCK_PROTOCOL)
-                .version(PING_VERSION)
-                .ipv4Port(this.broadcastPort)
-                .ipv6Port(this.broadcastPort)
-                .serverId(serverId);
+                .version(GameProtocol.DEFAULT_BEDROCK_VERSION);
 
         if (config.motd().passthroughMotd() && pingInfo != null && pingInfo.getDescription() != null) {
             String[] motd = MessageTranslator.convertToPlainTextLenient(pingInfo.getDescription(), GeyserLocale.getDefaultLocale()).split("\n");
@@ -127,10 +104,6 @@ public final class BedrockPingHandler {
 
         this.geyser.eventBus().fire(new GeyserBedrockPingEventImpl(pong, inetSocketAddress));
 
-        // https://github.com/GeyserMC/Geyser/issues/3388
-        pong.motd(pong.motd().replace(';', ':'));
-        pong.subMotd(pong.subMotd().replace(';', ':'));
-
         // Fallbacks to prevent errors and allow Bedrock to see the server
         if (pong.motd() == null || pong.motd().isBlank()) {
             pong.motd(GeyserImpl.NAME);
@@ -138,24 +111,6 @@ public final class BedrockPingHandler {
         if (pong.subMotd() == null || pong.subMotd().isBlank()) {
             // Sub-MOTD cannot be empty as of 1.16.210.59
             pong.subMotd(GeyserImpl.NAME);
-        }
-
-        // The ping will not appear if the MOTD + sub-MOTD is of a certain length.
-        // We don't know why, though
-        byte[] motdArray = pong.motd().getBytes(StandardCharsets.UTF_8);
-        int subMotdLength = pong.subMotd().getBytes(StandardCharsets.UTF_8).length;
-        if (motdArray.length + subMotdLength > (MAGIC_RAKNET_LENGTH - PING_VERSION_BYTES_LENGTH)) {
-            // Shorten the sub-MOTD first since that only appears locally
-            if (subMotdLength > BRAND_BYTES_LENGTH) {
-                pong.subMotd(GeyserImpl.NAME);
-                subMotdLength = BRAND_BYTES_LENGTH;
-            }
-            if (motdArray.length > (MAGIC_RAKNET_LENGTH - PING_VERSION_BYTES_LENGTH - subMotdLength)) {
-                // If the top MOTD is still too long, we chop it down
-                byte[] newMotdArray = new byte[MAGIC_RAKNET_LENGTH - PING_VERSION_BYTES_LENGTH - subMotdLength];
-                System.arraycopy(motdArray, 0, newMotdArray, 0, newMotdArray.length);
-                pong.motd(new String(newMotdArray, StandardCharsets.UTF_8));
-            }
         }
 
         //Bedrock will not even attempt a connection if the client thinks the server is full

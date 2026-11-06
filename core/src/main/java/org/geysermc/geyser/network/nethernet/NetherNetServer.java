@@ -72,8 +72,7 @@ import java.util.concurrent.atomic.AtomicBoolean;
 /**
  * Nethernet (WebRTC) server: one NetherNet endpoint that takes joins from two
  * sources. Connections pipe directly into Geyser's session handling via the
- * Bedrock protocol pipeline. This is Geyser's only Bedrock transport: RakNet
- * is not bound.
+ * Bedrock protocol pipeline. This is EduGeyser's only Bedrock transport.
  *
  * Xbox RPC signaling (Type 7, JSON-RPC: the messaging endpoint with PmsgId,
  * used by Bedrock 26.20+ and Education 26.30+) carries join codes and
@@ -440,8 +439,8 @@ public class NetherNetServer {
      * TCP, and adds it to the endpoint. Retail clients joining by address and
      * Education clients joining from the server list signal here; Education
      * tries HTTPS first and plain HTTP after a refused TLS connection, and
-     * would fall back to RakNet only after both, which this server no longer
-     * serves.
+     * would fall back to RakNet only after both, which EduGeyser does not
+     * serve.
      */
     private void bindHttpSignaling(NetherNetServerChannel endpoint) throws ConnectException {
         // Manual certificate files win and are the ACME opt out (never
@@ -592,10 +591,9 @@ public class NetherNetServer {
     }
 
     /**
-     * Builds the status document: the NetherNet equivalent of the RakNet
-     * unconnected pong, matching vanilla's fourteen member ServerData
-     * document. Built by {@link BedrockPingHandler}, MOTD passthrough, the
-     * ping event, and the fallbacks included, as the RakNet pong was.
+     * Builds the status document, matching vanilla's fourteen member
+     * ServerData document, from {@link BedrockPingHandler}: MOTD passthrough,
+     * the ping event, and the fallbacks included.
      *
      * Both auth bits are true because we accept Microsoft attested and self
      * signed identities alike: the endpoint requires a proven client key, not
@@ -605,7 +603,7 @@ public class NetherNetServer {
      * probes that find no snapshot yet; never on I/O threads.
      */
     private NetherNetServerStatus buildServerStatus() {
-        BedrockPong pong = this.pingResponder.onQuery(0L, statusPingAddress(), null);
+        BedrockPong pong = this.pingResponder.onQuery(statusPingAddress(), null);
         return NetherNetServerStatus.builder()
                 .dataVersion(SERVER_DATA_VERSION)
                 .name(pong.motd())
