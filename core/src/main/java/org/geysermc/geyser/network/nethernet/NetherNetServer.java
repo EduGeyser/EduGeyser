@@ -375,6 +375,7 @@ public class NetherNetServer {
             return false;
         }
         this.addressing = addressing;
+        warnIfLoopback();
 
         this.bossGroup = new MultiThreadIoEventLoopGroup(1, NioIoHandler.newFactory());
         this.workerGroup = new MultiThreadIoEventLoopGroup(workerThreads(), NioIoHandler.newFactory());
@@ -442,6 +443,29 @@ public class NetherNetServer {
         }
         this.signalingTokens = tokens;
         this.xboxSignaling = xbox;
+    }
+
+    /**
+     * Warns when the Bedrock address is a loopback address, where no join
+     * can work. From the source, not measured: libwebrtc leaves loopback
+     * networks out by default (kDefaultNetworkIgnoreMask in
+     * rtc_base/network.h, applied in p2p/client/basic_port_allocator.cc),
+     * and the shared ICE port's allocator offers only the networks at its
+     * bound address, so peers gather no candidate at all, no host one and no
+     * STUN or TURN one either, as those start from a network too. NetworkM
+     * announces advertised addresses and the address in a Host header as
+     * translations of a gathered host candidate, and never a loopback Host,
+     * so answers name no address a client could check.
+     */
+    private void warnIfLoopback() {
+        InetAddress address = bedrockAddress().getAddress();
+        if (address != null && address.isLoopbackAddress()) {
+            logger.warning(LOG_PREFIX + "The Bedrock \"address\" " + geyser.config().bedrock().address()
+                    + " is a loopback address. WebRTC gathers no connection candidates there, so NetherNet answers"
+                    + " give players no address to connect to, even with \"advertise-addresses\", and every join"
+                    + " times out, including joins from this machine. Set \"address\" in the \"bedrock\" section to"
+                    + " 0.0.0.0, or to an address of this machine that players can reach.");
+        }
     }
 
     private InetSocketAddress bedrockAddress() {
