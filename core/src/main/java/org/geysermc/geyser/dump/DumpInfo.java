@@ -76,10 +76,12 @@ import java.time.ZoneId;
 import java.time.format.DateTimeFormatter;
 import java.time.temporal.ChronoUnit;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.Set;
 import java.util.stream.Collectors;
 
 @Getter
@@ -374,11 +376,30 @@ public class DumpInfo {
     }
 
     /**
-     * E.G. `-Xmx1024M` - all runtime JVM flags on this machine
+     * E.G. `-Xmx1024M` - all runtime JVM flags on this machine. The values of the system properties that carry
+     * addresses are censored like the addresses in the config.
      */
     public record FlagsInfo(List<String> flags) {
+        /** The system properties whose values are comma separated addresses or address-like entries. */
+        private static final Set<String> ADDRESS_PROPERTIES =
+            Set.of("geyserAdvertiseAddresses", "geyserStunServers", "geyserUdpAddress", "pluginUdpAddress");
+
+        public FlagsInfo {
+            flags = flags.stream().map(FlagsInfo::censor).toList();
+        }
+
         public FlagsInfo() {
             this(ManagementFactory.getRuntimeMXBean().getInputArguments());
+        }
+
+        private static String censor(String flag) {
+            int equals = flag.indexOf('=');
+            if (!flag.startsWith("-D") || equals < 0 || !ADDRESS_PROPERTIES.contains(flag.substring(2, equals))) {
+                return flag;
+            }
+            return flag.substring(0, equals + 1) + Arrays.stream(flag.substring(equals + 1).split(",", -1))
+                .map(entry -> AsteriskSerializer.censor(entry.strip()))
+                .collect(Collectors.joining(","));
         }
     }
 

@@ -108,6 +108,29 @@ class DumpCensorTest {
         assertEquals(List.of("[2606:4700::1]:19132"), DumpInfo.NetherNetInfo.of(announced).discovered());
     }
 
+    @Test
+    void censorsTheAddressesInSystemPropertyFlags() {
+        List<String> flags = List.of(
+            "-Xmx1G",
+            "-DgeyserAdvertiseAddresses=1.2.3.4, play.example.com,192.168.1.5",
+            "-DgeyserStunServers=stun:stun.example.com:3478",
+            "-DgeyserUdpAddress=0.0.0.0",
+            "-DpluginUdpAddress=1.2.3.4",
+            "-DgeyserUdpPort=19133");
+
+        assertEquals(List.of(
+            "-Xmx1G",
+            "-DgeyserAdvertiseAddresses=***,***,192.168.1.5",
+            "-DgeyserStunServers=***",
+            "-DgeyserUdpAddress=0.0.0.0",
+            "-DpluginUdpAddress=***",
+            "-DgeyserUdpPort=19133"), new DumpInfo.FlagsInfo(flags).flags());
+
+        AsteriskSerializer.showSensitive = true;
+        assertEquals("-DgeyserAdvertiseAddresses=1.2.3.4",
+            new DumpInfo.FlagsInfo(List.of("-DgeyserAdvertiseAddresses=1.2.3.4")).flags().getFirst(), "a full dump shows them");
+    }
+
     private static InetSocketAddress endpoint(String literal, int port) throws Exception {
         return new InetSocketAddress(InetAddress.getByName(literal), port);
     }

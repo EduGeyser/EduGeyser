@@ -78,6 +78,14 @@ public class AsteriskSerializer implements JsonSerializer<String> {
     }
 
     /**
+     * A value for a dump, censored the same way as an {@link Asterisk} value: "***" unless it is a wildcard, local
+     * or loopback address, or the dump is full.
+     */
+    public static String censor(String value) {
+        return showSensitive || !isSensitiveIp(value) ? value : "***";
+    }
+
+    /**
      * An address and port for a dump, the address censored the same way as an {@link Asterisk} value.
      */
     public static String censor(InetSocketAddress endpoint) {
