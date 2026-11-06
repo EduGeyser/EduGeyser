@@ -28,6 +28,12 @@ dependencies {
 repositories {
     // mavenLocal()
 
+    // Local only: the webrtc-java snapshot exists in the local Maven repository alone.
+    // Remove this together with the snapshot pin before anything is pushed.
+    mavenLocal {
+        content { includeGroup("io.github.sendablemetatype.webrtc") }
+    }
+
     mavenCentral()
 
     // Floodgate, Cumulus etc.
