@@ -25,6 +25,7 @@
 
 package org.geysermc.geyser.network.nethernet;
 
+import io.github.sendablemetatype.netty.channel.nethernet.signaling.http.TlsContextSelector;
 import io.netty.bootstrap.ServerBootstrap;
 import io.netty.buffer.Unpooled;
 import io.netty.channel.Channel;
@@ -133,7 +134,7 @@ import java.util.concurrent.atomic.AtomicReference;
  * staging environment is reachable for testing via the
  * geyser.nethernet.acme.staging system property.
  */
-public final class NetherNetCertificateManager implements AutoCloseable {
+public final class NetherNetCertificateManager implements TlsContextSelector, AutoCloseable {
 
     private static final String LOG_PREFIX = "[Nethernet] ";
     private static final Duration CHECK_INTERVAL = Duration.ofHours(6);
@@ -235,6 +236,18 @@ public final class NetherNetCertificateManager implements AutoCloseable {
     }
 
     /**
+     * The TLS context for a connection that asked for the server name, or
+     * null to withdraw TLS. This manager only holds IP certificates, which
+     * name no domain, so a client that dialed a domain (and sent it as SNI)
+     * gets none: refused TLS takes it to plain HTTP and its TOFU flow, while
+     * a certificate for the wrong name may end its join.
+     */
+    @Override
+    public SslContext select(String serverName) {
+        return serverName == null ? currentContext() : null;
+    }
+
+    /**
      * The TLS context to serve, or null while no valid certificate exists.
      * An expired certificate is withdrawn rather than served: clients treat
      * an invalid certificate as terminal for signaling and go to RakNet,
@@ -316,11 +329,11 @@ public final class NetherNetCertificateManager implements AutoCloseable {
     /**
      * Why a stock client would reject this chain, or null if it would not:
      * temporal validity and a path to the platform trust anchors, checked
-     * the way a client checks them. Deliberately unchecked: SAN matching
-     * (the server cannot know which address clients dial) and privately
-     * trusted certificates (a client with a hand loaded trust store is
-     * rejected here). Source agnostic; the manual certificate path applies
-     * the same gate.
+     * the way a client checks them. Deliberately unchecked: SAN matching,
+     * which depends on what each client dials and is decided per connection
+     * from its SNI (see the selectors), and privately trusted certificates
+     * (a client with a hand loaded trust store is rejected here). Source
+     * agnostic; the manual certificate path applies the same gate.
      */
     static String clientRejectionReason(List<X509Certificate> chain) {
         if (chain.isEmpty()) {

@@ -25,6 +25,7 @@
 
 package org.geysermc.geyser.network.nethernet;
 
+import io.github.sendablemetatype.netty.channel.nethernet.signaling.http.TlsContextSelector;
 import io.netty.handler.ssl.SslContext;
 import io.netty.handler.ssl.SslContextBuilder;
 import org.geysermc.geyser.GeyserLogger;
@@ -38,13 +39,16 @@ import java.security.PrivateKey;
 import java.security.PublicKey;
 import java.security.Signature;
 import java.security.cert.CertificateFactory;
+import java.security.cert.CertificateParsingException;
 import java.security.cert.X509Certificate;
 import java.security.spec.PKCS8EncodedKeySpec;
 import java.time.Instant;
+import java.util.ArrayList;
 import java.util.Base64;
+import java.util.Collection;
 import java.util.List;
+import java.util.Locale;
 import java.util.concurrent.TimeUnit;
-import java.util.function.Supplier;
 
 /**
  * Serves the operator supplied TLS material for HTTP signaling. Consulted per
@@ -57,13 +61,20 @@ import java.util.function.Supplier;
  * certificate a stock client rejects is strictly worse than none: the 26.40
  * client treats an invalid certificate as terminal for signaling and goes to
  * RakNet, while a server that refuses TLS outright sends it to plain HTTP and
- * its TOFU flow. Returning null here is that refusal.
+ * its TOFU flow. Returning null here is that refusal. For the same reason a
+ * connection is only served a certificate that names what the client asked
+ * for: the domain it sent as SNI, or an IP address when it sent none, which
+ * clients do when they dial an IP.
  *
  * Removing both files while live withdraws TLS but cannot hand over to
  * automatic certificate management, which only starts when no manual files
  * exist at bind; that handover needs a restart.
  */
-final class NetherNetManualTlsSource implements Supplier<SslContext> {
+final class NetherNetManualTlsSource implements TlsContextSelector {
+
+    /** subjectAltName entry types, RFC 5280 section 4.2.1.6. */
+    private static final int SAN_DNS_NAME = 2;
+    private static final int SAN_IP_ADDRESS = 7;
 
     private static final String LOG_PREFIX = "[Nethernet] ";
 
@@ -85,6 +96,10 @@ final class NetherNetManualTlsSource implements Supplier<SslContext> {
     private long keySize;
     private SslContext context;
     private Instant expiry;
+    /** The DNS names the served certificate names, lowercase. */
+    private List<String> dnsNames = List.of();
+    /** Whether the served certificate names any IP address. */
+    private boolean namesIpAddress;
     private String problem;
     private boolean expiryWarned;
     private boolean missingWarned;
@@ -96,7 +111,44 @@ final class NetherNetManualTlsSource implements Supplier<SslContext> {
     }
 
     @Override
-    public synchronized SslContext get() {
+    public synchronized SslContext select(String serverName) {
+        SslContext current = current();
+        if (current == null || !names(dnsNames, namesIpAddress, serverName)) {
+            return null;
+        }
+        return current;
+    }
+
+    /**
+     * Whether a certificate with these names suits a client that asked for
+     * the server name, or for an IP address when it is null. Which IP the
+     * client dialed is not known here (NAT), so any IP address entry counts.
+     *
+     * @param dnsNames the certificate's DNS names, lowercase, wildcards included
+     * @param namesIpAddress whether it names any IP address
+     * @param serverName the SNI name, lowercase, or null
+     */
+    static boolean names(List<String> dnsNames, boolean namesIpAddress, String serverName) {
+        if (serverName == null) {
+            return namesIpAddress;
+        }
+        for (String name : dnsNames) {
+            if (name.equals(serverName)) {
+                return true;
+            }
+            // A wildcard stands for exactly one leftmost label (RFC 6125 section 6.4.3)
+            if (name.startsWith("*.")) {
+                int dot = serverName.indexOf('.');
+                if (dot > 0 && serverName.substring(dot).equals(name.substring(1))) {
+                    return true;
+                }
+            }
+        }
+        return false;
+    }
+
+    /** The context to serve whatever the client asked for, or null while TLS is withheld. */
+    private SslContext current() {
         long now = System.nanoTime();
         if (!checkedOnce || now - lastCheckNanos >= CHECK_INTERVAL_NANOS) {
             checkedOnce = true;
@@ -123,7 +175,7 @@ final class NetherNetManualTlsSource implements Supplier<SslContext> {
      * loaded. Meant for the bind time mode log.
      */
     synchronized String currentProblem() {
-        get();
+        current();
         if (context == null) {
             return problem == null ? "certificate files unreadable" : problem;
         }
@@ -199,6 +251,7 @@ final class NetherNetManualTlsSource implements Supplier<SslContext> {
                         + " heals when the second file lands");
                 return;
             }
+            readNames(chain.get(0));
             context = SslContextBuilder.forServer(certPath.toFile(), keyPath.toFile()).build();
             expiry = chain.get(0).getNotAfter().toInstant();
             problem = null;
@@ -210,6 +263,29 @@ final class NetherNetManualTlsSource implements Supplier<SslContext> {
             logger.warning(LOG_PREFIX + "Manual certificate " + problem + "; TLS is withdrawn."
                     + " Fix or remove nethernet/cert.pem and key.pem");
         }
+    }
+
+    /**
+     * Records what the leaf names in its subjectAltName entries, which every
+     * publicly trusted certificate carries; the common name is not read.
+     */
+    private void readNames(X509Certificate leaf) throws CertificateParsingException {
+        List<String> dns = new ArrayList<>();
+        boolean ip = false;
+        Collection<List<?>> entries = leaf.getSubjectAlternativeNames();
+        if (entries != null) {
+            for (List<?> entry : entries) {
+                if (entry.get(0) instanceof Integer type && entry.get(1) instanceof String value) {
+                    if (type == SAN_DNS_NAME) {
+                        dns.add(value.toLowerCase(Locale.ROOT));
+                    } else if (type == SAN_IP_ADDRESS) {
+                        ip = true;
+                    }
+                }
+            }
+        }
+        dnsNames = List.copyOf(dns);
+        namesIpAddress = ip;
     }
 
     /**

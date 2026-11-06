@@ -402,8 +402,9 @@ public class NetherNetServer {
         // silent ACME enrollment against the operator's intent); only when
         // no files exist at bind does automatic management run. The manual
         // source re-reads the files whenever they change, so certificates
-        // can be swapped live, and both sources withdraw TLS rather than
-        // serve anything a stock client would reject.
+        // can be swapped live. Both sources pick per connection and withdraw
+        // TLS rather than serve anything a stock client would reject, such
+        // as an IP certificate to a client that dialed a domain.
         Path nethernetDir = geyser.getBootstrap().getConfigFolder().resolve("nethernet");
         Path manualCert = nethernetDir.resolve("cert.pem");
         Path manualKey = nethernetDir.resolve("key.pem");
@@ -411,15 +412,14 @@ public class NetherNetServer {
         String tlsMode;
         if (Files.exists(manualCert) && Files.exists(manualKey)) {
             NetherNetManualTlsSource manualSource = new NetherNetManualTlsSource(manualCert, manualKey, logger);
-            tlsSelector = serverName -> manualSource.get();
+            tlsSelector = manualSource;
             String problem = manualSource.currentProblem();
             tlsMode = problem == null
                     ? "TLS, manual certificate, reloaded on change"
                     : "plaintext; manual certificate withheld: " + problem;
         } else {
-            NetherNetCertificateManager manager = new NetherNetCertificateManager(nethernetDir, logger);
-            this.certificateManager = manager;
-            tlsSelector = serverName -> manager.currentContext();
+            this.certificateManager = new NetherNetCertificateManager(nethernetDir, logger);
+            tlsSelector = certificateManager;
             tlsMode = "automatic certificate management";
         }
         NetherNetHttpSignaling http = NetherNetHttpSignaling.builder(workerGroup)
