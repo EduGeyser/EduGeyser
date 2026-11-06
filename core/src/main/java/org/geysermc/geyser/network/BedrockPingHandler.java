@@ -29,7 +29,6 @@ import org.checkerframework.checker.nullness.qual.Nullable;
 import org.cloudburstmc.protocol.bedrock.BedrockPong;
 import org.cloudburstmc.protocol.bedrock.util.JoinAddress;
 import org.geysermc.geyser.GeyserImpl;
-import org.geysermc.geyser.command.defaults.ConnectionTestCommand;
 import org.geysermc.geyser.configuration.GeyserConfig;
 import org.geysermc.geyser.event.type.GeyserBedrockPingEventImpl;
 import org.geysermc.geyser.network.bedrock.GameProtocol;
@@ -138,12 +137,6 @@ public final class BedrockPingHandler {
         }
         if (pong.subMotd() == null || pong.subMotd().isBlank()) {
             // Sub-MOTD cannot be empty as of 1.16.210.59
-            pong.subMotd(GeyserImpl.NAME);
-        }
-
-        if (ConnectionTestCommand.CONNECTION_TEST_MOTD != null) {
-            // Force-override as we are testing the connection and want to verify we are connecting to the right server through the MOTD
-            pong.motd(ConnectionTestCommand.CONNECTION_TEST_MOTD);
             pong.subMotd(GeyserImpl.NAME);
         }
 
