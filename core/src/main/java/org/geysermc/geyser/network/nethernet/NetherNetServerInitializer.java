@@ -28,9 +28,7 @@ package org.geysermc.geyser.network.nethernet;
 import io.netty.channel.Channel;
 import io.netty.channel.EventLoopGroup;
 import io.netty.channel.group.ChannelGroup;
-import org.cloudburstmc.protocol.bedrock.BedrockDisconnectReasons;
 import org.cloudburstmc.protocol.bedrock.BedrockPeer;
-import org.cloudburstmc.protocol.bedrock.BedrockServerSession;
 import org.cloudburstmc.protocol.bedrock.PacketDirection;
 import org.cloudburstmc.protocol.bedrock.data.PacketCompressionAlgorithm;
 import org.cloudburstmc.protocol.bedrock.netty.codec.compression.CompressionCodec;
@@ -97,19 +95,5 @@ public class NetherNetServerInitializer extends GeyserServerInitializer {
     @Override
     protected BedrockPeer createPeer(Channel channel) {
         return new NetherNetGeyserPeer(channel, this::createSession);
-    }
-
-    @Override
-    public BedrockServerSession createSession0(BedrockPeer peer, int subClientId) {
-        BedrockServerSession session = new BedrockServerSession(peer, subClientId);
-        // On RakNet the transport refines the session's disconnect reason
-        // (client quit becomes CLOSED, which Geyser renders as its closed by
-        // remote peer message). NetherNet reports no such granularity, so
-        // without this the default UNKNOWN surfaces as a raw disconnect.lost
-        // in logs. A transport level death here IS the peer going away, so
-        // CLOSED is the accurate default; kicks and errors pass their own
-        // reason explicitly and never read this.
-        session.setDisconnectReason(BedrockDisconnectReasons.CLOSED);
-        return session;
     }
 }
