@@ -52,6 +52,7 @@ import org.cloudburstmc.protocol.bedrock.BedrockPong;
 import org.geysermc.geyser.GeyserImpl;
 import org.geysermc.geyser.GeyserLogger;
 import org.geysermc.geyser.network.BedrockPingHandler;
+import org.geysermc.geyser.ping.GeyserPingInfo;
 
 import java.io.IOException;
 import java.net.ConnectException;
@@ -65,10 +66,8 @@ import java.util.List;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
-import java.util.concurrent.RejectedExecutionException;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
-import java.util.concurrent.atomic.AtomicBoolean;
 
 /**
  * Nethernet (WebRTC) server: one NetherNet endpoint that takes joins from two
@@ -101,8 +100,6 @@ public class NetherNetServer {
     private static final int SERVER_DATA_VERSION = 7;
     /** Vanilla generates the status nonce once per process start. */
     private static final String STATUS_NONCE = NetherNetServerStatus.randomNonce();
-    /** How stale the served status snapshot may grow before a probe triggers a refresh. */
-    private static final long STATUS_MAX_AGE_NANOS = TimeUnit.SECONDS.toNanos(1);
     /**
      * The name the server identity carries as idp.domain. BDS uses "self" for
      * self issued server identities; kept so the existing key file and the
@@ -157,21 +154,12 @@ public class NetherNetServer {
     // single event loop.
     private boolean signalingConnectedBefore;
 
-    // Status refreshes get their own thread so that a probe finding a stale
-    // snapshot is answered at once with the previous one: the build can
-    // block unboundedly on the Java ping passthrough's plugin event chain.
-    // Volatile: probe threads read it to schedule refreshes.
-    private volatile ExecutorService statusRefreshExecutor;
+    // Asks the Java ping passthrough off the I/O threads; see serveServerStatus.
+    // Both replaced per start(), so an ask left in flight by a previous start
+    // writes into snapshots that start no longer serves.
+    private ExecutorService passthroughExecutor;
+    private volatile NetherNetPingSnapshots pingSnapshots;
     private volatile boolean running;
-
-    // The served status snapshot; see serveServerStatus. The initial age is
-    // in the past so the first probe (or the startup prime) refreshes.
-    private volatile NetherNetServerStatus cachedStatus;
-    private volatile long statusBuiltNanos = System.nanoTime() - 2 * STATUS_MAX_AGE_NANOS;
-    // Replaced per start() so a refresh left in flight by a previous
-    // generation clears its own gate rather than the new one's, which would
-    // otherwise let two builds run at once and let the older snapshot win.
-    private volatile AtomicBoolean statusRefreshing = new AtomicBoolean();
     private volatile InetSocketAddress statusPingAddress;
 
     public NetherNetServer(GeyserImpl geyser, EventLoopGroup playerEventLoopGroup,
@@ -200,19 +188,20 @@ public class NetherNetServer {
             return true;
         }
 
-        statusRefreshExecutor = Executors.newSingleThreadExecutor(runnable -> {
+        passthroughExecutor = Executors.newSingleThreadExecutor(runnable -> {
             Thread thread = new Thread(runnable, "Nethernet Status");
             thread.setDaemon(true);
             return thread;
         });
-        // A previous shutdown's shutdownNow can discard a queued refresh
-        // whose finally never ran, and restartSignaling starts this instance
-        // again. A fresh gate both clears that stuck state and keeps any
-        // still running refresh from the old generation pointed at its own.
-        statusRefreshing = new AtomicBoolean();
-        // Prime the status snapshot before HTTP signaling listens, so early
-        // probes find a document.
-        scheduleStatusRefresh();
+        // A previous shutdown's shutdownNow can discard a queued ask whose
+        // gate then stays closed, and restartSignaling starts this instance
+        // again, so each start gets snapshots of its own.
+        NetherNetPingSnapshots snapshots = new NetherNetPingSnapshots(
+                host -> pingResponder.passthrough(statusPingAddress(), host), passthroughExecutor,
+                geyser.config().bedrock().port(), System::nanoTime, logger);
+        // Before HTTP signaling listens, so early probes find an answer
+        snapshots.prime();
+        pingSnapshots = snapshots;
 
         if (!bind()) {
             shutdown();
@@ -289,13 +278,11 @@ public class NetherNetServer {
 
     public synchronized void shutdown() {
         running = false;
-        if (statusRefreshExecutor != null) {
-            // shutdownNow: a refresh can sit blocked on the ping event chain
-            // and deserves the interrupt. This can discard a queued refresh
-            // whose finally never runs; start() resets the flag, since
-            // restartSignaling can start this same instance again.
-            statusRefreshExecutor.shutdownNow();
-            statusRefreshExecutor = null;
+        if (passthroughExecutor != null) {
+            // shutdownNow: an ask can sit blocked on the Java server's ping
+            // event chain and deserves the interrupt
+            passthroughExecutor.shutdownNow();
+            passthroughExecutor = null;
         }
         closeChannels();
         if (signalingTokens != null) {
@@ -587,72 +574,35 @@ public class NetherNetServer {
     }
 
     /**
-     * Answers HTTP status probes with the status snapshot and keeps it fresh.
-     * HTTP signaling calls this off its I/O threads, and building the
-     * document can block (the Java ping passthrough and the ping event's
-     * listener chain), so a probe finding the snapshot stale schedules one
-     * refresh on the dedicated status thread and is served the previous
-     * snapshot meanwhile. Vanilla behaves the same way, serving one cached
-     * record to every requester. Only probes racing the first build after
-     * start find no snapshot; they build one themselves.
+     * Answers an HTTP status request. HTTP signaling calls this off its I/O
+     * threads, at most 64 at a time with a 1 s deadline. Only the Java ping
+     * passthrough can block for long, so its answer comes from
+     * {@link NetherNetPingSnapshots}, one per virtual host when the
+     * passthrough answers by host, and is never waited for. The rest is built
+     * per request: Geyser's ping event sees the requester, through trusted
+     * proxies as configured, and changes only that requester's answer, and a
+     * player count without passthrough is current.
      */
     private StatusAnswer serveServerStatus(StatusRequest request) {
-        if (System.nanoTime() - statusBuiltNanos >= STATUS_MAX_AGE_NANOS) {
-            scheduleStatusRefresh();
+        GeyserPingInfo passthrough = null;
+        if (pingResponder.asksPassthrough()) {
+            passthrough = pingSnapshots.latest(pingResponder.passthroughUsesVirtualHost() ? request.host() : null);
         }
-        NetherNetServerStatus status = cachedStatus;
-        return StatusAnswer.serve(status != null ? status : buildServerStatus());
-    }
-
-    private void scheduleStatusRefresh() {
-        ExecutorService executor = this.statusRefreshExecutor;
-        // Capture the gate so this refresh always clears the one it claimed,
-        // even if start() installs a fresh gate while it is still running.
-        AtomicBoolean gate = this.statusRefreshing;
-        if (executor == null || !gate.compareAndSet(false, true)) {
-            return;
-        }
-        boolean submitted = false;
-        try {
-            executor.execute(() -> {
-                try {
-                    cachedStatus = buildServerStatus();
-                } catch (Exception e) {
-                    logger.debug(LOG_PREFIX + "Server status refresh failed: " + e.getMessage());
-                } finally {
-                    // Advance the age on failure too: the throttle must bound
-                    // the retry rate, or probes against a throwing ping
-                    // passthrough drive the event chain as fast as it runs
-                    // instead of once a second.
-                    statusBuiltNanos = System.nanoTime();
-                    gate.set(false);
-                }
-            });
-            submitted = true;
-        } catch (RejectedExecutionException e) {
-            // Shutdown raced the probe; the stale snapshot serves fine.
-        } finally {
-            if (!submitted) {
-                gate.set(false);
-            }
-        }
+        return StatusAnswer.serve(serverStatus(pingResponder.pong(0L, request.source().address(), passthrough)));
     }
 
     /**
-     * Builds the status document: the NetherNet equivalent of the RakNet
+     * The status document: the NetherNet equivalent of the RakNet
      * unconnected pong, matching vanilla's fourteen member ServerData
-     * document. Built by {@link BedrockPingHandler}, MOTD passthrough, the
-     * ping event, and the fallbacks included, as the RakNet pong was.
+     * document, from a pong {@link BedrockPingHandler} built, MOTD
+     * passthrough, the ping event, and the fallbacks included, as the RakNet
+     * pong was.
      *
      * Both auth bits are true because we accept Microsoft attested and self
      * signed identities alike: the endpoint requires a proven client key, not
      * an attested token.
-     *
-     * Runs on the dedicated status thread, or on the probe's own thread for
-     * probes that find no snapshot yet; never on I/O threads.
      */
-    private NetherNetServerStatus buildServerStatus() {
-        BedrockPong pong = this.pingResponder.onQuery(0L, statusPingAddress(), null);
+    private static NetherNetServerStatus serverStatus(BedrockPong pong) {
         return NetherNetServerStatus.builder()
                 .dataVersion(SERVER_DATA_VERSION)
                 .name(pong.motd())
@@ -683,11 +633,11 @@ public class NetherNetServer {
     }
 
     /**
-     * The address handed to the ping passthrough and the ping event,
-     * resolved once and cached on success: a configured hostname would do a
-     * blocking DNS lookup per build, and an unresolved address would hand
-     * listeners an object whose getAddress() is null. Falls back to
-     * loopback when resolution fails. Runs wherever the status is built.
+     * The address handed to the Java ping passthrough, resolved once and
+     * cached on success: a configured hostname would do a blocking DNS lookup
+     * per ask, and an unresolved address would hand listeners an object
+     * whose getAddress() is null. Falls back to loopback when resolution
+     * fails. Runs on the passthrough's thread.
      */
     private InetSocketAddress statusPingAddress() {
         InetSocketAddress address = this.statusPingAddress;

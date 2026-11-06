@@ -76,23 +76,64 @@ public final class BedrockPingHandler {
      * @return the pong to answer the query with
      */
     public BedrockPong onQuery(long serverId, InetSocketAddress inetSocketAddress, @Nullable String hostname) {
-        // TODO probably pointless now with nethernet?
+        return pong(serverId, inetSocketAddress, passthrough(inetSocketAddress, hostname));
+    }
+
+    /**
+     * @return whether answering a query asks the Java server through the ping passthrough, which can block
+     */
+    public boolean asksPassthrough() {
+        GeyserConfig config = geyser.config();
+        return (config.motd().passthroughMotd() || config.motd().passthroughPlayerCounts())
+            && geyser.getBootstrap().getGeyserPingPassthrough() != null;
+    }
+
+    /**
+     * @return whether the passthrough's answer can differ by virtual host, so a cache of its answers keeps one per host
+     */
+    public boolean passthroughUsesVirtualHost() {
+        IGeyserPingPassthrough pingPassthrough = geyser.getBootstrap().getGeyserPingPassthrough();
+        return pingPassthrough != null && pingPassthrough.usesVirtualHost();
+    }
+
+    /**
+     * Asks the Java server for the MOTD and player counts the passthrough settings relay. Can block for as long as
+     * the server's ping event chain runs.
+     *
+     * @param inetSocketAddress the address the Java server's ping event sees
+     * @param hostname the hostname the client queried, such as an HTTP Host header; null if unknown
+     * @return the answer, or null when neither passthrough setting is on, there is no passthrough, or it gave none
+     */
+    public @Nullable GeyserPingInfo passthrough(InetSocketAddress inetSocketAddress, @Nullable String hostname) {
+        GeyserConfig config = geyser.config();
+        if (!config.motd().passthroughMotd() && !config.motd().passthroughPlayerCounts()) {
+            return null;
+        }
+        IGeyserPingPassthrough pingPassthrough = geyser.getBootstrap().getGeyserPingPassthrough();
+        if (pingPassthrough == null) {
+            return null;
+        }
+        InetSocketAddress virtualHost = hostname == null || hostname.isBlank() ? null
+            : JoinAddress.parse(hostname, config.bedrock().port()).toUnresolved();
+        return pingPassthrough.getPingInformation(inetSocketAddress, virtualHost);
+    }
+
+    /**
+     * Builds the pong for one query from a passthrough answer, which the caller may have cached, and fires the ping
+     * event with the address the query came from.
+     *
+     * @param serverId the server ID to advertise; the RakNet GUID when answering a RakNet ping
+     * @param inetSocketAddress the address the query came from
+     * @param pingInfo the answer from {@link #passthrough}, or null for none
+     * @return the pong to answer the query with
+     */
+    public BedrockPong pong(long serverId, InetSocketAddress inetSocketAddress, @Nullable GeyserPingInfo pingInfo) {
         if (geyser.config().debugMode() && PRINT_DEBUG_PINGS) {
             String ip = geyser.config().logPlayerIpAddresses() ? inetSocketAddress.toString() : "<IP address withheld>";
             geyser.getLogger().debug(GeyserLocale.getLocaleStringLog("geyser.network.pinged", ip));
         }
 
         GeyserConfig config = geyser.config();
-
-        GeyserPingInfo pingInfo = null;
-        if (config.motd().passthroughMotd() || config.motd().passthroughPlayerCounts()) {
-            IGeyserPingPassthrough pingPassthrough = geyser.getBootstrap().getGeyserPingPassthrough();
-            if (pingPassthrough != null) {
-                InetSocketAddress virtualHost = hostname == null || hostname.isBlank() ? null
-                    : JoinAddress.parse(hostname, config.bedrock().port()).toUnresolved();
-                pingInfo = pingPassthrough.getPingInformation(inetSocketAddress, virtualHost);
-            }
-        }
 
         BedrockPong pong = new BedrockPong()
                 .edition("MCPE")

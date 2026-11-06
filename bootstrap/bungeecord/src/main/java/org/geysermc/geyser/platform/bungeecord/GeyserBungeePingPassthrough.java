@@ -58,6 +58,12 @@ public class GeyserBungeePingPassthrough implements IGeyserPingPassthrough, List
     }
 
     @Override
+    public boolean usesVirtualHost() {
+        // Listeners of the proxy ping event see the virtual host and can answer by it
+        return true;
+    }
+
+    @Override
     public GeyserPingInfo getPingInformation(InetSocketAddress inetSocketAddress, @Nullable InetSocketAddress virtualHost) {
         CompletableFuture<ProxyPingEvent> future = new CompletableFuture<>();
         proxyServer.getPluginManager().callEvent(new ProxyPingEvent(new GeyserPendingConnection(inetSocketAddress, virtualHost), getPingInfo(), (event, throwable) -> {
