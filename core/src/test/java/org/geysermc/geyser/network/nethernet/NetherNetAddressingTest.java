@@ -64,7 +64,7 @@ class NetherNetAddressingTest {
 
     @Test
     void discoveryAsksUpstreamsServersByDefault() throws Exception {
-        NetherNetAddressing addressing = read("", Map.of());
+        NetherNetAddressing addressing = read("{}", Map.of());
 
         assertEquals(List.of(), addressing.advertised());
         assertEquals(List.of(InetSocketAddress.createUnresolved("stun.cloudflare.com", 3478),
@@ -92,7 +92,7 @@ class NetherNetAddressingTest {
 
     @Test
     void relaysInFrontOfTheIcePortTurnDiscoveryOff() throws Exception {
-        assertFalse(NetherNetAddressing.read(config(""), true, name -> null, logger).stunDiscovery());
+        assertFalse(NetherNetAddressing.read(config("{}"), true, name -> null, logger).stunDiscovery());
     }
 
     @Test
@@ -114,8 +114,8 @@ class NetherNetAddressingTest {
     @Test
     void stunServersFromThePropertyReplaceTheDefaults() throws Exception {
         assertEquals(List.of(InetSocketAddress.createUnresolved("stun.example.com", 3478)),
-                read("", Map.of("geyserStunServers", "stun:stun.example.com")).stunServers());
-        assertFalse(read("", Map.of("geyserStunServers", "")).stunDiscovery(), "an empty list asks none");
+                read("{}", Map.of("geyserStunServers", "stun:stun.example.com")).stunServers());
+        assertFalse(read("{}", Map.of("geyserStunServers", "")).stunDiscovery(), "an empty list asks none");
     }
 
     @Test
@@ -125,11 +125,11 @@ class NetherNetAddressingTest {
         assertTrue(special.getMessage().startsWith("Invalid entry in \"advertise-addresses\""), special.getMessage());
 
         IllegalArgumentException property = assertThrows(IllegalArgumentException.class,
-                () -> read("", Map.of("geyserAdvertiseAddresses", "[::1")));
+                () -> read("{}", Map.of("geyserAdvertiseAddresses", "[::1")));
         assertTrue(property.getMessage().startsWith("Invalid entry in -DgeyserAdvertiseAddresses"), property.getMessage());
 
         IllegalArgumentException stun = assertThrows(IllegalArgumentException.class,
-                () -> read("", Map.of("geyserStunServers", "turn:turn.example.com")));
+                () -> read("{}", Map.of("geyserStunServers", "turn:turn.example.com")));
         assertTrue(stun.getMessage().startsWith("Invalid entry in -DgeyserStunServers"), stun.getMessage());
     }
 
