@@ -29,6 +29,7 @@ import io.github.sendablemetatype.netty.channel.nethernet.NetherNetChannelFactor
 import io.github.sendablemetatype.netty.channel.nethernet.NetherNetServerChannel;
 import io.github.sendablemetatype.netty.channel.nethernet.NetherNetServerStatus;
 import io.github.sendablemetatype.netty.channel.nethernet.config.NetherChannelOption;
+import io.github.sendablemetatype.netty.channel.nethernet.engine.NetherNetEngine;
 import io.github.sendablemetatype.netty.channel.nethernet.engine.webrtc.WebRtcEngine;
 import io.github.sendablemetatype.netty.channel.nethernet.signaling.NetherNetHttpSignaling;
 import io.github.sendablemetatype.netty.channel.nethernet.signaling.NetherNetXboxRpcSignaling;
@@ -57,6 +58,7 @@ import java.io.IOException;
 import java.net.ConnectException;
 import java.net.InetAddress;
 import java.net.InetSocketAddress;
+import java.nio.channels.ClosedChannelException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.security.GeneralSecurityException;
@@ -68,6 +70,7 @@ import java.util.concurrent.RejectedExecutionException;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.function.Supplier;
 
 /**
  * Nethernet (WebRTC) server: one NetherNet endpoint that takes joins from two
@@ -117,10 +120,16 @@ public class NetherNetServer {
      */
     private static final Duration RESTART_WAIT = Duration.ofSeconds(60);
     /**
-     * How long shutdown waits for the WebRTC engine to release its peers and
-     * the ICE port, so that a start right after it can bind the port again.
+     * How long start waits for the engine to open the ICE port after the bind
+     * found it free. The first open loads the WebRTC natives.
      */
-    private static final Duration ENGINE_CLOSE_WAIT = Duration.ofSeconds(10);
+    private static final Duration READY_WAIT = Duration.ofSeconds(30);
+    /**
+     * How long shutdown waits for the endpoint to release its peers, its
+     * ports and its engine, so that a start right after it can bind the ports
+     * again.
+     */
+    private static final Duration TERMINATION_WAIT = Duration.ofSeconds(10);
 
     private final GeyserImpl geyser;
     private final GeyserLogger logger;
@@ -128,6 +137,8 @@ public class NetherNetServer {
     private final PlayFabTokenManager tokenManager;
     private final String connectionId;
     private final BedrockPingHandler pingResponder;
+    /** Creates the WebRTC engine each endpoint owns and closes with itself. */
+    private final Supplier<? extends NetherNetEngine> engines;
 
     // Tracks live player connections so a real teardown (shutdown or an
     // API-initiated stop with players online) can cleanly disconnect them
@@ -140,11 +151,7 @@ public class NetherNetServer {
     private EventLoopGroup bossGroup;
     private EventLoopGroup workerGroup;
 
-    // Owned here rather than by the endpoint: closing the endpoint closes the
-    // ICE port later, on the engine's threads, and only the engine's close
-    // stage says when the port is free again.
-    private WebRtcEngine engine;
-    private Channel endpointChannel;
+    private NetherNetServerChannel endpointChannel;
     private volatile NetherNetXboxRpcSignaling xboxSignaling;
     private volatile NetherNetHttpSignaling httpSignaling;
     private NetherNetCertificateManager certificateManager;
@@ -174,6 +181,13 @@ public class NetherNetServer {
 
     public NetherNetServer(GeyserImpl geyser, EventLoopGroup playerEventLoopGroup,
                            String connectionId, String playfabCustomId, String playfabDeviceId) {
+        this(geyser, playerEventLoopGroup, connectionId, playfabCustomId, playfabDeviceId,
+                NetherNetServer::createEngine);
+    }
+
+    NetherNetServer(GeyserImpl geyser, EventLoopGroup playerEventLoopGroup, String connectionId,
+                    String playfabCustomId, String playfabDeviceId, Supplier<? extends NetherNetEngine> engines) {
+        this.engines = engines;
         this.geyser = geyser;
         this.logger = geyser.getLogger();
         this.playerEventLoopGroup = playerEventLoopGroup;
@@ -183,13 +197,14 @@ public class NetherNetServer {
     }
 
     /**
-     * Starts the Nethernet server: binds the endpoint and its ICE port, serves
-     * HTTP signaling, acquires an MCToken via PlayFab, and adds Xbox
-     * signaling, whose socket connects in the background.
+     * Starts the Nethernet server: binds the endpoint and waits for its ICE
+     * port, serves HTTP signaling, acquires an MCToken via PlayFab, and adds
+     * Xbox signaling, whose socket connects in the background.
      *
      * Without a token Xbox signaling keeps retrying in the background, so
-     * this still returns true; only a server identity that cannot be loaded
-     * or an endpoint that cannot bind fails the start.
+     * this still returns true. A server identity that cannot be loaded, an
+     * endpoint that cannot bind or open its ICE port, and an endpoint that
+     * closes itself before this returns fail the start.
      *
      * @return true if the server started successfully
      */
@@ -225,7 +240,13 @@ public class NetherNetServer {
         // starts only afterwards, since PlayFabTokenManager takes one
         // authentication at a time; its first attempt reuses this token.
         String mcToken = tokenManager.authenticate();
-        startXboxSignaling();
+        if (!startXboxSignaling() || !endpointChannel.isOpen()) {
+            // NetworkM closes the endpoint by itself, for example when an
+            // advertised name does not resolve, and logs why
+            logEndpointClosed();
+            shutdown();
+            return false;
+        }
 
         // The connection ID clients type is the connection id followed by the
         // 32 hex pmid of the signaling MCToken. The pmid is bound to the
@@ -347,7 +368,6 @@ public class NetherNetServer {
 
         this.bossGroup = new MultiThreadIoEventLoopGroup(1, NioIoHandler.newFactory());
         this.workerGroup = new MultiThreadIoEventLoopGroup(workerThreads(), NioIoHandler.newFactory());
-        this.engine = createEngine();
         this.joinLog = new NetherNetJoinLog(logger, geyser.config().logPlayerIpAddresses());
 
         NetherNetServerInitializer childHandler = new NetherNetServerInitializer(geyser, playerEventLoopGroup,
@@ -357,17 +377,25 @@ public class NetherNetServer {
             // Bound at the Bedrock address and port: with the shared ICE port
             // every peer gathers its host candidates there, UDP, next to HTTP
             // signaling on TCP. The bind fails at once when the UDP port is
-            // taken; the engine opens it afterwards on its own threads.
+            // taken; the engine opens it afterwards on its own threads. The
+            // endpoint owns its engine and closes it with itself.
             ServerBootstrap bootstrap = new ServerBootstrap();
             bootstrap.group(bossGroup, workerGroup)
-                    .channelFactory(NetherNetChannelFactory.server(engine))
+                    .channelFactory(NetherNetChannelFactory.server(engines))
                     .option(NetherChannelOption.NETHER_SERVER_IDENTITY, identity)
                     .option(NetherChannelOption.NETHER_SERVER_SHARED_ICE_PORT, true)
                     .childHandler(childHandler);
-            this.endpointChannel = bindChannel(bootstrap, bedrockAddress());
+            ChannelFuture bound = bootstrap.bind(bedrockAddress());
+            // Kept before the bind completes: a channel whose bind failed may
+            // have created its engine, and shutdown waits for its termination
+            this.endpointChannel = (NetherNetServerChannel) bound.channel();
+            bound.sync();
         } catch (Exception e) {
             // The caller's shutdown releases what was created
             logger.error(LOG_PREFIX + "Failed to bind UDP " + describe(bedrockAddress()) + ": " + describe(e));
+            return false;
+        }
+        if (!awaitReady(endpointChannel)) {
             return false;
         }
         logger.info(LOG_PREFIX + "ICE on UDP port " + iceAddress().getPort() + ", shared by every player");
@@ -376,8 +404,12 @@ public class NetherNetServer {
         // and Education server list joins. A failure leaves the endpoint
         // running for Xbox signaling.
         try {
-            bindHttpSignaling((NetherNetServerChannel) endpointChannel);
+            bindHttpSignaling(endpointChannel);
         } catch (Exception e) {
+            if (!endpointChannel.isOpen()) {
+                logEndpointClosed();
+                return false;
+            }
             logger.error(LOG_PREFIX + "HTTP signaling unavailable on TCP " + describe(bedrockAddress()) + " ("
                     + describe(e) + "): direct and server list joins will not work, only join codes and"
                     + " connection IDs" + (geyser.config().bedrock().port() == geyser.config().java().port()
@@ -388,26 +420,56 @@ public class NetherNetServer {
     }
 
     /**
+     * Waits for the endpoint to take joins. Its bind returned once the ICE
+     * port was found free; the engine opens the port afterwards, on its own
+     * threads, and an endpoint that cannot open it closes itself.
+     */
+    private boolean awaitReady(NetherNetServerChannel endpoint) {
+        try {
+            endpoint.ready().toCompletableFuture().get(READY_WAIT.toMillis(), TimeUnit.MILLISECONDS);
+            return true;
+        } catch (ExecutionException e) {
+            if (e.getCause() instanceof ClosedChannelException) {
+                logEndpointClosed();
+            } else {
+                logger.error(LOG_PREFIX + "Failed to open the ICE port, UDP " + describe(bedrockAddress()) + ": "
+                        + describe(e.getCause()));
+            }
+        } catch (TimeoutException e) {
+            logger.error(LOG_PREFIX + "The ICE port, UDP " + describe(bedrockAddress()) + ", did not open within "
+                    + READY_WAIT.toSeconds() + " s");
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            logger.error(LOG_PREFIX + "Interrupted while the ICE port opened");
+        }
+        return false;
+    }
+
+    private void logEndpointClosed() {
+        logger.error(LOG_PREFIX + "The NetherNet endpoint closed itself during startup; NetworkM logged why");
+    }
+
+    /**
      * Adds Xbox signaling to the endpoint. Its socket connects in the
      * background and recovers from outages by itself, asking for a token on
      * every attempt.
+     *
+     * @return false when the endpoint closed itself meanwhile
      */
-    private void startXboxSignaling() {
+    private boolean startXboxSignaling() {
         XboxSignalingTokens tokens = new XboxSignalingTokens(tokenManager);
         NetherNetXboxRpcSignaling xbox = new NetherNetXboxRpcSignaling(connectionId, tokens);
         xbox.addHealthListener(this::logSignalingHealth);
         try {
-            ((NetherNetServerChannel) endpointChannel).addSource(xbox);
+            endpointChannel.addSource(xbox);
         } catch (IllegalStateException e) {
-            // The endpoint closed itself meanwhile, as when the engine could
-            // not open the ICE port after all; it logged why.
-            logger.error(LOG_PREFIX + "Xbox signaling not started: " + e.getMessage());
             xbox.close();
             tokens.close();
-            return;
+            return false;
         }
         this.signalingTokens = tokens;
         this.xboxSignaling = xbox;
+        return true;
     }
 
     private InetSocketAddress bedrockAddress() {
@@ -416,23 +478,6 @@ public class NetherNetServer {
 
     private static String describe(InetSocketAddress address) {
         return address.getHostString() + ":" + address.getPort();
-    }
-
-    /**
-     * Binds a bootstrap and returns the bound channel, closing the netty
-     * channel object when the bind fails: netty does not close a channel
-     * whose registration succeeded but whose bind did not, which would
-     * otherwise leak it (idle but registered) on the event loop.
-     */
-    private static Channel bindChannel(ServerBootstrap bootstrap, InetSocketAddress address) throws Exception {
-        ChannelFuture future = bootstrap.bind(address);
-        try {
-            future.sync();
-        } catch (Exception e) {
-            future.channel().close();
-            throw e;
-        }
-        return future.channel();
     }
 
     /**
@@ -679,9 +724,25 @@ public class NetherNetServer {
      * can spread players across. Each factory spawns three native threads
      * once used, so the pool stays small on small hosts and caps at four.
      */
-    private static WebRtcEngine createEngine() {
+    private static NetherNetEngine createEngine() {
         int factories = Math.max(2, Math.min(4, Runtime.getRuntime().availableProcessors() / 2));
         return WebRtcEngine.builder().factories(factories).build();
+    }
+
+    /**
+     * Waits for the closed endpoint to release its peers, the ports of both
+     * sources, the ICE port and its engine, so that a start right after this,
+     * as a restart or a reload does, can bind the ports again.
+     */
+    private void awaitTermination(NetherNetServerChannel endpoint) {
+        try {
+            endpoint.termination().toCompletableFuture().get(TERMINATION_WAIT.toMillis(), TimeUnit.MILLISECONDS);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+        } catch (ExecutionException | TimeoutException e) {
+            logger.warning(LOG_PREFIX + "The NetherNet endpoint did not release its ports within "
+                    + TERMINATION_WAIT.toSeconds() + " s; a start right after this may find them taken");
+        }
     }
 
     private void closeChannels() {
@@ -699,20 +760,8 @@ public class NetherNetServer {
         // Closes both sources too
         if (endpointChannel != null) {
             endpointChannel.close().syncUninterruptibly();
+            awaitTermination(endpointChannel);
             endpointChannel = null;
-        }
-        if (engine != null) {
-            // Waits for every peer and the ICE port, so a start right after
-            // this, as a restart or a reload does, can bind the port again.
-            try {
-                engine.close().toCompletableFuture().get(ENGINE_CLOSE_WAIT.toMillis(), TimeUnit.MILLISECONDS);
-            } catch (InterruptedException e) {
-                Thread.currentThread().interrupt();
-            } catch (ExecutionException | TimeoutException e) {
-                logger.warning(LOG_PREFIX + "The WebRTC engine did not close cleanly within "
-                        + ENGINE_CLOSE_WAIT.toSeconds() + " s; the ICE port may still be held");
-            }
-            engine = null;
         }
         if (certificateManager != null) {
             certificateManager.close();
