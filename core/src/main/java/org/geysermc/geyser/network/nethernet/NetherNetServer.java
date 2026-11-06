@@ -144,7 +144,8 @@ public class NetherNetServer {
     // ICE port later, on the engine's threads, and only the engine's close
     // stage says when the port is free again.
     private WebRtcEngine engine;
-    private Channel endpointChannel;
+    private volatile Channel endpointChannel;
+    private volatile NetherNetAddressing addressing;
     private volatile NetherNetXboxRpcSignaling xboxSignaling;
     private volatile NetherNetHttpSignaling httpSignaling;
     private NetherNetCertificateManager certificateManager;
@@ -345,6 +346,17 @@ public class NetherNetServer {
             return false;
         }
 
+        NetherNetAddressing addressing;
+        try {
+            // No PROXY protocol relays front the ICE port yet
+            addressing = NetherNetAddressing.read(geyser.config().bedrock().signaling(), false,
+                    System::getProperty, logger);
+        } catch (IllegalArgumentException e) {
+            logger.error(LOG_PREFIX + "NetherNet will not start: " + e.getMessage());
+            return false;
+        }
+        this.addressing = addressing;
+
         this.bossGroup = new MultiThreadIoEventLoopGroup(1, NioIoHandler.newFactory());
         this.workerGroup = new MultiThreadIoEventLoopGroup(workerThreads(), NioIoHandler.newFactory());
         this.engine = createEngine();
@@ -357,13 +369,16 @@ public class NetherNetServer {
             // Bound at the Bedrock address and port: with the shared ICE port
             // every peer gathers its host candidates there, UDP, next to HTTP
             // signaling on TCP. The bind fails at once when the UDP port is
-            // taken; the engine opens it afterwards on its own threads.
+            // taken; the engine opens it afterwards on its own threads. The
+            // advertised addresses and STUN mappings go into the answers of
+            // both sources alike.
             ServerBootstrap bootstrap = new ServerBootstrap();
             bootstrap.group(bossGroup, workerGroup)
                     .channelFactory(NetherNetChannelFactory.server(engine))
                     .option(NetherChannelOption.NETHER_SERVER_IDENTITY, identity)
                     .option(NetherChannelOption.NETHER_SERVER_SHARED_ICE_PORT, true)
                     .childHandler(childHandler);
+            addressing.applyTo(bootstrap);
             this.endpointChannel = bindChannel(bootstrap, bedrockAddress());
         } catch (Exception e) {
             // The caller's shutdown releases what was created
