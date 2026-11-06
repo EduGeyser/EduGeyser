@@ -120,8 +120,8 @@ public class NetherNetServer {
      */
     private static final Duration RESTART_WAIT = Duration.ofSeconds(60);
     /**
-     * How long start waits for the engine to open the ICE port after the bind
-     * found it free. The first open loads the WebRTC natives.
+     * How long start waits for the engine to set up the ICE port after the
+     * bind found it free. The first setup loads the WebRTC natives.
      */
     private static final Duration READY_WAIT = Duration.ofSeconds(30);
     /**
@@ -203,7 +203,7 @@ public class NetherNetServer {
      *
      * Without a token Xbox signaling keeps retrying in the background, so
      * this still returns true. A server identity that cannot be loaded, an
-     * endpoint that cannot bind or open its ICE port, and an endpoint that
+     * endpoint that cannot bind or set up its ICE port, and an endpoint that
      * closes itself before this returns fail the start.
      *
      * @return true if the server started successfully
@@ -377,7 +377,7 @@ public class NetherNetServer {
             // Bound at the Bedrock address and port: with the shared ICE port
             // every peer gathers its host candidates there, UDP, next to HTTP
             // signaling on TCP. The bind fails at once when the UDP port is
-            // taken; the engine opens it afterwards on its own threads. The
+            // taken; the engine sets it up afterwards on its own threads. The
             // endpoint owns its engine and closes it with itself.
             ServerBootstrap bootstrap = new ServerBootstrap();
             bootstrap.group(bossGroup, workerGroup)
@@ -421,8 +421,12 @@ public class NetherNetServer {
 
     /**
      * Waits for the endpoint to take joins. Its bind returned once the ICE
-     * port was found free; the engine opens the port afterwards, on its own
-     * threads, and an endpoint that cannot open it closes itself.
+     * port was found free; the engine then checks the port again and sets up
+     * its endpoint, on its own threads, and an endpoint that cannot closes
+     * itself. That is all this confirms: the port is not held yet. WebRTC
+     * binds the socket on each local address when the first join gathers
+     * there, so a process that takes the port in between costs those joins
+     * their host candidates on that address, and nothing reports it.
      */
     private boolean awaitReady(NetherNetServerChannel endpoint) {
         try {
