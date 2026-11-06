@@ -25,7 +25,6 @@
 
 package org.geysermc.geyser.network.nethernet;
 
-import io.github.sendablemetatype.netty.channel.nethernet.codec.NetherNetFramingCodec;
 import io.netty.channel.Channel;
 import io.netty.channel.EventLoopGroup;
 import io.netty.channel.group.ChannelGroup;
@@ -46,9 +45,10 @@ import org.geysermc.geyser.network.netty.BedrockEncryptionControl;
  * setup is shared with RakNet through GeyserServerInitializer, but NetherNet
  * is a first class transport here: no FrameIdCodec (the 0xFE byte is RakNet
  * framing; data channel payloads are bare batch bytes) and no RakMessage
- * wrapping. The pipeline is:
+ * wrapping. The channel itself splits and reassembles messages, so each read
+ * is one whole batch. The pipeline is:
  *
- * NetherNetFramingCodec (countdown fragmentation/reassembly)
+ * NetherNetBatchWrapperCodec (whole messages to batch wrappers)
  *   -> CompressionCodec (NOOP until NetworkSettings negotiates, rak v11 semantics)
  *     -> BedrockBatchDecoder/Encoder
  *       -> BedrockPacketCodec_v3
@@ -84,7 +84,6 @@ public class NetherNetServerInitializer extends GeyserServerInitializer {
 
         channel.pipeline()
                 .addLast(NetherNetConnectionGate.NAME, this.connectionGate)
-                .addLast(NetherNetFramingCodec.NAME, new NetherNetFramingCodec())
                 .addLast(NetherNetBatchWrapperCodec.NAME, NetherNetBatchWrapperCodec.INSTANCE)
                 .addLast(CompressionCodec.NAME, new CompressionCodec(
                         getCompression(PacketCompressionAlgorithm.ZLIB, 11, true), false));

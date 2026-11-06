@@ -2783,9 +2783,8 @@ public class GeyserSession implements GeyserConnection, GeyserCommandSource, Jav
             return (int) Math.floor(rakSessionCodec.getPing());
         }
         if (channel instanceof NetherNetChannel netherNetChannel) {
-            // ICE round trip time, sampled from the transport's STUN checks.
-            long rtt = netherNetChannel.rttMillis();
-            return rtt < 0 ? 0 : (int) rtt;
+            // ICE round trip time, sampled from the transport's STUN checks; 0 while unknown.
+            return (int) netherNetChannel.getPing();
         }
         return 0;
     }

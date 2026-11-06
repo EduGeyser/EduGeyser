@@ -25,6 +25,7 @@
 
 package org.geysermc.geyser.network.nethernet;
 
+import io.github.sendablemetatype.netty.channel.nethernet.NetherNetPacket;
 import io.netty.buffer.ByteBuf;
 import io.netty.channel.ChannelHandler.Sharable;
 import io.netty.channel.ChannelHandlerContext;
@@ -34,16 +35,19 @@ import org.cloudburstmc.protocol.bedrock.netty.BedrockBatchWrapper;
 import java.util.List;
 
 /**
- * Converts between the raw batch bytes the NetherNet framing codec exchanges
- * and the BedrockBatchWrapper messages the transport neutral Bedrock layers
+ * Converts between the whole messages a NetherNet channel exchanges and the
+ * BedrockBatchWrapper messages the transport neutral Bedrock layers
  * exchange. This is the NetherNet counterpart of what FrameIdCodec does for
  * RakNet, minus the 0xFE frame id byte, which does not exist on NetherNet:
  * the wrapper conversion is the part of that codec every transport needs,
  * and CompressionCodec and BedrockBatchDecoder silently pass through
  * anything that is not a BedrockBatchWrapper.
+ *
+ * Reliable messages arrive as a ByteBuf, unreliable ones as a NetherNetPacket.
+ * Both carry a batch and are read alike; batches are always written reliably.
  */
 @Sharable
-public class NetherNetBatchWrapperCodec extends MessageToMessageCodec<ByteBuf, BedrockBatchWrapper> {
+public class NetherNetBatchWrapperCodec extends MessageToMessageCodec<Object, BedrockBatchWrapper> {
 
     public static final String NAME = "nethernet-batch-wrapper-codec";
     public static final NetherNetBatchWrapperCodec INSTANCE = new NetherNetBatchWrapperCodec();
@@ -60,7 +64,17 @@ public class NetherNetBatchWrapperCodec extends MessageToMessageCodec<ByteBuf, B
     }
 
     @Override
-    protected void decode(ChannelHandlerContext ctx, ByteBuf msg, List<Object> out) throws Exception {
-        out.add(BedrockBatchWrapper.newInstance(msg.readRetainedSlice(msg.readableBytes()), null));
+    public boolean acceptInboundMessage(Object msg) {
+        return msg instanceof ByteBuf || msg instanceof NetherNetPacket;
+    }
+
+    @Override
+    protected void decode(ChannelHandlerContext ctx, Object msg, List<Object> out) throws Exception {
+        ByteBuf batch = switch (msg) {
+            case ByteBuf reliable -> reliable;
+            case NetherNetPacket unreliable -> unreliable.content();
+            default -> throw new IllegalArgumentException("Not a NetherNet message: " + msg.getClass().getName());
+        };
+        out.add(BedrockBatchWrapper.newInstance(batch.readRetainedSlice(batch.readableBytes()), null));
     }
 }
