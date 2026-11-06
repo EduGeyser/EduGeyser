@@ -234,7 +234,8 @@ public class PlayFabTokenManager {
         logger.debug("[Nethernet] MCToken obtained");
     }
 
-    private JsonObject postJson(String url, String jsonBody, @Nullable String userAgent) throws IOException {
+    /** Package-private so tests can answer for PlayFab and the session service. */
+    JsonObject postJson(String url, String jsonBody, @Nullable String userAgent) throws IOException {
         HttpURLConnection con = (HttpURLConnection) URI.create(url).toURL().openConnection();
         try {
             con.setRequestMethod("POST");

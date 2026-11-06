@@ -59,9 +59,6 @@ import java.net.InetSocketAddress;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.security.GeneralSecurityException;
-import java.util.concurrent.CompletableFuture;
-import java.util.concurrent.CompletionException;
-import java.util.concurrent.CompletionStage;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
@@ -136,13 +133,7 @@ public class NetherNetServer {
     private volatile NetherNetXboxRpcSignaling xboxSignaling;
     private NetherNetCertificateManager certificateManager;
 
-    // MCToken fetches block on PlayFab for seconds, so they run here, never on
-    // the signaling event loop that asks for them, and one at a time, since
-    // PlayFabTokenManager is not meant for concurrent authentication.
-    private volatile ExecutorService tokenExecutor;
-    // Set by restartSignaling: the next token the Xbox source asks for is a
-    // fresh one, whatever the source says about the last attempt.
-    private final AtomicBoolean freshTokenRequested = new AtomicBoolean();
+    private volatile XboxSignalingTokens signalingTokens;
     // Only touched by the health listener, which runs on the signaling's
     // single event loop.
     private boolean signalingConnectedBefore;
@@ -195,11 +186,7 @@ public class NetherNetServer {
             return false;
         }
 
-        tokenExecutor = Executors.newSingleThreadExecutor(runnable -> {
-            Thread thread = new Thread(runnable, "Nethernet Token");
-            thread.setDaemon(true);
-            return thread;
-        });
+        signalingTokens = new XboxSignalingTokens(tokenManager);
         statusRefreshExecutor = Executors.newSingleThreadExecutor(runnable -> {
             Thread thread = new Thread(runnable, "Nethernet Status");
             thread.setDaemon(true);
@@ -248,19 +235,21 @@ public class NetherNetServer {
      */
     public boolean restartSignaling() {
         NetherNetXboxRpcSignaling xbox;
+        XboxSignalingTokens tokens;
         synchronized (this) {
             if (!running) {
                 return start();
             }
             xbox = this.xboxSignaling;
+            tokens = this.signalingTokens;
         }
-        if (xbox == null) {
+        if (xbox == null || tokens == null) {
             return false; // racing a shutdown
         }
 
         // A manual restart is usually a response to something being wrong;
         // don't trust the cached token, get a fresh one.
-        freshTokenRequested.set(true);
+        tokens.requestFresh();
         try {
             // The health listener logs the outcome
             xbox.reconnect().get(RESTART_WAIT_SECONDS, TimeUnit.SECONDS);
@@ -285,10 +274,10 @@ public class NetherNetServer {
             statusRefreshExecutor = null;
         }
         closeChannels();
-        if (tokenExecutor != null) {
+        if (signalingTokens != null) {
             // After the Xbox source closed, so no attempt is left to ask
-            tokenExecutor.shutdownNow();
-            tokenExecutor = null;
+            signalingTokens.close();
+            signalingTokens = null;
         }
     }
 
@@ -343,7 +332,7 @@ public class NetherNetServer {
 
             // Starts connecting in the background once added; binding never
             // waits for Xbox, and the source recovers from outages by itself.
-            NetherNetXboxRpcSignaling xbox = new NetherNetXboxRpcSignaling(connectionId, this::signalingToken);
+            NetherNetXboxRpcSignaling xbox = new NetherNetXboxRpcSignaling(connectionId, signalingTokens);
             xbox.addHealthListener(this::logSignalingHealth);
             this.xboxSignaling = xbox;
             endpoint.addSource(xbox);
@@ -442,36 +431,6 @@ public class NetherNetServer {
         logger.info(LOG_PREFIX + "HTTP signaling on TCP port " + bindAddress.getPort() + " (" + tlsMode + ")");
         if (certificateManager != null) {
             certificateManager.start();
-        }
-    }
-
-    /**
-     * Supplies the Xbox source's MCToken, asked before every connection
-     * attempt. The cached token serves while it is valid, except when the
-     * service refused it, when the last attempt failed (the token may be why,
-     * without the service saying so), or after a manual restart.
-     */
-    private CompletionStage<String> signalingToken(boolean refresh) {
-        NetherNetXboxRpcSignaling xbox = this.xboxSignaling;
-        boolean lastAttemptFailed = xbox != null && xbox.health().failedAttempts() > 0;
-        boolean fresh = freshTokenRequested.getAndSet(false) || refresh || lastAttemptFailed;
-        ExecutorService executor = this.tokenExecutor;
-        if (executor == null) {
-            return CompletableFuture.failedFuture(new IllegalStateException("Nethernet is shut down"));
-        }
-        try {
-            return CompletableFuture.supplyAsync(() -> {
-                if (fresh) {
-                    tokenManager.invalidate();
-                }
-                String token = tokenManager.authenticate();
-                if (token == null) {
-                    throw new CompletionException(new IOException("could not get an MCToken"));
-                }
-                return token;
-            }, executor);
-        } catch (RejectedExecutionException e) {
-            return CompletableFuture.failedFuture(e);
         }
     }
 
