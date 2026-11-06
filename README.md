@@ -13,7 +13,7 @@ Website and documentation: [edugeyser.org](https://edugeyser.org)
 - Education Edition players from any school or tenant can join. The server needs no per-tenant configuration.
 - Player identity is verified through Microsoft Education Services.
 - Three ways for Education players to connect, provided by the [bundled education extension](#bundled-education-extension): connection ID, join codes, and the Education Edition server list. An optional tenant whitelist restricts which organizations may join.
-- Full [NetherNet](#nethernet) support next to RakNet, on every platform.
+- Bedrock and Education players connect over [NetherNet](#nethernet), on every platform.
 - Bedrock players can join from their Xbox friends list through the [MCXboxBroadcast](https://github.com/EduGeyser/MCXboxBroadcast) extension, which advertises the server's NetherNet endpoint.
 - Education player skins are shown to Java players through the [EduGeyser Signing Relay](https://github.com/EduGeyser/EduGeyser-Signing-Relay).
 - [EduFloodgate](https://github.com/EduGeyser/EduFloodgate) gives Education players a Java identity on online-mode servers. [EduFloodgate-Modded](https://github.com/EduGeyser/EduFloodgate-Modded) covers Fabric and NeoForge servers.
@@ -21,15 +21,19 @@ Website and documentation: [edugeyser.org](https://edugeyser.org)
 
 ## NetherNet
 
-NetherNet is Microsoft's successor to RakNet. It is the main transport of Education Edition, and Bedrock Edition has started using it for standard connections as well, so it is not an Education-only feature. EduGeyser supports NetherNet next to RakNet on every platform.
+NetherNet is Microsoft's successor to RakNet. It is the main transport of Education Edition, and Bedrock Edition has started using it for standard connections as well, so it is not an Education-only feature. EduGeyser serves Bedrock players over NetherNet only, on every platform; it does not serve RakNet.
+
+EduGeyser listens on the Bedrock port (19132 by default) on both TCP and UDP, so open and forward both. TCP carries HTTP signaling, which direct connections and joins from the Education server list need. UDP carries every player's NetherNet traffic, join codes and connection IDs included.
 
 Connection ID, join code, and Xbox friends list joins run over Microsoft's signaling service and therefore always use NetherNet.
 
-A server list entry only advertises an IP and port, which is the same as typing them into Bedrock's server list. For such direct connections the client tries three modes in order, and EduGeyser supports all three:
+A server list entry only advertises an IP and port, which is the same as typing them into Bedrock's server list. For such direct connections the client tries three modes in order, and EduGeyser serves the first two:
 
 1. **NetherNet with HTTPS signaling.** EduGeyser obtains a certificate for the server's IP from Let's Encrypt automatically. You can also place your own `cert.pem` and `key.pem` in the `nethernet` folder next to the Geyser config; EduGeyser checks that they are valid.
 2. **NetherNet with HTTP signaling**, used when no valid certificate is available or the client rejects the HTTPS connection. The server proves its identity with the key in `nethernet/identity-key.pem`. The client shows a trust prompt on the first connection and again whenever that key changes.
-3. **RakNet**, if both NetherNet modes fail.
+3. **RakNet**, if both NetherNet modes fail. EduGeyser does not serve it, so such a join fails.
+
+Behind a proxy or relay, EduGeyser can see each player's real address: list TCP proxies that send PROXY protocol in `haproxy-protocol-whitelisted-ips`, HTTP proxies that send `X-Forwarded-For` in `signaling-trusted-proxies`, and UDP relays that send PROXY protocol v2 in `webrtc-proxy-protocol-relays`, all under `advanced.bedrock` in the config.
 
 ## Bundled Education Extension
 
@@ -100,7 +104,7 @@ To get a build of EduGeyser that does not install and start the extension, for e
 
 Two opt-in properties build against checkouts placed next to this one instead of the pinned versions:
 
-- `-PlocalNetworkM` uses the sibling NetworkM checkout for both the RakNet and NetherNet transports. `-PlocalRaknet` and `-PlocalNethernet` are aliases for it. Set `-PnetworkMDir=/path/to/NetworkM` to use another checkout.
+- `-PlocalNetworkM` uses the sibling NetworkM checkout for every NetworkM module the build resolves. Set `-PnetworkMDir=/path/to/NetworkM` to use another checkout.
 - `-PlocalProtocol` uses the sibling CloudburstProtocol checkout for the protocol modules.
 
 They can be combined. Without them, builds use the pinned versions.

@@ -492,7 +492,7 @@ public class GeyserImpl implements GeyserApi, EventRegistrar {
             logger.debug("Epoll is not available; Erosion's Unix socket handling will not work.");
         }
 
-        // NetherNet is the only Bedrock transport: RakNet is not bound.
+        // NetherNet is the only Bedrock transport
         startNethernet();
 
         if (config.java().authType() == AuthType.FLOODGATE) {
@@ -606,7 +606,7 @@ public class GeyserImpl implements GeyserApi, EventRegistrar {
 
         if (nethernetManagerImpl == null || !nethernetManagerImpl.start()) {
             log.severe(GeyserLocale.getLocaleStringLog("geyser.core.fail", address, port)
-                    + ": NetherNet did not start, and RakNet is off, so no Bedrock player can join");
+                    + ": NetherNet did not start, so no Bedrock player can join");
             if (!"0.0.0.0".equals(address)) {
                 log.info(Component.text("Suggestion: try setting `address` under `bedrock` in the Geyser config back to 0.0.0.0", NamedTextColor.GREEN));
                 log.info(Component.text("Then, restart this server.", NamedTextColor.GREEN));
@@ -621,7 +621,7 @@ public class GeyserImpl implements GeyserApi, EventRegistrar {
         String where = "0.0.0.0".equals(address) ? "" : address + ", ";
         String ports = "UDP port " + (ice != null ? ice.getPort() : port) + " (ICE)"
                 + (http != null ? " and TCP port " + http.getPort() + " (HTTP signaling)" : ", without HTTP signaling");
-        log.info(brand("Started Geyser on " + where + ports + ", NetherNet only. RakNet is off."));
+        log.info(brand("Started Geyser on " + where + ports));
     }
 
     private record NethernetIds(String connectionId, String playfabCustomId, String playfabDeviceId) {
