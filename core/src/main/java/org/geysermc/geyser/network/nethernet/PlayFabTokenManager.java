@@ -93,6 +93,16 @@ public class PlayFabTokenManager {
         if (cached != null && tokenStillValid()) {
             return cached;
         }
+        return renew();
+    }
+
+    /**
+     * Performs the full auth chain whatever the cache holds. On failure the
+     * cached token stays, so a valid one keeps serving.
+     *
+     * @return the new MCToken authorization header, or null on failure
+     */
+    public @Nullable String renew() {
         try {
             loginToPlayFab();
             obtainMCToken();
@@ -224,9 +234,8 @@ public class PlayFabTokenManager {
 
         JsonObject result = response.getAsJsonObject("result");
         this.mcToken = result.get("authorizationHeader").getAsString();
-        if (result.has("validUntil")) {
-            this.mcTokenExpiry = result.get("validUntil").getAsString();
-        }
+        // A token without an expiry counts as expired; it must not inherit the previous token's
+        this.mcTokenExpiry = result.has("validUntil") ? result.get("validUntil").getAsString() : null;
 
         // Extract pmid from the MCToken JWT payload
         this.pmsgId = extractPmsgId(this.mcToken);

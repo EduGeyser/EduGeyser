@@ -29,12 +29,16 @@ import io.github.sendablemetatype.netty.channel.nethernet.signaling.NetherNetXbo
 import org.checkerframework.checker.nullness.qual.Nullable;
 
 import java.io.IOException;
+import java.time.Duration;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
+import java.util.concurrent.ExecutionException;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
 import java.util.concurrent.RejectedExecutionException;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
 import java.util.function.Supplier;
 
 /**
@@ -50,7 +54,7 @@ import java.util.function.Supplier;
  * can outlast the source's 30 second attempt deadline. Dropping the token it
  * delivers late would make every following attempt authenticate again and
  * time out the same way. Only the service refusing a token, its expiry, or a
- * manual restart replace it.
+ * manual restart ({@link #reconnectWithFreshToken}) replace it.
  */
 final class XboxSignalingTokens implements NetherNetXboxRpcSignaling.TokenSupplier, AutoCloseable {
 
@@ -58,12 +62,11 @@ final class XboxSignalingTokens implements NetherNetXboxRpcSignaling.TokenSuppli
     private final ExecutorService executor;
 
     // Guarded by this.
+    private long fetchCount;
     /** The newest fetch; plain requests made while it runs share it. */
-    private @Nullable CompletableFuture<String> latest;
+    private @Nullable Fetch latest;
     /** The fetch behind the source's newest request: the one of its current or last attempt. */
-    private @Nullable CompletableFuture<String> requested;
-    /** Set by a manual restart: the next request gets a token from a new authentication. */
-    private boolean freshRequested;
+    private @Nullable Fetch requested;
 
     XboxSignalingTokens(PlayFabTokenManager tokenManager) {
         this.tokenManager = tokenManager;
@@ -81,33 +84,56 @@ final class XboxSignalingTokens implements NetherNetXboxRpcSignaling.TokenSuppli
      */
     @Override
     public synchronized CompletionStage<String> token(boolean refresh) {
-        CompletableFuture<String> fetch = latest;
+        Fetch fetch = latest;
         if (refresh) {
-            String refused = requested != null && requested.state() == Future.State.SUCCESS
-                    ? requested.resultNow() : null;
+            CompletableFuture<String> previous = requested != null ? requested.token() : null;
+            String refused = previous != null && previous.state() == Future.State.SUCCESS
+                    ? previous.resultNow() : null;
             fetch = submit(() -> {
                 if (refused == null || refused.equals(tokenManager.getMCToken())) {
                     tokenManager.invalidate();
                 }
                 return tokenManager.authenticate();
             });
-        } else if (freshRequested) {
-            fetch = submit(() -> {
-                tokenManager.invalidate();
-                return tokenManager.authenticate();
-            });
-        } else if (fetch == null || fetch.isDone()) {
+        } else if (fetch == null || fetch.token().isDone()) {
             fetch = submit(tokenManager::authenticate);
         }
-        freshRequested = false;
         requested = fetch;
         // A copy, so the source cannot complete the shared fetch
-        return fetch.minimalCompletionStage();
+        return fetch.token().minimalCompletionStage();
     }
 
-    /** Makes the source's next request get a token from a new authentication. */
-    synchronized void requestFresh() {
-        freshRequested = true;
+    /**
+     * Replaces the source's connection with one made with a token from a new
+     * authentication that this call starts. Blocks until that connection is
+     * up or the timeout ends.
+     *
+     * The token comes first: the source's reconnect joins an attempt that is
+     * already running instead of starting one, and that attempt may use the
+     * token from before. When the connection that comes up used an older
+     * token, this reconnects again.
+     *
+     * @param reconnect the source's reconnect: completes when the attempt it starts or joins succeeds
+     * @throws ExecutionException when the authentication or an attempt fails
+     * @throws TimeoutException when the timeout ends first
+     */
+    void reconnectWithFreshToken(Supplier<? extends CompletionStage<Void>> reconnect, Duration timeout)
+            throws InterruptedException, ExecutionException, TimeoutException {
+        long deadline = System.nanoTime() + timeout.toNanos();
+        Fetch fresh;
+        synchronized (this) {
+            fresh = submit(tokenManager::renew);
+        }
+        fresh.token().get(deadline - System.nanoTime(), TimeUnit.NANOSECONDS);
+        while (true) {
+            reconnect.get().toCompletableFuture().get(deadline - System.nanoTime(), TimeUnit.NANOSECONDS);
+            synchronized (this) {
+                // Fetches run in order, so every later one serves this token or a newer one
+                if (requested != null && requested.number() >= fresh.number()) {
+                    return;
+                }
+            }
+        }
     }
 
     /** Stops fetching and fails the fetches still waiting to run. */
@@ -120,15 +146,20 @@ final class XboxSignalingTokens implements NetherNetXboxRpcSignaling.TokenSuppli
         }
     }
 
-    private CompletableFuture<String> submit(Supplier<@Nullable String> authentication) {
+    private Fetch submit(Supplier<@Nullable String> authentication) {
         CompletableFuture<String> token = new CompletableFuture<>();
         try {
             executor.execute(new FetchTask(authentication, token));
         } catch (RejectedExecutionException e) {
             token.completeExceptionally(e);
         }
-        latest = token;
-        return token;
+        Fetch fetch = new Fetch(++fetchCount, token);
+        latest = fetch;
+        return fetch;
+    }
+
+    /** One token fetch; fetches run in the order of their numbers. */
+    private record Fetch(long number, CompletableFuture<String> token) {
     }
 
     private record FetchTask(Supplier<@Nullable String> authentication, CompletableFuture<String> token)

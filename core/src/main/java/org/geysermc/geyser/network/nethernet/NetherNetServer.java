@@ -59,6 +59,7 @@ import java.net.InetSocketAddress;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.security.GeneralSecurityException;
+import java.time.Duration;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
@@ -105,11 +106,12 @@ public class NetherNetServer {
     private static final String IDENTITY_DOMAIN = "self";
     private static final String IDENTITY_KEY_FILE = "identity-key.pem";
     /**
-     * How long restartSignaling waits for its attempt. The Xbox source gives
-     * every attempt 30 seconds, token included, so this only bounds a source
-     * that never answers.
+     * How long restartSignaling waits for its fresh token and the connection
+     * made with it. An authentication takes seconds and the Xbox source gives
+     * every attempt 30 seconds, so this mostly bounds services that never
+     * answer.
      */
-    private static final long RESTART_WAIT_SECONDS = 60;
+    private static final Duration RESTART_WAIT = Duration.ofSeconds(60);
 
     private final GeyserImpl geyser;
     private final GeyserLogger logger;
@@ -230,8 +232,9 @@ public class NetherNetServer {
      * preserving the same connection ID. Existing WebRTC peer connections and
      * player sessions are unaffected. On failure the server keeps running;
      * established players keep playing and the Xbox source keeps retrying.
+     * Blocks for at most {@link #RESTART_WAIT}.
      *
-     * @return true if the signaling socket reconnected successfully
+     * @return true once the signaling socket is up with a token fetched by this call
      */
     public boolean restartSignaling() {
         NetherNetXboxRpcSignaling xbox;
@@ -247,12 +250,11 @@ public class NetherNetServer {
             return false; // racing a shutdown
         }
 
-        // A manual restart is usually a response to something being wrong;
-        // don't trust the cached token, get a fresh one.
-        tokens.requestFresh();
         try {
-            // The health listener logs the outcome
-            xbox.reconnect().get(RESTART_WAIT_SECONDS, TimeUnit.SECONDS);
+            // A manual restart is usually a response to something being
+            // wrong, so it does not trust the cached token. The health
+            // listener logs the outcome.
+            tokens.reconnectWithFreshToken(xbox::reconnect, RESTART_WAIT);
             return true;
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();

@@ -33,6 +33,9 @@ import org.junit.jupiter.api.Test;
 import java.io.IOException;
 import java.time.Duration;
 import java.time.Instant;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
@@ -65,6 +68,29 @@ class XboxSignalingTokensTest {
 
             assertEquals("MCToken token-2", tokens.token(true).toCompletableFuture().get(5, TimeUnit.SECONDS));
             assertEquals(2, playFab.logins.get());
+        }
+    }
+
+    @Test
+    void aRestartReconnectsAgainWhenTheJoinedAttemptUsedTheOldToken() throws Exception {
+        FakePlayFab playFab = new FakePlayFab(null);
+        try (XboxSignalingTokens tokens = new XboxSignalingTokens(playFab)) {
+            // An attempt is running with the cached token when the restart comes
+            assertEquals("MCToken token-1", tokens.token(false).toCompletableFuture().get(5, TimeUnit.SECONDS));
+
+            List<String> attemptTokens = new ArrayList<>();
+            AtomicInteger reconnects = new AtomicInteger();
+            tokens.reconnectWithFreshToken(() -> {
+                if (reconnects.incrementAndGet() == 1) {
+                    // Joins the running attempt, which then succeeds
+                    return CompletableFuture.completedFuture(null);
+                }
+                // Starts a new attempt, which asks for a token first
+                return tokens.token(false).thenAccept(attemptTokens::add);
+            }, Duration.ofSeconds(5));
+
+            assertEquals(2, reconnects.get());
+            assertEquals(List.of("MCToken token-2"), attemptTokens);
         }
     }
 
