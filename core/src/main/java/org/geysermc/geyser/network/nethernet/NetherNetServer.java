@@ -188,8 +188,8 @@ public class NetherNetServer {
      * signaling, whose socket connects in the background.
      *
      * Without a token Xbox signaling keeps retrying in the background, so
-     * this still returns true; only the endpoint itself failing to bind
-     * fails the start.
+     * this still returns true; only a server identity that cannot be loaded
+     * or an endpoint that cannot bind fails the start.
      *
      * @return true if the server started successfully
      */
