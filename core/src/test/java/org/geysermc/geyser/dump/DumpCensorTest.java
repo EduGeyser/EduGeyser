@@ -74,4 +74,20 @@ class DumpCensorTest {
         assertEquals(List.of("198.51.100.1", "192.168.1.5", "0.0.0.0", "127.0.0.1"),
             dumped().node("haproxy-protocol-whitelisted-ips").getList(String.class));
     }
+
+    @Test
+    void censorsAdvertisedAddressesThatAreNotLocal() throws Exception {
+        GeyserConfig.SignalingConfig config = YamlConfigurationLoader.builder()
+            .source(() -> new BufferedReader(new StringReader("""
+                advertise-addresses: ["198.51.100.1", "play.example.com", "[2001:db8::1]:19133", "192.168.1.5"]
+                """)))
+            .defaultOptions(InterfaceDefaultOptions::addTo)
+            .build().load().get(GeyserConfig.SignalingConfig.class);
+
+        CommentedConfigurationNode node = CommentedConfigurationNode.root(AsteriskSerializer.dumpOptions());
+        node.set(config);
+        // Names and entries with a port are censored whatever they point to
+        assertEquals(List.of("***", "***", "***", "192.168.1.5"),
+            node.node("advertise-addresses").getList(String.class));
+    }
 }
