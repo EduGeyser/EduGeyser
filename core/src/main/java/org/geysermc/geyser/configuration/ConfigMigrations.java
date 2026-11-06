@@ -230,8 +230,9 @@ public class ConfigMigrations {
 
     /**
      * Folds the "use-haproxy-protocol" switch into "haproxy-protocol-whitelisted-ips", which turns HAProxy protocol on
-     * by naming proxies. Fails closed: a list kept while the switch was off is emptied, and a switch that was on with
-     * an empty list, which took a header from any address, leaves HAProxy protocol off.
+     * by naming proxies. Fails closed: a list kept while the switch was off is emptied, also when the switch is missing,
+     * since it defaulted to off, and a switch that was on with an empty list, which took a header from any address,
+     * leaves HAProxy protocol off.
      */
     private static void foldHaproxySwitch(ConfigurationNode advancedBedrock, @Nullable GeyserLogger logger) throws SerializationException {
         ConfigurationNode proxies = advancedBedrock.node("haproxy-protocol-whitelisted-ips");
@@ -242,10 +243,8 @@ public class ConfigMigrations {
             commented.comment(null);
         }
 
+        // A missing switch is off, its default: version 5 moves the list of an older config here without one
         ConfigurationNode useHaproxy = advancedBedrock.node("use-haproxy-protocol");
-        if (useHaproxy.virtual()) {
-            return;
-        }
         if (!useHaproxy.getBoolean(false)) {
             // Ignored while it was off, and would turn it on now. Emptied rather than removed, so a comment of the user's own stays
             if (!proxies.virtual()) {
@@ -262,7 +261,9 @@ public class ConfigMigrations {
                     + "sends PROXY protocol in front of NetherNet has to be listed in \"webrtc-proxy-protocol-relays\".");
             }
         }
-        useHaproxy.raw(null);
+        if (!useHaproxy.virtual()) {
+            useHaproxy.raw(null);
+        }
     }
 
     /** Drops a comment that is still an old default, so the current one is written; a comment of the user's own stays. */
