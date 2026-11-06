@@ -47,6 +47,8 @@ import org.geysermc.geyser.api.extension.Extension;
 import org.geysermc.geyser.api.util.MinecraftVersion;
 import org.geysermc.geyser.network.ConnectionRequests;
 import org.geysermc.geyser.network.bedrock.GameProtocol;
+import org.geysermc.geyser.network.nethernet.NetherNetServer;
+import org.geysermc.geyser.network.nethernet.NethernetManagerImpl;
 import org.geysermc.geyser.pack.ResourcePackHolder;
 import org.geysermc.geyser.registry.BlockRegistries;
 import org.geysermc.geyser.registry.Registries;
@@ -103,6 +105,7 @@ public class DumpInfo {
     private final List<ExtensionInfo> extensionInfo;
     private final List<PackInfo> packInfo;
     private final MappingInfo mappingInfo;
+    private final @Nullable NetherNetInfo netherNetInfo;
 
     public DumpInfo(GeyserImpl geyser, boolean addLog) {
         this.versionInfo = new VersionInfo();
@@ -173,6 +176,9 @@ public class DumpInfo {
             Registries.ITEMS.forVersion(GameProtocol.DEFAULT_BEDROCK_PROTOCOL).getCustomIdMappings().size(),
             Registries.BEDROCK_ENTITY_DEFINITIONS.get().values().stream().filter(def -> def instanceof CustomEntityDefinition).toArray().length
         );
+
+        this.netherNetInfo = geyser.nethernetManager() instanceof NethernetManagerImpl manager
+            ? NetherNetInfo.of(manager.announced()) : null;
     }
 
     private JsonElement toGson(ConfigurationNode node) {
@@ -393,5 +399,25 @@ public class DumpInfo {
     }
 
     public record MappingInfo(int customBlocks, int customSkulls, int customItems, int customEntities) {
+    }
+
+    /**
+     * What NetherNet answers announce about this server, see {@link NetherNetServer#announced()}.
+     * Addresses are censored like the configured ones unless the dump is full.
+     *
+     * @param advertised    the advertised addresses. When empty, answers carry this machine's own
+     *                      addresses, the address an HTTP join's Host header names, and {@code discovered}
+     * @param stunDiscovery whether STUN discovery runs
+     * @param discovered    the public addresses STUN discovery currently finds
+     */
+    public record NetherNetInfo(List<String> advertised, boolean stunDiscovery, List<String> discovered) {
+        static @Nullable NetherNetInfo of(NetherNetServer.@Nullable Announced announced) {
+            return announced == null ? null : new NetherNetInfo(censor(announced.advertised()),
+                announced.stunDiscovery(), censor(announced.discovered()));
+        }
+
+        private static List<String> censor(List<InetSocketAddress> addresses) {
+            return addresses.stream().map(AsteriskSerializer::censor).toList();
+        }
     }
 }

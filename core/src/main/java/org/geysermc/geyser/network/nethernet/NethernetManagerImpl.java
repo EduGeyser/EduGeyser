@@ -138,6 +138,12 @@ public class NethernetManagerImpl implements NethernetManager {
         return s != null ? s.httpSignalingAddress() : null;
     }
 
+    /** What the running server's answers announce, or null when it is not running. */
+    public NetherNetServer.@Nullable Announced announced() {
+        NetherNetServer s = server;
+        return s != null ? s.announced() : null;
+    }
+
     /**
      * Called during Geyser shutdown to release all Nethernet resources,
      * the player threads included.

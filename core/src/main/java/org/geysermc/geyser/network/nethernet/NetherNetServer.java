@@ -61,6 +61,7 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.security.GeneralSecurityException;
 import java.time.Duration;
+import java.util.List;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
@@ -331,6 +332,37 @@ public class NetherNetServer {
     public @Nullable InetSocketAddress httpSignalingAddress() {
         NetherNetHttpSignaling http = httpSignaling;
         return http != null ? http.boundAddress() : null;
+    }
+
+    /**
+     * What answers currently announce about this server, from the endpoint's own snapshots.
+     *
+     * @return the announced addresses, or null when the endpoint is not bound
+     */
+    public @Nullable Announced announced() {
+        NetherNetAddressing addressing = this.addressing;
+        if (!(endpointChannel instanceof NetherNetServerChannel endpoint) || !endpoint.isActive() || addressing == null) {
+            return null;
+        }
+        int icePort = ((InetSocketAddress) endpoint.localAddress()).getPort();
+        List<InetSocketAddress> advertised = endpoint.advertisedAddresses().stream()
+                // Port 0 stands for the ICE port
+                .map(address -> address.getPort() == 0 ? new InetSocketAddress(address.getAddress(), icePort) : address)
+                .toList();
+        return new Announced(advertised, addressing.stunDiscovery(), endpoint.discoveredAddresses());
+    }
+
+    /**
+     * What answers announce about this server. Without advertised addresses, answers carry the
+     * addresses ICE gathers on this machine, the address an HTTP join's Host header names, and the
+     * discovered ones.
+     *
+     * @param advertised    the advertised addresses, names resolved once their lookup finished
+     * @param stunDiscovery whether STUN discovery runs
+     * @param discovered    the public addresses STUN discovery currently finds
+     */
+    public record Announced(List<InetSocketAddress> advertised, boolean stunDiscovery,
+                            List<InetSocketAddress> discovered) {
     }
 
     private boolean bind() {

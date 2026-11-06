@@ -26,6 +26,7 @@
 package org.geysermc.geyser.dump;
 
 import org.geysermc.geyser.configuration.GeyserConfig;
+import org.geysermc.geyser.network.nethernet.NetherNetServer;
 import org.geysermc.geyser.text.AsteriskSerializer;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
@@ -35,6 +36,8 @@ import org.spongepowered.configurate.yaml.YamlConfigurationLoader;
 
 import java.io.BufferedReader;
 import java.io.StringReader;
+import java.net.InetAddress;
+import java.net.InetSocketAddress;
 import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -89,5 +92,23 @@ class DumpCensorTest {
         // Names and entries with a port are censored whatever they point to
         assertEquals(List.of("***", "***", "***", "192.168.1.5"),
             node.node("advertise-addresses").getList(String.class));
+    }
+
+    @Test
+    void censorsTheAnnouncedNetherNetAddresses() throws Exception {
+        NetherNetServer.Announced announced = new NetherNetServer.Announced(
+            List.of(endpoint("1.2.3.4", 19132), endpoint("192.168.1.5", 19132)), true,
+            List.of(endpoint("2606:4700::1", 19132)));
+
+        DumpInfo.NetherNetInfo info = DumpInfo.NetherNetInfo.of(announced);
+        assertEquals(List.of("***:19132", "192.168.1.5:19132"), info.advertised());
+        assertEquals(List.of("[***]:19132"), info.discovered());
+
+        AsteriskSerializer.showSensitive = true;
+        assertEquals(List.of("[2606:4700::1]:19132"), DumpInfo.NetherNetInfo.of(announced).discovered());
+    }
+
+    private static InetSocketAddress endpoint(String literal, int port) throws Exception {
+        return new InetSocketAddress(InetAddress.getByName(literal), port);
     }
 }
