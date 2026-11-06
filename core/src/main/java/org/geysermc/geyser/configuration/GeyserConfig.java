@@ -403,6 +403,7 @@ public interface GeyserConfig {
                 While set, players can only reach the UDP side through these relays, and answers no longer name this machine's addresses:
                 players need the relays' public addresses announced to them ("advertise-addresses"), or they can only connect
                 through a TURN server, which only join codes and connection IDs hand out.
+                NetherNet does not start if none of the listed relays can be read, as when a linked list cannot be downloaded.
                 This is separate from the two lists above, which only cover HTTP signaling.
                 IP addresses, subnets, host names (looked up at startup) and https:// links to plain text lists are supported.
                 IF YOU DON'T KNOW WHAT THIS IS, DON'T TOUCH IT!""")

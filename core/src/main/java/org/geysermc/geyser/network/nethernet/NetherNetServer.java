@@ -353,10 +353,10 @@ public class NetherNetServer {
         GeyserConfig.AdvancedBedrockConfig advanced = geyser.config().advanced().bedrock();
         NetherNetProxies proxies;
         try {
-            proxies = NetherNetProxies.parse(advanced);
+            proxies = NetherNetProxies.parse(advanced, logger);
         } catch (IllegalArgumentException e) {
-            // Starting without a list the operator gave would show every
-            // player at the proxy's address, or leave the relays unreadable
+            // A list refused outright, or relays none of which could be read:
+            // starting without the relays would let players past them
             logger.error(LOG_PREFIX + "NetherNet will not start: " + e.getMessage());
             return false;
         }

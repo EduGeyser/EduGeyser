@@ -25,6 +25,7 @@
 
 package org.geysermc.geyser.network.nethernet;
 
+import org.geysermc.geyser.GeyserLogger;
 import org.geysermc.geyser.configuration.GeyserConfig;
 import org.junit.jupiter.api.Test;
 
@@ -34,7 +35,11 @@ import java.util.List;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.ArgumentMatchers.startsWith;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 class NetherNetProxiesTest {
@@ -42,10 +47,14 @@ class NetherNetProxiesTest {
     private static final InetSocketAddress HAPROXY = new InetSocketAddress("10.0.0.1", 40000);
     private static final InetSocketAddress FORWARDER = new InetSocketAddress("10.0.0.2", 40000);
     private static final InetSocketAddress RELAY = new InetSocketAddress("10.0.0.3", 40000);
+    /** Entries NetworkM skips: a list whose server is down, and a range that does not parse. */
+    private static final List<String> UNREADABLE = List.of("https://127.0.0.1:1/proxies.txt", "10.0.0.0/99");
+
+    private final GeyserLogger logger = mock(GeyserLogger.class);
 
     @Test
     void eachListTrustsItsProxiesInItsOwnRoleOnly() {
-        NetherNetProxies proxies = NetherNetProxies.parse(config(List.of("10.0.0.1"), List.of("10.0.0.2"), List.of("10.0.0.3")));
+        NetherNetProxies proxies = NetherNetProxies.parse(config(List.of("10.0.0.1"), List.of("10.0.0.2"), List.of("10.0.0.3")), logger);
 
         assertTrue(proxies.signaling().trustsProxyProtocol(HAPROXY));
         assertFalse(proxies.signaling().trustsForwardedFor(HAPROXY));
@@ -59,11 +68,12 @@ class NetherNetProxiesTest {
         assertFalse(proxies.relays().isProxy(HAPROXY));
         assertFalse(proxies.relays().isProxy(FORWARDER));
         assertTrue(proxies.signalingProxied());
+        verify(logger, never()).warning(anyString());
     }
 
     @Test
     void onlyARelayLeavesSignalingUnproxied() {
-        NetherNetProxies proxies = NetherNetProxies.parse(config(List.of(), List.of(), List.of("10.0.0.3")));
+        NetherNetProxies proxies = NetherNetProxies.parse(config(List.of(), List.of(), List.of("10.0.0.3")), logger);
 
         assertFalse(proxies.signalingProxied());
     }
@@ -71,10 +81,29 @@ class NetherNetProxiesTest {
     @Test
     void aRefusedListNamesItsSetting() {
         IllegalArgumentException refused = assertThrows(IllegalArgumentException.class, () ->
-                NetherNetProxies.parse(config(List.of(), List.of(), List.of("http://example.com/relays.txt"))));
+                NetherNetProxies.parse(config(List.of(), List.of(), List.of("http://example.com/relays.txt")), logger));
 
         assertTrue(refused.getMessage().startsWith("\"webrtc-proxy-protocol-relays\" under \"advanced.bedrock\""),
                 refused.getMessage());
+    }
+
+    @Test
+    void relaysNoneOfWhichCanBeReadRefuseToStart() {
+        // Running without them would take players directly and announce this host's addresses
+        IllegalArgumentException refused = assertThrows(IllegalArgumentException.class, () ->
+                NetherNetProxies.parse(config(List.of(), List.of(), UNREADABLE), logger));
+
+        assertTrue(refused.getMessage().startsWith("\"webrtc-proxy-protocol-relays\" under \"advanced.bedrock\" lists relays"),
+                refused.getMessage());
+    }
+
+    @Test
+    void signalingListsNoneOfWhichCanBeReadTrustNobodyAndWarn() {
+        NetherNetProxies proxies = NetherNetProxies.parse(config(UNREADABLE, UNREADABLE, List.of()), logger);
+
+        assertFalse(proxies.signalingProxied());
+        verify(logger).warning(startsWith("\"haproxy-protocol-whitelisted-ips\" under \"advanced.bedrock\" lists proxies"));
+        verify(logger).warning(startsWith("\"signaling-trusted-proxies\" under \"advanced.bedrock\" lists proxies"));
     }
 
     private static GeyserConfig.AdvancedBedrockConfig config(List<String> haproxy, List<String> forwardedFor,
