@@ -190,4 +190,24 @@ class NetherNetPingSnapshotsTest {
         assertEquals(List.of("-"), asked, "the other request's ask answered for both");
         assertTrue(refresher.isEmpty(), "no second ask within the same second");
     }
+
+    @Test
+    void aPassthroughThatHangsHoldsABoundedNumberOfAsks() {
+        // The refresher never runs a task, as behind an ask that never returns. Every round, new
+        // hosts take the places of the idle ones, whose asks stay queued.
+        snapshots.prime();
+        for (int round = 0; round < 5; round++) {
+            for (int i = 0; i < NetherNetPingSnapshots.MAX_HOSTS; i++) {
+                snapshots.latest("round" + round + "-host" + i + ".example.com");
+            }
+            advance(NetherNetPingSnapshots.IDLE_NANOS);
+        }
+
+        assertEquals(NetherNetPingSnapshots.MAX_OUTSTANDING_ASKS, refresher.size());
+
+        // Once the hang ends, asks are taken again
+        runRefresher();
+        snapshots.latest("round4-host0.example.com");
+        assertEquals(1, refresher.size());
+    }
 }

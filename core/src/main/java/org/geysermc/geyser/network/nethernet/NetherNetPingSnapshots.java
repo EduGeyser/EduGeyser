@@ -34,6 +34,7 @@ import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.Executor;
 import java.util.concurrent.RejectedExecutionException;
+import java.util.concurrent.Semaphore;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.function.Function;
@@ -54,7 +55,10 @@ import java.util.function.LongSupplier;
  * have a snapshot of their own, besides the one for requests that name none. A host that no
  * request named for {@link #IDLE_NANOS} gives up its place once a new host needs one; while all
  * places are taken, a new host is answered from the host-less snapshot. Each snapshot asks at
- * most once per {@link #MAX_AGE_NANOS} and has at most one ask queued or running.
+ * most once per {@link #MAX_AGE_NANOS} and has at most one ask queued or running. Apart from the
+ * map, at most {@link #MAX_OUTSTANDING_ASKS} asks are queued or running in all: a snapshot gives
+ * up its place with its ask still queued, so without that bound a passthrough that hangs would
+ * let new hosts queue asks without end.
  */
 final class NetherNetPingSnapshots {
 
@@ -70,6 +74,11 @@ final class NetherNetPingSnapshots {
      * retail server list, so a list that misses a poll keeps its host's snapshot.
      */
     static final long IDLE_NANOS = TimeUnit.SECONDS.toNanos(90);
+    /**
+     * How many asks may be queued or running at once: one for every snapshot the map holds at a
+     * time. A healthy passthrough never reaches it.
+     */
+    static final int MAX_OUTSTANDING_ASKS = MAX_HOSTS + 1;
     /** A snapshot's ask state while its ask is queued or running. */
     private static final long ASKING = Long.MIN_VALUE;
 
@@ -82,6 +91,7 @@ final class NetherNetPingSnapshots {
     private final GeyserLogger logger;
     private final Snapshot hostless;
     private final Map<JoinAddress, Snapshot> byHost = new ConcurrentHashMap<>();
+    private final Semaphore outstanding = new Semaphore(MAX_OUTSTANDING_ASKS);
 
     /**
      * @param passthrough asks the Java server for its answer to the given virtual host, or to none
@@ -167,6 +177,11 @@ final class NetherNetPingSnapshots {
     }
 
     private void ask(Snapshot snapshot, @Nullable String host, long asked) {
+        if (!outstanding.tryAcquire()) {
+            // Asks pile up behind one that hangs; the answer the snapshot has serves meanwhile
+            snapshot.asked.set(asked);
+            return;
+        }
         try {
             refresher.execute(() -> {
                 try {
@@ -177,11 +192,13 @@ final class NetherNetPingSnapshots {
                     // Advanced on failure too, so a throwing passthrough is asked once a
                     // second rather than as fast as requests arrive
                     snapshot.asked.set(clock.getAsLong());
+                    outstanding.release();
                 }
             });
         } catch (RejectedExecutionException e) {
             // Shutdown raced the request; the answer the snapshot has serves fine
             snapshot.asked.set(asked);
+            outstanding.release();
         }
     }
 
