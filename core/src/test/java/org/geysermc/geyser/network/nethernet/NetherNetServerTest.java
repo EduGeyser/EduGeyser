@@ -28,9 +28,13 @@ package org.geysermc.geyser.network.nethernet;
 import io.github.sendablemetatype.netty.channel.nethernet.NetherNetChannelFactory;
 import io.github.sendablemetatype.netty.channel.nethernet.NetherNetServerChannel;
 import io.github.sendablemetatype.netty.channel.nethernet.signaling.NetherNetHttpSignaling;
+import io.github.sendablemetatype.netty.channel.nethernet.signaling.http.StatusAnswer;
 import io.netty.channel.EventLoopGroup;
 import io.netty.channel.MultiThreadIoEventLoopGroup;
 import io.netty.channel.nio.NioIoHandler;
+import org.cloudburstmc.protocol.bedrock.BedrockPong;
+import org.geysermc.geyser.event.type.GeyserBedrockPingEventImpl;
+import org.geysermc.geyser.network.BedrockPingHandler;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
 
@@ -41,7 +45,10 @@ import java.net.InetSocketAddress;
 import java.net.ServerSocket;
 import java.util.concurrent.TimeUnit;
 
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertInstanceOf;
 import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.junit.jupiter.api.Assertions.fail;
 
 class NetherNetServerTest {
@@ -84,5 +91,31 @@ class NetherNetServerTest {
         try (ServerSocket probe = new ServerSocket(0, 50, InetAddress.getLoopbackAddress())) {
             return probe.getLocalPort();
         }
+    }
+
+    @Test
+    void aStatusDocumentThePingEventChangedGoesToItsRequesterAlone() {
+        InetSocketAddress requester = new InetSocketAddress(InetAddress.getLoopbackAddress(), 50000);
+
+        BedrockPong untouched = pong();
+        GeyserBedrockPingEventImpl reading = new GeyserBedrockPingEventImpl(untouched, requester);
+        reading.playerCount(reading.playerCount());
+        assertTrue(served(untouched, reading).shared(), "a listener that changed nothing leaves the document shared");
+
+        BedrockPong personal = pong();
+        GeyserBedrockPingEventImpl welcoming = new GeyserBedrockPingEventImpl(personal, requester);
+        welcoming.primaryMotd("Welcome back, Steve");
+        assertFalse(served(personal, welcoming).shared(),
+            "NetworkM's fallback must never repeat a MOTD chosen for this requester to another");
+    }
+
+    private static StatusAnswer.Serve served(BedrockPong pong, GeyserBedrockPingEventImpl event) {
+        return assertInstanceOf(StatusAnswer.Serve.class,
+            NetherNetServer.statusAnswer(new BedrockPingHandler.PingAnswer(pong, event.changedPong())));
+    }
+
+    private static BedrockPong pong() {
+        return new BedrockPong().motd("Geyser").subMotd("Another Geyser server.").protocolVersion(1)
+            .version("1.26.30").playerCount(0).maximumPlayerCount(100).gameType("Survival");
     }
 }

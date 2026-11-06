@@ -76,7 +76,7 @@ public final class BedrockPingHandler {
      * @return the pong to answer the query with
      */
     public BedrockPong onQuery(long serverId, InetSocketAddress inetSocketAddress, @Nullable String hostname) {
-        return pong(serverId, inetSocketAddress, passthrough(inetSocketAddress, hostname));
+        return pong(serverId, inetSocketAddress, passthrough(inetSocketAddress, hostname)).pong();
     }
 
     /**
@@ -125,9 +125,9 @@ public final class BedrockPingHandler {
      * @param serverId the server ID to advertise; the RakNet GUID when answering a RakNet ping
      * @param inetSocketAddress the address the query came from
      * @param pingInfo the answer from {@link #passthrough}, or null for none
-     * @return the pong to answer the query with
+     * @return the pong to answer the query with, and whether the ping event changed it
      */
-    public BedrockPong pong(long serverId, InetSocketAddress inetSocketAddress, @Nullable GeyserPingInfo pingInfo) {
+    public PingAnswer pong(long serverId, InetSocketAddress inetSocketAddress, @Nullable GeyserPingInfo pingInfo) {
         if (geyser.config().debugMode() && PRINT_DEBUG_PINGS) {
             String ip = geyser.config().logPlayerIpAddresses() ? inetSocketAddress.toString() : "<IP address withheld>";
             geyser.getLogger().debug(GeyserLocale.getLocaleStringLog("geyser.network.pinged", ip));
@@ -166,7 +166,8 @@ public final class BedrockPingHandler {
             pong.maximumPlayerCount(config.motd().maxPlayers());
         }
 
-        this.geyser.eventBus().fire(new GeyserBedrockPingEventImpl(pong, inetSocketAddress));
+        GeyserBedrockPingEventImpl event = new GeyserBedrockPingEventImpl(pong, inetSocketAddress);
+        this.geyser.eventBus().fire(event);
 
         // https://github.com/GeyserMC/Geyser/issues/3388
         pong.motd(pong.motd().replace(';', ':'));
@@ -205,6 +206,13 @@ public final class BedrockPingHandler {
             pong.maximumPlayerCount(pong.playerCount() + 1);
         }
 
-        return pong;
+        return new PingAnswer(pong, event.changedPong());
+    }
+
+    /**
+     * @param pong the pong to answer the query with
+     * @param eventChanged whether the ping event changed it, so it may have been chosen for the address that asked
+     */
+    public record PingAnswer(BedrockPong pong, boolean eventChanged) {
     }
 }

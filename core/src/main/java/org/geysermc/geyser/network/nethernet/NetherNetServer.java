@@ -604,15 +604,27 @@ public class NetherNetServer {
      * {@link NetherNetPingSnapshots}, one per virtual host when the
      * passthrough answers by host, and is never waited for. The rest is built
      * per request: Geyser's ping event sees the requester, through trusted
-     * proxies as configured, and changes only that requester's answer, and a
-     * player count without passthrough is current.
+     * proxies as configured, and changes only that requester's answer (see
+     * {@link #statusAnswer}), and a player count without passthrough is
+     * current.
      */
     private StatusAnswer serveServerStatus(StatusRequest request) {
         GeyserPingInfo passthrough = null;
         if (pingResponder.asksPassthrough()) {
             passthrough = pingSnapshots.latest(pingResponder.passthroughUsesVirtualHost() ? request.host() : null);
         }
-        return StatusAnswer.serve(serverStatus(pingResponder.pong(0L, request.source().address(), passthrough)));
+        return statusAnswer(pingResponder.pong(0L, request.source().address(), passthrough));
+    }
+
+    /**
+     * NetworkM repeats a shared document to whoever names the same Host
+     * when a later status call fails, is late or finds no room. A document
+     * the ping event changed may have been chosen for this requester, so it
+     * goes to this requester alone.
+     */
+    static StatusAnswer statusAnswer(BedrockPingHandler.PingAnswer answer) {
+        NetherNetServerStatus status = serverStatus(answer.pong());
+        return answer.eventChanged() ? StatusAnswer.serveToRequester(status) : StatusAnswer.serve(status);
     }
 
     /**
