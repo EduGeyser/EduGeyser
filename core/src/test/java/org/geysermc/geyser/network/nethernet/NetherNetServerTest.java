@@ -27,6 +27,12 @@ package org.geysermc.geyser.network.nethernet;
 
 import io.github.sendablemetatype.netty.channel.nethernet.NetherNetChannelFactory;
 import io.github.sendablemetatype.netty.channel.nethernet.NetherNetServerChannel;
+import io.github.sendablemetatype.netty.channel.nethernet.engine.EndpointConfig;
+import io.github.sendablemetatype.netty.channel.nethernet.engine.IceEndpoint;
+import io.github.sendablemetatype.netty.channel.nethernet.engine.NetherNetEngine;
+import io.github.sendablemetatype.netty.channel.nethernet.engine.Peer;
+import io.github.sendablemetatype.netty.channel.nethernet.engine.PeerConfig;
+import io.github.sendablemetatype.netty.channel.nethernet.engine.PeerListener;
 import io.github.sendablemetatype.netty.channel.nethernet.signaling.NetherNetHttpSignaling;
 import io.github.sendablemetatype.netty.channel.nethernet.signaling.http.StatusAnswer;
 import io.netty.channel.EventLoopGroup;
@@ -35,25 +41,46 @@ import io.netty.channel.nio.NioIoHandler;
 import org.cloudburstmc.protocol.bedrock.BedrockPong;
 import org.geysermc.geyser.event.type.GeyserBedrockPingEventImpl;
 import org.geysermc.geyser.network.BedrockPingHandler;
+import org.geysermc.geyser.GeyserBootstrap;
+import org.geysermc.geyser.GeyserImpl;
+import org.geysermc.geyser.GeyserLogger;
+import org.geysermc.geyser.configuration.GeyserConfig;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.io.TempDir;
 
 import java.io.IOException;
+import java.io.UncheckedIOException;
 import java.net.BindException;
+import java.net.DatagramSocket;
 import java.net.InetAddress;
 import java.net.InetSocketAddress;
 import java.net.ServerSocket;
+import java.nio.file.Path;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CompletionStage;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertInstanceOf;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.junit.jupiter.api.Assertions.fail;
+import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.ArgumentMatchers.contains;
+import static org.mockito.Mockito.RETURNS_DEEP_STUBS;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.timeout;
+import static org.mockito.Mockito.times;
+import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.when;
 
 class NetherNetServerTest {
 
     private final EventLoopGroup group = new MultiThreadIoEventLoopGroup(2, NioIoHandler.newFactory());
+    private final GeyserLogger logger = mock(GeyserLogger.class);
 
     @AfterEach
     void tearDown() {
@@ -65,26 +92,90 @@ class NetherNetServerTest {
         InetSocketAddress address = new InetSocketAddress(InetAddress.getLoopbackAddress(), freePort());
         // As when the engine failed to open the ICE port and NetworkM closed the endpoint. An
         // endpoint that never binds creates no engine.
-        NetherNetServerChannel endpoint = NetherNetChannelFactory.server(() -> fail("no engine needed")).newChannel();
-        group.register(endpoint).sync();
+        NetherNetServerChannel endpoint = registeredEndpoint();
         endpoint.close().sync();
 
         NetherNetHttpSignaling http = NetherNetHttpSignaling.builder(group).build();
         assertThrows(IllegalStateException.class, () -> NetherNetServer.listen(endpoint, http, address));
 
-        // The listener closes on its own threads
-        long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(3);
-        while (true) {
-            try (ServerSocket next = new ServerSocket()) {
-                next.bind(address);
-                return;
-            } catch (BindException e) {
-                if (System.nanoTime() > deadline) {
-                    fail("TCP " + address + " is still bound after the failed start: " + e.getMessage());
-                }
-                Thread.sleep(20);
-            }
+        http.termination().toCompletableFuture().get(3, TimeUnit.SECONDS);
+        try (ServerSocket next = new ServerSocket()) {
+            next.bind(address);
         }
+    }
+
+    @Test
+    void anIcePortThatFailsToOpenAfterTheBindFailsTheStartAndShutdownWaitsForTheEngine(@TempDir Path config)
+            throws Exception {
+        AtomicBoolean engineClosed = new AtomicBoolean();
+        NetherNetEngine engine = new NetherNetEngine() {
+            @Override
+            public Peer createPeer(PeerConfig peerConfig, PeerListener listener) {
+                throw new IllegalStateException("no peers in this test");
+            }
+
+            @Override
+            public CompletionStage<IceEndpoint> openEndpoint(EndpointConfig endpointConfig) {
+                // As the WebRTC engine fails when another process took the port after the bind probed it
+                CompletableFuture<IceEndpoint> opening = new CompletableFuture<>();
+                CompletableFuture.delayedExecutor(50, TimeUnit.MILLISECONDS).execute(() ->
+                        opening.completeExceptionally(new UncheckedIOException(new BindException("taken after the probe"))));
+                return opening;
+            }
+
+            @Override
+            public CompletionStage<Void> close() {
+                return CompletableFuture.runAsync(() -> engineClosed.set(true),
+                        CompletableFuture.delayedExecutor(200, TimeUnit.MILLISECONDS));
+            }
+        };
+        NetherNetServer server = new NetherNetServer(geyser(config, freeUdpPort()), group, "1234567890", "custom",
+                "device", () -> engine);
+
+        assertFalse(server.start());
+
+        verify(logger).error(contains("Failed to open the ICE port, UDP 127.0.0.1:"));
+        verify(logger, never()).info(contains("HTTP signaling on TCP port"));
+        assertTrue(engineClosed.get(), "the shutdown waited for the endpoint to close the engine it owns");
+        assertFalse(server.isRunning());
+    }
+
+    @Test
+    void anEndpointThatClosesItselfWhileRunningIsReportedAndAShutdownIsNot() throws Exception {
+        AtomicBoolean running = new AtomicBoolean(true);
+        NetherNetServerChannel closedItself = registeredEndpoint();
+        NetherNetServer.warnWhenClosedByItself(closedItself, running::get, logger);
+
+        closedItself.close().sync();
+        verify(logger, timeout(2000)).warning(contains("Bedrock players can no longer join until a restart or reload"));
+
+        // As shutdown does before it closes the endpoint
+        running.set(false);
+        NetherNetServerChannel shutDown = registeredEndpoint();
+        NetherNetServer.warnWhenClosedByItself(shutDown, running::get, logger);
+        shutDown.close().sync();
+        shutDown.eventLoop().submit(() -> { }).sync();
+        verify(logger, times(1)).warning(anyString());
+    }
+
+    /** An endpoint that never binds, so it needs no engine. */
+    private NetherNetServerChannel registeredEndpoint() throws InterruptedException {
+        NetherNetServerChannel endpoint = NetherNetChannelFactory.server(() -> fail("no engine needed")).newChannel();
+        group.register(endpoint).sync();
+        return endpoint;
+    }
+
+    private GeyserImpl geyser(Path configFolder, int port) {
+        GeyserImpl geyser = mock(GeyserImpl.class);
+        GeyserConfig config = mock(GeyserConfig.class, RETURNS_DEEP_STUBS);
+        GeyserBootstrap bootstrap = mock(GeyserBootstrap.class);
+        when(geyser.getLogger()).thenReturn(logger);
+        when(geyser.config()).thenReturn(config);
+        when(geyser.getBootstrap()).thenReturn(bootstrap);
+        when(bootstrap.getConfigFolder()).thenReturn(configFolder);
+        when(config.bedrock().address()).thenReturn("127.0.0.1");
+        when(config.bedrock().port()).thenReturn(port);
+        return geyser;
     }
 
     private static int freePort() throws IOException {
@@ -117,5 +208,11 @@ class NetherNetServerTest {
     private static BedrockPong pong() {
         return new BedrockPong().motd("Geyser").subMotd("Another Geyser server.").protocolVersion(1)
             .version("1.26.30").playerCount(0).maximumPlayerCount(100).gameType("Survival");
+    }
+
+    private static int freeUdpPort() throws IOException {
+        try (DatagramSocket probe = new DatagramSocket(new InetSocketAddress(InetAddress.getLoopbackAddress(), 0))) {
+            return probe.getLocalPort();
+        }
     }
 }
