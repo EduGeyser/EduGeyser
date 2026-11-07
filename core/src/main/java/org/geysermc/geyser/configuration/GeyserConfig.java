@@ -173,7 +173,9 @@ public interface GeyserConfig {
 
                 @Comment("""
                     Password for the PKCS12 file, or for the PEM private key if it is encrypted. Leave empty if there is none.
-                    You can also use "file:/path/to/password" to read it from a file, which is safer than writing it here.""")
+                    To read it from a file, which is safer than writing it here, give the file's path instead: "file:/path/to/password",
+                    or the path alone if it starts with "/", "./" or "../" or is absolute. A relative path is relative to the folder
+                    of this config.""")
                 @DefaultString()
                 @AsteriskSerializer.Secret
                 String password();

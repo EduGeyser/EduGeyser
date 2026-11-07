@@ -31,21 +31,19 @@ import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.InvalidPathException;
 import java.nio.file.Path;
-import java.util.regex.Pattern;
 
 /**
  * A secret set in the config, such as a certificate password: the value
- * itself, or {@code file:} followed by the path of a file that holds it,
- * relative to the config folder unless absolute. A config file is read by
- * anyone who can read its folder and ends up in support requests; a file
- * reference keeps the secret out of it.
+ * itself, or a file that holds it. A config file is read by anyone who can
+ * read its folder and ends up in support requests; a file keeps the secret
+ * out of it.
  *
- * Only the prefix makes a value a file reference, as NetworkM's NXS
- * {@code SecretValue} rules (upstream Geyser also takes a value that starts
- * with {@code /} or {@code ./} as a path). A value without the prefix that
- * names an existing file, or starts with a Windows drive, is refused with an
- * error that names the {@code file:} form, so a reference that lost its prefix
- * is never used as the secret.
+ * The rule is upstream CloudburstMC/Network's {@code SecretValue}, so a
+ * config means the same in Geyser and EduGeyser: a value names a file when
+ * it starts with {@code file:}, {@code /}, {@code ./} or {@code ../}, or is
+ * an absolute path on this platform (such as {@code C:\secret} on Windows).
+ * A relative path resolves against the config folder. Any other value is the
+ * secret itself.
  *
  * @param value     the configured value, possibly empty
  * @param directory the folder a relative path is resolved against
@@ -54,7 +52,6 @@ record NetherNetSecret(String value, Path directory) {
     /** Above this a file is something other than a secret, and reading it is a waste. */
     private static final long MAX_BYTES = 16384;
     private static final String FILE = "file:";
-    private static final Pattern DRIVE = Pattern.compile("[A-Za-z]:[\\\\/].*");
 
     /** An unset secret. */
     static NetherNetSecret none() {
@@ -67,47 +64,45 @@ record NetherNetSecret(String value, Path directory) {
      */
     @Nullable Path file() {
         String trimmed = value.trim();
-        if (!trimmed.startsWith(FILE)) {
+        if (!isFileReference(trimmed)) {
             return null;
         }
         try {
-            return path(trimmed.substring(FILE.length()));
+            return path(trimmed);
         } catch (InvalidPathException e) {
             return null;
         }
     }
 
     /**
-     * The secret: the file's content for a reference, without its trailing
-     * line terminator (a file written by {@code echo} or an editor has one),
-     * else the value as it is.
+     * The secret: the content of the file the value names, without one
+     * trailing line terminator (a file written by {@code echo} or an editor
+     * has one), else the value as it is.
      *
-     * @throws IOException if a referenced file cannot be read, or the value
-     *                     looks like a path without the prefix. The message
-     *                     never contains the value.
+     * @throws IOException if the value names a file that is not a regular
+     *                     file of at most 16 KiB or cannot be read. The message
+     *                     names the path, never the value.
      */
     String resolve() throws IOException {
         String trimmed = value.trim();
-        if (!trimmed.startsWith(FILE)) {
-            if (looksLikePath(trimmed)) {
-                throw new IOException("the password looks like a file path; write file:<path> to read it from a file");
-            }
+        if (!isFileReference(trimmed)) {
             return value;
         }
-        Path source = file();
-        if (source == null) {
-            throw new IOException("the text after file: in the password is not a valid path");
+        Path source;
+        try {
+            source = path(trimmed);
+        } catch (InvalidPathException e) {
+            throw new IOException("the password file path is not a valid path");
         }
         try {
             if (!Files.isRegularFile(source)) {
-                throw new IOException("not a readable file");
+                throw new IOException("not a regular file");
             }
             if (Files.size(source) > MAX_BYTES) {
                 throw new IOException("larger than " + MAX_BYTES + " bytes");
             }
             return stripLineTerminator(Files.readString(source));
         } catch (IOException | RuntimeException e) {
-            // The path is safe to name: it is the reference, not the secret
             throw new IOException("the password file " + source + " cannot be read (" + e.getMessage() + ")", e);
         }
     }
@@ -118,22 +113,24 @@ record NetherNetSecret(String value, Path directory) {
         return "NetherNetSecret[" + (value.isBlank() ? "unset" : "***") + "]";
     }
 
-    private boolean looksLikePath(String trimmed) {
+    private static boolean isFileReference(String trimmed) {
+        return trimmed.startsWith(FILE) || trimmed.startsWith("/") || trimmed.startsWith("./")
+                || trimmed.startsWith("../") || isAbsolutePath(trimmed);
+    }
+
+    private static boolean isAbsolutePath(String trimmed) {
         if (trimmed.isEmpty()) {
             return false;
         }
-        if (DRIVE.matcher(trimmed).matches()) {
-            return true;
-        }
         try {
-            return Files.exists(path(trimmed));
-        } catch (InvalidPathException | SecurityException notAPath) {
+            return Path.of(trimmed).isAbsolute();
+        } catch (InvalidPathException notAPath) {
             return false;
         }
     }
 
-    private Path path(String raw) {
-        Path path = Path.of(raw);
+    private Path path(String trimmed) {
+        Path path = Path.of(trimmed.startsWith(FILE) ? trimmed.substring(FILE.length()) : trimmed);
         return (path.isAbsolute() ? path : directory.resolve(path)).normalize();
     }
 
