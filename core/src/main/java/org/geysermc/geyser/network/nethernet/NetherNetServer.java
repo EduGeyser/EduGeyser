@@ -152,7 +152,10 @@ public class NetherNetServer {
      * server: the status deadline less a 250 ms margin for the rest of the
      * call. Geyser's ping event, the MOTD conversion and the document's JSON
      * take a few milliseconds; the margin absorbs a garbage collection pause
-     * or a slow ping event listener. It errs large because a missed deadline
+     * or a slow ping event listener. The margin is best effort, not a
+     * guarantee: NetworkM starts the deadline when it hands the call to its
+     * thread, the wait starts when the call runs, and the delay between the
+     * two comes out of the margin too. It errs large because a missed deadline
      * costs more than a shorter wait: a Host that HTTP signaling has not
      * served yet then gets an empty 200 and no MOTD. The passthroughs fire
      * the platform's ping event in process or read the legacy passthrough's
