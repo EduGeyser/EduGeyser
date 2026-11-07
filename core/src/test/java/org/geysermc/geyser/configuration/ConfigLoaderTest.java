@@ -333,7 +333,7 @@ public class ConfigLoaderTest {
         GeyserConfig config = new ConfigLoader(file, platformType).load0(configClass);
 
         assertNotNull(config);
-        // Version 8 adds the signaling section: no advertised addresses, STUN discovery on
+        // The signaling section is new: no advertised addresses, STUN discovery on
         assertEquals(List.of(), config.bedrock().signaling().advertiseAddresses());
         assertTrue(config.bedrock().signaling().stunDiscovery());
         // Version 7 values stay
@@ -346,6 +346,78 @@ public class ConfigLoaderTest {
         CommentedConfigurationNode written = new ConfigLoader(file, platformType).loadConfigurationNode(configClass);
         assertTrue(written.node("bedrock", "signaling", "advertise-addresses").isList());
         assertTrue(written.node("bedrock", "signaling", "stun-discovery").getBoolean());
+    }
+
+    @ParameterizedTest
+    @MethodSource("platformTypes")
+    void testVersion7ConfigMigratesToTheCurrentDefaults(PlatformType platformType, Class<? extends GeyserConfig> configClass) throws Exception {
+        // Versions 8 to 11 change nothing in an EduGeyser config, so only its own values differ from a new config
+        CommentedConfigurationNode migrated = new ConfigLoader(copyResourceToTempFile("tests", "v7.yml"), platformType)
+            .loadConfigurationNode(configClass);
+        CommentedConfigurationNode expected = new ConfigLoader(tempDirectory.resolve("v7-latest-" + platformType + ".yml").toFile(), platformType)
+            .loadConfigurationNode(configClass);
+        expected.node("bedrock", "port").set(19133);
+        expected.node("motd", "primary-motd").set("Version 7");
+        expected.node("gameplay", "cooldown-type").set("hotbar");
+
+        for (CommentedConfigurationNode config : List.of(migrated, expected)) {
+            CommentedConfigurationNode uuid = config.node("metrics-uuid");
+            if (!uuid.virtual()) {
+                uuid.set(new UUID(0, 0));
+            }
+        }
+        assertEquals(expected, migrated);
+    }
+
+    @ParameterizedTest
+    @MethodSource("platformTypes")
+    void testUpstreamVersion9ConfigMigration(PlatformType platformType, Class<? extends GeyserConfig> configClass) throws Exception {
+        // Upstream Geyser at version 9 (b3eed8c24) kept one list per signaling mode
+        GeyserConfig config = new ConfigLoader(copyResourceToTempFile("tests", "upstream-v9.yml"), platformType).load0(configClass);
+
+        assertEquals(List.of("play.example.com", "198.51.100.1:19133", "[2001:db8::1]:19133"),
+            config.bedrock().signaling().advertiseAddresses());
+        assertTrue(config.bedrock().signaling().stunDiscovery());
+        assertEquals(Constants.CONFIG_VERSION, config.configVersion());
+    }
+
+    @ParameterizedTest
+    @MethodSource("platformTypes")
+    void testUpstreamVersion10ConfigMigration(PlatformType platformType, Class<? extends GeyserConfig> configClass) throws Exception {
+        // Upstream Geyser at version 10 (6b5a7e2f9) had STUN discovery among the advanced NXS options
+        GeyserConfig config = new ConfigLoader(copyResourceToTempFile("tests", "upstream-v10.yml"), platformType).load0(configClass);
+
+        assertEquals(List.of("play.example.com"), config.bedrock().signaling().advertiseAddresses());
+        assertFalse(config.bedrock().signaling().stunDiscovery());
+        assertEquals(Constants.CONFIG_VERSION, config.configVersion());
+    }
+
+    @ParameterizedTest
+    @MethodSource("platformTypes")
+    void testUpstreamVersion11ConfigMigration(PlatformType platformType, Class<? extends GeyserConfig> configClass) throws Exception {
+        // Upstream Geyser at version 11 (777434cf9) already had the shape EduGeyser uses
+        GeyserConfig config = new ConfigLoader(copyResourceToTempFile("tests", "upstream-v11.yml"), platformType).load0(configClass);
+
+        assertEquals(List.of("play.example.com", "[2001:db8::1]:19133"), config.bedrock().signaling().advertiseAddresses());
+        assertFalse(config.bedrock().signaling().stunDiscovery());
+        // On with a list keeps the list
+        assertEquals(List.of("10.0.0.0/8"), config.advanced().bedrock().haproxyProtocolWhitelistedIps());
+        assertEquals(Constants.CONFIG_VERSION, config.configVersion());
+    }
+
+    @ParameterizedTest
+    @MethodSource("platformTypes")
+    void testUpstreamVersion12ConfigLoadsUnchanged(PlatformType platformType, Class<? extends GeyserConfig> configClass) throws Exception {
+        // Upstream Geyser at version 12 (64bb3993b), the same version EduGeyser writes
+        File file = copyResourceToTempFile("tests", "upstream-v12.yml");
+        List<String> original = Files.readAllLines(file.toPath());
+        GeyserConfig config = new ConfigLoader(file, platformType).load0(configClass);
+
+        assertEquals(original, Files.readAllLines(file.toPath()));
+        assertEquals(List.of("play.example.com"), config.bedrock().signaling().advertiseAddresses());
+        assertFalse(config.bedrock().signaling().stunDiscovery());
+        assertEquals(List.of("10.0.0.0/8"), config.advanced().bedrock().haproxyProtocolWhitelistedIps());
+        assertTrue(config.advanced().bedrock().preferSignalingProxyAddress());
     }
 
     @ParameterizedTest

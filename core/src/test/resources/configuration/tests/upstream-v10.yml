@@ -1,0 +1,35 @@
+bedrock:
+  address: 0.0.0.0
+  port: 19132
+  webrtc-port: 19133
+  transport: nethernet
+  clone-remote-port: false
+  signaling:
+    mode: builtin
+    builtin:
+      advertise-addresses:
+      - play.example.com
+      https:
+        certificate: ""
+        private-key: ""
+        password: ""
+    nxs:
+      advertise-addresses: []
+      token: ""
+      endpoint: https://agent.warden.cloud
+advanced:
+  bedrock:
+    broadcast-port: 0
+    compression-level: 6
+    use-haproxy-protocol: false
+    haproxy-protocol-whitelisted-ips: []
+    signaling-trusted-proxies: []
+    mtu: 1400
+    validate-bedrock-login: true
+  nxs:
+    assisted-joins: false
+    connection-checks: true
+    stun-discovery: false
+    location: {}
+    deregister-on-shutdown: false
+config-version: 10
