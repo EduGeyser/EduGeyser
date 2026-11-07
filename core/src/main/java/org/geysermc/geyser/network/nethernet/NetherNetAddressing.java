@@ -53,11 +53,12 @@ import java.util.stream.Stream;
 record NetherNetAddressing(List<InetSocketAddress> advertised, List<InetSocketAddress> stunServers) {
 
     /**
-     * Asked unless -DgeyserStunServers says otherwise, as upstream Geyser does. Two operators, as
-     * either may be blocked where a server runs.
+     * Asked unless -DgeyserStunServers says otherwise: upstream Geyser's two, plus Nextcloud's, an
+     * operator outside the US. Three operators, as any of them may be blocked where a server runs.
+     * All three answered a binding request on 2026-11-07.
      */
-    static final List<String> DEFAULT_STUN_SERVERS =
-            List.of("stun:stun.cloudflare.com:3478", "stun:stun.l.google.com:19302");
+    static final List<String> DEFAULT_STUN_SERVERS = List.of("stun:stun.cloudflare.com:3478",
+            "stun:stun.l.google.com:19302", "stun:stun.nextcloud.com:443");
 
     private static final String LOG_PREFIX = "[Nethernet] ";
     private static final String ADVERTISE_PROPERTY = "geyserAdvertiseAddresses";

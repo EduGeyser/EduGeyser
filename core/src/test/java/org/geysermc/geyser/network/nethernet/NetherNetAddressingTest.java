@@ -63,12 +63,13 @@ class NetherNetAddressingTest {
     }
 
     @Test
-    void discoveryAsksUpstreamsServersByDefault() throws Exception {
+    void discoveryAsksThreeOperatorsByDefault() throws Exception {
         NetherNetAddressing addressing = read("{}", Map.of());
 
         assertEquals(List.of(), addressing.advertised());
         assertEquals(List.of(InetSocketAddress.createUnresolved("stun.cloudflare.com", 3478),
-                InetSocketAddress.createUnresolved("stun.l.google.com", 19302)), addressing.stunServers());
+                InetSocketAddress.createUnresolved("stun.l.google.com", 19302),
+                InetSocketAddress.createUnresolved("stun.nextcloud.com", 443)), addressing.stunServers());
         assertTrue(addressing.stunDiscovery());
     }
 
