@@ -330,11 +330,38 @@ final class NetherNetKeyFiles {
         };
     }
 
+    /**
+     * Renames a written file over its target, then syncs the directory, so
+     * the rename is on disk before anything that follows it. The pair write
+     * of the automatic certificate depends on that order: after a power loss
+     * a later rename must not survive without an earlier one.
+     */
     static void moveIntoPlace(Path source, Path target) throws IOException {
         try {
             Files.move(source, target, StandardCopyOption.REPLACE_EXISTING, StandardCopyOption.ATOMIC_MOVE);
         } catch (AtomicMoveNotSupportedException e) {
             Files.move(source, target, StandardCopyOption.REPLACE_EXISTING);
+        }
+        syncDirectory(target.toAbsolutePath().getParent());
+    }
+
+    /**
+     * Syncs a directory where the platform allows it, which POSIX systems
+     * do. Windows cannot open a directory for that, and Java's moves there
+     * do not ask for write through; NTFS journals renames in order, so a
+     * power loss there loses the latest renames rather than an earlier one
+     * (from its documented design, not measured here). Best effort: a file
+     * system that cannot sync a directory still has the rename itself.
+     */
+    private static void syncDirectory(Path directory) {
+        try {
+            if (!Files.getFileStore(directory).supportsFileAttributeView(PosixFileAttributeView.class)) {
+                return;
+            }
+            try (FileChannel channel = FileChannel.open(directory, StandardOpenOption.READ)) {
+                channel.force(true);
+            }
+        } catch (IOException ignored) {
         }
     }
 
