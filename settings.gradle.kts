@@ -19,6 +19,9 @@ rootProject.name = "geyser-parent"
 // Opt-in local transport testing against the sibling NetworkM checkout: -PlocalNetworkM
 // substitutes every NetworkM module the build resolves, so they all come from the same checkout.
 // The RakNet module is resolved only because the Protocol library still depends on it.
+// Explicit rules turn off Gradle's automatic substitution of each project's own coordinates
+// (group:project name), so both included builds list those too: the modded platforms'
+// jar-in-jar step requests every resolved component by them.
 if (extra.has("localNetworkM")) {
     val networkM = file(providers.gradleProperty("networkMDir").getOrElse("../NetworkM"))
     require(networkM.resolve("settings.gradle.kts").isFile) {
@@ -28,11 +31,14 @@ if (extra.has("localNetworkM")) {
     includeBuild(networkM) {
         dependencySubstitution {
             for (transport in listOf("common", "nethernet", "raknet")) {
-                substitute(module("io.github.sendablemetatype.netty:netty-transport-$transport"))
-                    .using(project(":transport-$transport"))
+                for (name in listOf("netty-transport-$transport", "transport-$transport")) {
+                    substitute(module("io.github.sendablemetatype.netty:$name"))
+                        .using(project(":transport-$transport"))
+                }
             }
-            substitute(module("io.github.sendablemetatype.netty:netty-nethernet-nxs"))
-                .using(project(":nethernet-nxs"))
+            for (name in listOf("netty-nethernet-nxs", "nethernet-nxs")) {
+                substitute(module("io.github.sendablemetatype.netty:$name")).using(project(":nethernet-nxs"))
+            }
         }
     }
 }
@@ -47,12 +53,13 @@ if (extra.has("localProtocol")) {
     }
     includeBuild(cloudburstProtocol) {
         dependencySubstitution {
-            substitute(module("com.github.EduGeyser.education-edition-support:common"))
-                .using(project(":common"))
-            substitute(module("com.github.EduGeyser.education-edition-support:bedrock-codec"))
-                .using(project(":bedrock-codec"))
-            substitute(module("com.github.EduGeyser.education-edition-support:bedrock-connection"))
-                .using(project(":bedrock-connection"))
+            // The second group is the projects' own, which upstream CloudburstMC's Protocol publishes
+            // under too: without it the modded platforms nest upstream's snapshot from a repository
+            for (name in listOf("common", "bedrock-codec", "bedrock-connection")) {
+                for (group in listOf("com.github.EduGeyser.education-edition-support", "org.cloudburstmc.protocol")) {
+                    substitute(module("$group:$name")).using(project(":$name"))
+                }
+            }
         }
     }
 }

@@ -47,7 +47,6 @@ import org.geysermc.geyser.api.pack.ResourcePackManifest;
 import org.geysermc.geyser.api.pack.option.ResourcePackOption;
 import org.geysermc.geyser.event.type.SessionLoadResourcePacksEventImpl;
 import org.geysermc.geyser.network.nethernet.NetherNetGeyserPeer;
-import org.geysermc.geyser.network.netty.BedrockEncryptionControl;
 import org.geysermc.geyser.pack.GeyserResourcePack;
 import org.geysermc.geyser.pack.ResourcePackHolder;
 import org.geysermc.geyser.pack.url.GeyserUrlPackCodec;

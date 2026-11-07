@@ -40,7 +40,6 @@ import org.checkerframework.checker.nullness.qual.Nullable;
 import org.geysermc.geyser.GeyserImpl;
 import org.geysermc.geyser.network.GeyserServerInitializer;
 import org.geysermc.geyser.network.bedrock.GameProtocol;
-import org.geysermc.geyser.network.netty.BedrockEncryptionControl;
 
 /**
  * Channel initializer for incoming Nethernet (WebRTC) connections, the only
@@ -55,8 +54,7 @@ import org.geysermc.geyser.network.netty.BedrockEncryptionControl;
  *       -> BedrockPacketCodec_v3
  *         -> NetherNetGeyserPeer -> GeyserSession
  *
- * Bedrock layer encryption stays disabled: DTLS already secures the
- * transport, and clients expect none on NetherNet.
+ * There is no Bedrock encryption layer: DTLS secures the transport.
  */
 public class NetherNetServerInitializer extends GeyserServerInitializer {
 
@@ -91,9 +89,6 @@ public class NetherNetServerInitializer extends GeyserServerInitializer {
         // Register for clean disconnect on a real teardown. The group removes
         // the channel automatically when it closes.
         playerChannels.add(channel);
-
-        // Disable Bedrock encryption - Nethernet uses DTLS for transport encryption
-        BedrockEncryptionControl.disableEncryption(channel);
 
         // Set packet direction for server-side codec
         channel.attr(PacketDirection.ATTRIBUTE).set(PacketDirection.CLIENT_BOUND);

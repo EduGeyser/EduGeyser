@@ -25,13 +25,8 @@
 
 package org.geysermc.geyser.network.bedrock;
 
-import io.netty.buffer.Unpooled;
-import io.netty.channel.ChannelInboundHandlerAdapter;
-import io.netty.channel.embedded.EmbeddedChannel;
 import org.cloudburstmc.protocol.bedrock.BedrockServerSession;
-import org.cloudburstmc.protocol.bedrock.netty.codec.encryption.BedrockEncryptionDecoder;
 import org.cloudburstmc.protocol.bedrock.packet.BedrockPacket;
-import org.cloudburstmc.protocol.bedrock.packet.ClientCacheStatusPacket;
 import org.cloudburstmc.protocol.bedrock.packet.ClientToServerHandshakePacket;
 import org.cloudburstmc.protocol.bedrock.packet.CommandRequestPacket;
 import org.cloudburstmc.protocol.bedrock.packet.LoginPacket;
@@ -56,7 +51,6 @@ import java.util.concurrent.atomic.AtomicBoolean;
 
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
-import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.RETURNS_DEEP_STUBS;
 import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.mock;
@@ -71,7 +65,7 @@ class LoginPacketHandlerTest {
 
     private GeyserImpl geyser;
     private MockedStatic<GeyserImpl> geyserInstance;
-    private MockedStatic<LoginEncryptionUtils> encryption;
+    private MockedStatic<LoginEncryptionUtils> loginValidation;
     private MockedConstruction<UpstreamPacketHandler> upstreamHandlers;
     private boolean blocksAdded;
     private boolean itemsAdded;
@@ -83,7 +77,8 @@ class LoginPacketHandlerTest {
         // Registries reads the instance when first loaded
         geyserInstance = mockStatic(GeyserImpl.class);
         geyserInstance.when(GeyserImpl::getInstance).thenReturn(geyser);
-        encryption = mockStatic(LoginEncryptionUtils.class);
+        // Accepts every login, leaving the session open
+        loginValidation = mockStatic(LoginEncryptionUtils.class);
         upstreamHandlers = mockConstruction(UpstreamPacketHandler.class);
         // Looked up by the login's protocol version
         blocksAdded = BlockRegistries.BLOCKS.get().putIfAbsent(VERSION, mock(BlockMappings.class)) == null;
@@ -99,23 +94,14 @@ class LoginPacketHandlerTest {
             Registries.ITEMS.get().remove(VERSION);
         }
         upstreamHandlers.close();
-        encryption.close();
+        loginValidation.close();
         geyserInstance.close();
     }
 
     @Test
-    void properSequenceHandsOverToTheUpstreamHandler() {
-        Connection connection = new Connection(true);
-        connection.handle(requestNetworkSettings());
-        connection.handle(login());
-        connection.receiveEncrypted();
-        connection.handle(new ClientToServerHandshakePacket());
-        connection.assertHandedOver();
-    }
-
-    @Test
-    void loginWithoutEncryptionHandsOverRightAway() {
-        Connection connection = new Connection(false);
+    void anAcceptedLoginHandsOverRightAway() {
+        // Nothing waits for an answer to the handshake an Education client gets
+        Connection connection = new Connection();
         connection.handle(requestNetworkSettings());
         connection.handle(login());
         connection.assertHandedOver();
@@ -125,31 +111,15 @@ class LoginPacketHandlerTest {
     void onlyRequestNetworkSettingsComesFirst() {
         // LoggingPacketHandler does not pass the last one to its default handler
         for (BedrockPacket packet : List.of(login(), new ClientToServerHandshakePacket(), new CommandRequestPacket(), new ServerboundLoadingScreenPacket())) {
-            new Connection(true).assertDisconnectsOn(packet);
+            new Connection().assertDisconnectsOn(packet);
         }
     }
 
     @Test
     void onlyLoginFollowsNetworkSettings() {
         for (BedrockPacket packet : List.of(requestNetworkSettings(), new ClientToServerHandshakePacket(), new CommandRequestPacket())) {
-            Connection connection = new Connection(true);
+            Connection connection = new Connection();
             connection.handle(requestNetworkSettings());
-            connection.assertDisconnectsOn(packet);
-        }
-    }
-
-    @Test
-    void onlyAnEncryptedHandshakeFollowsLogin() {
-        Connection plaintext = new Connection(true);
-        plaintext.handle(requestNetworkSettings());
-        plaintext.handle(login());
-        plaintext.assertDisconnectsOn(new ClientToServerHandshakePacket());
-
-        for (BedrockPacket packet : List.of(new ClientCacheStatusPacket(), login())) {
-            Connection connection = new Connection(true);
-            connection.handle(requestNetworkSettings());
-            connection.handle(login());
-            connection.receiveEncrypted();
             connection.assertDisconnectsOn(packet);
         }
     }
@@ -169,31 +139,22 @@ class LoginPacketHandlerTest {
     private class Connection {
         private final BedrockServerSession upstream;
         private final AtomicBoolean closed = new AtomicBoolean();
-        private final EmbeddedChannel channel = new EmbeddedChannel();
         private final GeyserSession session = mock(GeyserSession.class, RETURNS_DEEP_STUBS);
         private final LoginPacketHandler handler;
 
-        Connection(boolean encrypted) {
+        Connection() {
             when(session.xuid()).thenReturn("1");
             when(session.isClosed()).thenAnswer(call -> closed.get());
             doAnswer(call -> {
                 closed.set(true);
                 return null;
             }).when(session).disconnect(anyString());
-            // Stands in for the decryptor that enabling encryption adds
-            channel.pipeline().addLast(BedrockEncryptionDecoder.NAME, new ChannelInboundHandlerAdapter());
-            when(session.getUpstream().getSession().getPeer().getChannel()).thenReturn(channel);
             upstream = session.getUpstream().getSession();
-            encryption.when(() -> LoginEncryptionUtils.encryptPlayerConnection(eq(session), any())).thenReturn(encrypted);
             handler = new LoginPacketHandler(geyser, session);
         }
 
         void handle(BedrockPacket packet) {
             handler.handlePacket(packet);
-        }
-
-        void receiveEncrypted() {
-            channel.writeInbound(Unpooled.EMPTY_BUFFER);
         }
 
         void assertDisconnectsOn(BedrockPacket packet) {
@@ -202,8 +163,6 @@ class LoginPacketHandlerTest {
             handle(packet);
             handle(requestNetworkSettings());
             handle(login());
-            receiveEncrypted();
-            handle(new ClientToServerHandshakePacket());
 
             // Sends the reason, which a forcible close would drop
             verify(session).disconnect("Invalid packet received!");

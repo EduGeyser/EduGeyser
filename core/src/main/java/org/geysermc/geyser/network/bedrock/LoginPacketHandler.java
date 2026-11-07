@@ -25,8 +25,6 @@
 
 package org.geysermc.geyser.network.bedrock;
 
-import io.netty.channel.ChannelHandlerContext;
-import io.netty.channel.ChannelInboundHandlerAdapter;
 import org.checkerframework.checker.nullness.qual.Nullable;
 import org.cloudburstmc.protocol.bedrock.codec.BedrockCodec;
 import org.cloudburstmc.protocol.bedrock.codec.compat.BedrockCompat;
@@ -34,9 +32,7 @@ import org.cloudburstmc.protocol.bedrock.data.PacketCompressionAlgorithm;
 import org.cloudburstmc.protocol.bedrock.netty.codec.compression.CompressionStrategy;
 import org.cloudburstmc.protocol.bedrock.netty.codec.compression.SimpleCompressionStrategy;
 import org.cloudburstmc.protocol.bedrock.netty.codec.compression.ZlibCompression;
-import org.cloudburstmc.protocol.bedrock.netty.codec.encryption.BedrockEncryptionDecoder;
 import org.cloudburstmc.protocol.bedrock.packet.BedrockPacket;
-import org.cloudburstmc.protocol.bedrock.packet.ClientToServerHandshakePacket;
 import org.cloudburstmc.protocol.bedrock.packet.LoginPacket;
 import org.cloudburstmc.protocol.bedrock.packet.NetworkSettingsPacket;
 import org.cloudburstmc.protocol.bedrock.packet.PlayStatusPacket;
@@ -60,15 +56,8 @@ import java.util.OptionalInt;
  * the sequence expects next ends the connection.
  */
 public class LoginPacketHandler extends LoggingPacketHandler {
-    private static final String ENCRYPTED_INPUT_MARKER = "geyser-encrypted-input-marker";
-
     private final CompressionStrategy compressionStrategy;
     private Stage stage = Stage.NETWORK_SETTINGS;
-    /**
-     * Whether a batch has been read through the decryptor.
-     */
-    private boolean encryptedInputSeen = false;
-    private int loginProtocolVersion;
 
     public LoginPacketHandler(GeyserImpl geyser, GeyserSession session) {
         super(geyser, session);
@@ -85,7 +74,7 @@ public class LoginPacketHandler extends LoggingPacketHandler {
             return PacketSignal.HANDLED;
         }
 
-        if (!stage.expects(packet) || (stage == Stage.HANDSHAKE && !encryptedInputSeen)) {
+        if (!stage.expects(packet)) {
             geyser.getLogger().debug("Disconnecting on " + packet.getClass().getSimpleName() + " in login stage " + stage);
             // Not forcibly closed, so the client gets the reason. The session drops further input and closes
             // once the client leaves, or after a timeout.
@@ -160,50 +149,20 @@ public class LoginPacketHandler extends LoggingPacketHandler {
         }
 
         stage = Stage.DONE;
-        loginProtocolVersion = loginPacket.getProtocolVersion();
 
-        boolean awaitingHandshake = LoginEncryptionUtils.encryptPlayerConnection(session, loginPacket);
+        LoginEncryptionUtils.validateLogin(session, loginPacket);
 
         if (session.isClosed()) {
-            // Can happen if Xbox validation fails
+            // The login was refused
             session.forciblyCloseUpstream();
             return PacketSignal.HANDLED;
         }
 
-        if (awaitingHandshake) {
-            stage = Stage.HANDSHAKE;
-            markEncryptedInput();
-            return PacketSignal.HANDLED;
-        }
-
-        // The transport already bound the login to the client's key
-        finishLogin();
+        finishLogin(loginPacket.getProtocolVersion());
         return PacketSignal.HANDLED;
     }
 
-    @Override
-    public PacketSignal handle(ClientToServerHandshakePacket packet) {
-        stage = Stage.DONE;
-        finishLogin();
-        return PacketSignal.HANDLED;
-    }
-
-    /**
-     * Notes the first batch read through the decryptor.
-     */
-    private void markEncryptedInput() {
-        session.getUpstream().getSession().getPeer().getChannel().pipeline()
-            .addAfter(BedrockEncryptionDecoder.NAME, ENCRYPTED_INPUT_MARKER, new ChannelInboundHandlerAdapter() {
-                @Override
-                public void channelRead(ChannelHandlerContext ctx, Object msg) {
-                    encryptedInputSeen = true;
-                    ctx.pipeline().remove(this);
-                    ctx.fireChannelRead(msg);
-                }
-            });
-    }
-
-    private void finishLogin() {
+    private void finishLogin(int loginProtocolVersion) {
         // Education clients use MESS-verified oid as xuid, so the same check works for both
         if (geyser.getSessionManager().isXuidAlreadyPending(session.xuid()) || geyser.getSessionManager().sessionByXuid(session.xuid()) != null) {
             session.disconnect(GeyserLocale.getLocaleStringLog("geyser.auth.already_loggedin", session.bedrockUsername()));
@@ -234,10 +193,6 @@ public class LoginPacketHandler extends LoggingPacketHandler {
     private enum Stage {
         NETWORK_SETTINGS(RequestNetworkSettingsPacket.class),
         LOGIN(LoginPacket.class),
-        /**
-         * Accepts the handshake only once it is read through the decryptor.
-         */
-        HANDSHAKE(ClientToServerHandshakePacket.class),
         /**
          * Handed to {@link UpstreamPacketHandler}, or disconnected.
          */

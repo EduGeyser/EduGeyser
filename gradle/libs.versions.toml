@@ -57,7 +57,7 @@ shadow = "9.6.1"
 architectury-plugin = "3.5-SNAPSHOT"
 architectury-loom = "1.17-SNAPSHOT"
 loom-companion = "1.17-SNAPSHOT"
-lombok = "9.8.2"
+lombok = "9.8.3"
 blossom = "2.2.0"
 runtask = "3.1.0"
 
