@@ -1,0 +1,49 @@
+bedrock:
+  address: 0.0.0.0
+  # The port that Geyser will listen on for incoming Bedrock connections.
+  # Built-in signaling uses this port over TCP (and UDP if "webrtc-port" is not set), and RakNet uses it over UDP.
+  port: 19132
+  webrtc-port: 0
+  transport: nethernet
+  clone-remote-port: false
+  signaling:
+    # How Bedrock players find this server when using NetherNet.
+    # "builtin": Geyser runs its own signaling server on the Bedrock port, over TCP. This does not work if the Java server
+    # uses the same port (for example with "clone-remote-port"). In that case, Geyser automatically falls back to "nxs".
+    # "nxs": Geyser registers this server with the external signaling service configured in "nxs.endpoint" below.
+    # "hybrid": uses "builtin" and "nxs" at the same time.
+    mode: hybrid
+    advertise-addresses: []
+    stun-discovery: true
+    builtin:
+      https:
+        certificate: ""
+        private-key: ""
+        password: ""
+    # Settings for the external signaling service. Only used in the "nxs" and "hybrid" modes, or when built-in signaling cannot run.
+    nxs:
+      token: ""
+      # Our own provider, set up by the network team
+      endpoint: https://signal.example.net
+advanced:
+  bedrock:
+    compression-level: 6
+    haproxy-protocol-whitelisted-ips: []
+    signaling-trusted-proxies: []
+    webrtc-proxy-protocol-relays: []
+    prefer-signaling-proxy-address: false
+    use-waterdogpe-forwarding: false
+    # This option disables the auth step Geyser performs for connecting Bedrock players.
+    # It can be used to allow connections from ProxyPass and WaterdogPE. In these cases, make sure that users
+    # cannot directly connect to this Geyser instance. See https://www.spigotmc.org/wiki/firewall-guide/ for
+    # assistance - and use UDP instead of TCP.
+    # Disabling Bedrock authentication for other use-cases is NOT SUPPORTED, as it allows anyone to spoof usernames, and is therefore a security risk.
+    # All Floodgate functionality (including skin uploading and account linking) will also not work when this option is disabled.
+    validate-bedrock-login: true
+    nethernet-debug: false
+  nxs:
+    assisted-joins: false
+    connection-checks: true
+    location: {}
+    deregister-on-shutdown: false
+config-version: 12

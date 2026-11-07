@@ -479,6 +479,62 @@ public class ConfigLoaderTest {
 
     @ParameterizedTest
     @MethodSource("platformTypes")
+    void testUpstreamCommentsAtTheSameVersionAreReplacedOnce(PlatformType platformType,
+                                                             Class<? extends GeyserConfig> configClass) throws Exception {
+        // Upstream Geyser at version 12 wrote these; no migration runs, so the fix-up alone has the file written
+        File file = copyResourceToTempFile("tests", "upstream-v12-comments.yml");
+        new ConfigLoader(file, platformType).load0(configClass);
+
+        CommentedConfigurationNode written = YamlConfigurationLoader.builder().file(file).build().load();
+        assertEquals(12, written.node("config-version").getInt());
+        assertEquals("hybrid", written.node("bedrock", "signaling", "mode").getString());
+        assertTrue(written.node("bedrock", "port").comment().startsWith("The port that Geyser listens on for Bedrock players"),
+            written.node("bedrock", "port").comment());
+        assertTrue(written.node("advanced", "bedrock", "validate-bedrock-login").comment()
+            .contains("block the NetherNet UDP port and the HTTP signaling TCP port"));
+        assertTrue(written.node("bedrock", "signaling", "mode").comment()
+            .contains("does not switch to the signaling service by itself"));
+        assertEquals("Settings for the signaling service. Only used in the \"nxs\" and \"hybrid\" modes.",
+            written.node("bedrock", "signaling", "nxs").comment());
+        assertEquals("Our own provider, set up by the network team",
+            written.node("bedrock", "signaling", "nxs", "endpoint").comment().strip());
+
+        // Nothing is left to fix, so the next start leaves the file alone
+        List<String> fixed = Files.readAllLines(file.toPath());
+        new ConfigLoader(file, platformType).load0(configClass);
+        assertEquals(fixed, Files.readAllLines(file.toPath()));
+    }
+
+    @ParameterizedTest
+    @MethodSource("platformTypes")
+    void testCommentsOfTheOperatorsOwnStayEvenWhenTheyQuoteUpstream(PlatformType platformType,
+                                                                    Class<? extends GeyserConfig> configClass) throws Exception {
+        // A comment of the operator's own that mentions a fallback, and upstream's "nxs" comment with a note appended
+        String expectedMode = "This installation never falls back to \"nxs\"";
+        List<String> expectedNxs = List.of(
+            "Settings for the external signaling service. Only used in the \"nxs\" and \"hybrid\" modes, or when built-in signaling cannot run.",
+            "Ours is run by the network team, ask them before changing it.");
+
+        // At version 12 nothing is fixed, so the file stays as it is
+        File current = copyResourceToTempFile("tests", "upstream-v12-own-comments.yml");
+        List<String> original = Files.readAllLines(current.toPath());
+        new ConfigLoader(current, platformType).load0(configClass);
+        assertEquals(original, Files.readAllLines(current.toPath()));
+
+        // At version 11 the migration writes the file, and both comments come along
+        File older = tempDirectory.resolve("own-comments-v11.yml").toFile();
+        Files.write(older.toPath(), original.stream()
+            .map(line -> line.equals("config-version: 12") ? "config-version: 11" : line).toList());
+        new ConfigLoader(older, platformType).load0(configClass);
+
+        CommentedConfigurationNode written = YamlConfigurationLoader.builder().file(older).build().load();
+        assertEquals(12, written.node("config-version").getInt());
+        assertEquals(expectedMode, written.node("bedrock", "signaling", "mode").comment().strip());
+        assertEquals(expectedNxs, written.node("bedrock", "signaling", "nxs").comment().lines().map(String::strip).toList());
+    }
+
+    @ParameterizedTest
+    @MethodSource("platformTypes")
     void testUpstreamVersion12ConfigLoadsUnchanged(PlatformType platformType, Class<? extends GeyserConfig> configClass) throws Exception {
         // Upstream Geyser at version 12 (64bb3993b), the same version EduGeyser writes
         File file = copyResourceToTempFile("tests", "upstream-v12.yml");
