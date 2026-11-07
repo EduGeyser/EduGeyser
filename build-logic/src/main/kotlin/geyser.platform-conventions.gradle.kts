@@ -27,6 +27,8 @@ tasks {
             "minecraft" to minecraftLine,
             "minecraftNext" to minecraftNext
         )
+        // expand() does not track its values, so a new version alone would leave stale metadata
+        inputs.properties(properties)
         // Spigot, BungeeCord, Velocity, Fabric, ViaProxy, NeoForge
         filesMatching(listOf("plugin.yml", "bungee.yml", "velocity-plugin.json", "fabric.mod.json", "viaproxy.yml", "META-INF/neoforge.mods.toml")) {
             expand(properties)
