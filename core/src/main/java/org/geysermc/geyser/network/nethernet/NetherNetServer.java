@@ -54,6 +54,7 @@ import org.cloudburstmc.protocol.bedrock.BedrockPong;
 import org.geysermc.geyser.GeyserImpl;
 import org.geysermc.geyser.GeyserLogger;
 import org.geysermc.geyser.configuration.GeyserConfig;
+import org.geysermc.geyser.configuration.GeyserPluginConfig;
 import org.geysermc.geyser.network.BedrockPingHandler;
 import org.geysermc.geyser.ping.GeyserPingInfo;
 
@@ -422,6 +423,10 @@ public class NetherNetServer {
         }
         this.addressing = addressing;
         warnIfLoopback();
+        boolean httpSignaling = !signalingPortIsTheJavaServers(geyser.config());
+        if (!httpSignaling) {
+            logSignalingPortIsTheJavaServers();
+        }
 
         this.bossGroup = new MultiThreadIoEventLoopGroup(1, NioIoHandler.newFactory());
         this.workerGroup = new MultiThreadIoEventLoopGroup(workerThreads(), NioIoHandler.newFactory());
@@ -477,6 +482,9 @@ public class NetherNetServer {
         // HTTP signaling: the only way into this server for direct connections
         // and Education server list joins. A failure leaves the endpoint
         // running for Xbox signaling.
+        if (!httpSignaling) {
+            return true;
+        }
         try {
             bindHttpSignaling(endpointChannel, proxies.signaling());
         } catch (Exception e) {
@@ -520,6 +528,33 @@ public class NetherNetServer {
             logger.error(LOG_PREFIX + "Interrupted while the ICE port opened");
         }
         return false;
+    }
+
+    /**
+     * Whether HTTP signaling would listen on the Java server's own port. On a
+     * plugin platform the Java server holds that port's TCP side, as it does
+     * when clone-remote-port makes the Bedrock port the Java port, so the bind
+     * could only fail, or worse, take the port from a Java server that binds
+     * after Geyser. Upstream Geyser checks the same before it starts.
+     */
+    static boolean signalingPortIsTheJavaServers(GeyserConfig config) {
+        int javaPort = config.java().port();
+        return config instanceof GeyserPluginConfig && javaPort > 0 && config.bedrock().signalingPort() == javaPort;
+    }
+
+    private void logSignalingPortIsTheJavaServers() {
+        GeyserConfig.BedrockConfig bedrock = geyser.config().bedrock();
+        logger.error(LOG_PREFIX + "------------------------------------------------------------------------");
+        logger.error(LOG_PREFIX + "HTTP signaling does not start: its TCP port, " + bedrock.signalingPort()
+                + ", is the Java server's port" + (bedrock.cloneRemotePort() ? ", as \"clone-remote-port\" makes it" : "")
+                + ".");
+        logger.error(LOG_PREFIX + "Joins from the server list will not work: retail players who add this server by"
+                + " address, and Education players who join from the Education server list.");
+        logger.error(LOG_PREFIX + "Joins over Xbox signaling (join codes, connection IDs and friend list joins) still"
+                + " work.");
+        logger.error(LOG_PREFIX + "To bring server list joins back, get a second TCP port from your host and set it as"
+                + " \"port\" under \"bedrock.signaling\" in the config, or with -DgeyserSignalingPort.");
+        logger.error(LOG_PREFIX + "------------------------------------------------------------------------");
     }
 
     private void logEndpointClosed() {
