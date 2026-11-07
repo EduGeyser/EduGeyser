@@ -75,14 +75,11 @@ import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
 import java.nio.charset.StandardCharsets;
-import java.nio.file.AtomicMoveNotSupportedException;
 import java.nio.file.Files;
 import java.nio.file.Path;
-import java.nio.file.StandardCopyOption;
 import javax.net.ssl.TrustManager;
 import javax.net.ssl.TrustManagerFactory;
 import javax.net.ssl.X509TrustManager;
-import java.security.KeyFactory;
 import java.security.KeyPair;
 import java.security.KeyPairGenerator;
 import java.security.KeyStore;
@@ -91,12 +88,8 @@ import java.security.PublicKey;
 import java.security.Signature;
 import java.security.cert.CertificateFactory;
 import java.security.cert.X509Certificate;
-import java.security.spec.ECGenParameterSpec;
-import java.security.spec.PKCS8EncodedKeySpec;
-import java.security.spec.X509EncodedKeySpec;
 import java.time.Duration;
 import java.time.Instant;
-import java.util.Base64;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
@@ -128,10 +121,17 @@ import java.util.concurrent.atomic.AtomicReference;
  * backs off, and leaves the listener serving plaintext: TLS is refused, so
  * clients fall back to plain HTTP and nobody is locked out.
  *
- * Deliberately configuration free: manual certificate files are the opt
- * out (they take precedence and this manager is never created), the
- * certified IP is the auto detected public address, and the Let's Encrypt
- * staging environment is reachable for testing via the
+ * Every issuance uses a fresh domain key, kept in memory until its
+ * certificate arrives; then the key and the certificate are written as one
+ * pair (see {@link #writePair}), so a crash never leaves a key beside the
+ * wrong certificate, and a failed renewal leaves the previous pair on disk
+ * and serving. The account key lasts as long as the Let's Encrypt account.
+ * Both key files have the one form {@link NetherNetKeyFiles} describes.
+ *
+ * Deliberately configuration free: a configured certificate or manual
+ * certificate files are the opt out (they take precedence and this manager
+ * is never created), the certified IP is the auto detected public address,
+ * and the Let's Encrypt staging environment is reachable for testing via the
  * geyser.nethernet.acme.staging system property.
  */
 public final class NetherNetCertificateManager implements TlsContextSelector, AutoCloseable {
@@ -483,6 +483,9 @@ public final class NetherNetCertificateManager implements TlsContextSelector, Au
     private void ensureCertificate() throws Exception {
         Path certFile = acmeDir.resolve("cert.pem");
         Path domainKeyFile = acmeDir.resolve("domain-key.pem");
+        // Before anything reads the pair: an issuance a crash interrupted is
+        // completed or discarded here
+        recoverPair(certFile, domainKeyFile);
 
         if (Files.exists(certFile) && Files.exists(domainKeyFile)) {
             // Every way the persisted material can be unusable converges on
@@ -527,9 +530,9 @@ public final class NetherNetCertificateManager implements TlsContextSelector, Au
                     try {
                         context = buildContext(certFile, domainKeyFile);
                     } catch (Exception e) {
-                        // Includes the key not being the certificate's
-                        // counterpart, which no retry can heal: only fresh
-                        // material can.
+                        // Includes a key that cannot be read or is not the
+                        // certificate's counterpart, which no retry can
+                        // heal: only fresh material can.
                         unusable = "the certificate and key are unusable together ("
                                 + (e.getMessage() != null ? e.getMessage() : e.toString()) + ")";
                     }
@@ -595,7 +598,7 @@ public final class NetherNetCertificateManager implements TlsContextSelector, Au
         Session session = new Session(staging ? "acme://letsencrypt.org/staging" : "acme://letsencrypt.org");
         Account account = new AccountBuilder()
                 .agreeToTermsOfService()
-                .useKeyPair(loadOrCreateKeyPair(acmeDir.resolve("account-key.pem")))
+                .useKeyPair(loadOrCreateAccountKey(acmeDir.resolve("account-key.pem")))
                 .create(session);
 
         // IP identifiers are only issued under the short lived profile.
@@ -613,10 +616,12 @@ public final class NetherNetCertificateManager implements TlsContextSelector, Au
             }
         }
 
-        KeyPair domainKeyPair = loadOrCreateKeyPair(domainKeyFile);
+        // A fresh key for every certificate, in memory until the certificate
+        // for it arrives, so a failed order leaves nothing on disk
+        KeyPair domainKey = NetherNetKeyFiles.generateP256();
         CSRBuilder csr = new CSRBuilder();
         csr.addIP(ip);
-        csr.sign(domainKeyPair);
+        csr.sign(domainKey);
         order.execute(csr.getEncoded());
 
         awaitStatus(CHALLENGE_TIMEOUT, "order", () -> {
@@ -627,7 +632,7 @@ public final class NetherNetCertificateManager implements TlsContextSelector, Au
         Certificate certificate = order.getCertificate();
         StringWriter pem = new StringWriter();
         certificate.writeCertificate(pem);
-        writeAtomically(certFile, pem.toString());
+        writePair(certFile, domainKeyFile, domainKey, pem.toString());
 
         List<X509Certificate> chain = readChain(certFile);
         // Remember what was just issued, whatever the gate makes of it: a
@@ -635,6 +640,7 @@ public final class NetherNetCertificateManager implements TlsContextSelector, Au
         // material, so ordering another cannot help and the manager falls
         // back to free adoption retries for exactly this leaf.
         replacementLeaf = chain.isEmpty() ? null : chain.get(0);
+        // Built from the files just written, which reads them back
         if (!adoptContext(buildContext(certFile, domainKeyFile), chain)) {
             // Surface the rejection as a maintenance failure so the backoff
             // retries adoption of the persisted certificate; a temporal
@@ -790,49 +796,68 @@ public final class NetherNetCertificateManager implements TlsContextSelector, Au
     }
 
     /**
-     * Loads a persisted P-256 keypair (private PKCS#8 and public SPKI PEM
-     * blocks in one file), generating and persisting one on first use.
+     * Loads the account key, kept for the account's life, or creates one on
+     * first use. An older two block file is rewritten in the one key file
+     * form on the way.
      */
-    private KeyPair loadOrCreateKeyPair(Path file) throws Exception {
+    private KeyPair loadOrCreateAccountKey(Path file) throws Exception {
         if (Files.exists(file)) {
             try {
-                String pem = Files.readString(file, StandardCharsets.UTF_8);
-                KeyFactory keyFactory = KeyFactory.getInstance("EC");
-                return new KeyPair(
-                        keyFactory.generatePublic(new X509EncodedKeySpec(readPemBlock(pem, "PUBLIC KEY"))),
-                        keyFactory.generatePrivate(new PKCS8EncodedKeySpec(readPemBlock(pem, "PRIVATE KEY"))));
+                return NetherNetKeyFiles.load(file, logger);
             } catch (Exception e) {
-                // An unreadable key file used to wedge issuance forever, and
-                // a torn one can even leave the private block loadable while
-                // the public block is gone, so the certificate keeps serving
-                // while renewal never succeeds again. Regenerating recovers.
-                // For the domain key any certificate issued against the old
-                // one is invalidated by the caller, which reissues with this
-                // one; for the account key the old ACME registration is
-                // abandoned rather than reused, so say which is happening.
+                // An unreadable key file used to wedge issuance forever.
+                // Replacing it registers a new account, which loses nothing
+                // but the old account's history.
                 logger.warning(LOG_PREFIX + "Replacing " + file.getFileName() + ", which is unreadable ("
-                        + (e.getMessage() != null ? e.getMessage() : e.toString()) + "). "
-                        + (file.getFileName().toString().startsWith("account")
-                                ? "A new Let's Encrypt account is registered and the previous one abandoned"
-                                : "A replacement certificate is requested for the new key"));
+                        + (e.getMessage() != null ? e.getMessage() : e.toString()) + "). A new Let's Encrypt account"
+                        + " is registered and the previous one abandoned");
             }
         }
-        KeyPairGenerator generator = KeyPairGenerator.getInstance("EC");
-        generator.initialize(new ECGenParameterSpec("secp256r1"));
-        KeyPair pair = generator.generateKeyPair();
-        writeAtomically(file,
-                writePemBlock(pair.getPrivate().getEncoded(), "PRIVATE KEY")
-                        + writePemBlock(pair.getPublic().getEncoded(), "PUBLIC KEY"));
+        KeyPair pair = NetherNetKeyFiles.generateP256();
+        NetherNetKeyFiles.writeAtomically(file, NetherNetKeyFiles.writeSec1(pair));
         return pair;
     }
 
-    private static SslContext buildContext(Path certFile, Path domainKeyFile) throws Exception {
-        // The domain key file carries both PEM blocks; netty wants only the
-        // PKCS#8 private key, so hand it the isolated block.
-        String pem = Files.readString(domainKeyFile, StandardCharsets.UTF_8);
-        byte[] keyDer = readPemBlock(pem, "PRIVATE KEY");
-        java.security.PrivateKey key = KeyFactory.getInstance("EC")
-                .generatePrivate(new PKCS8EncodedKeySpec(keyDer));
+    /**
+     * Writes a freshly issued certificate and its key as one pair. Both are
+     * first written in full beside their final names, the key and then the
+     * certificate; the certificate's file appearing there commits the pair,
+     * and {@link #recoverPair} moves both into place. A crash at any point
+     * leaves the previous pair or the new one, never a key beside the wrong
+     * certificate: the next start completes a committed pair and discards an
+     * uncommitted one.
+     */
+    static void writePair(Path certFile, Path keyFile, KeyPair key, String chainPem) throws IOException {
+        NetherNetKeyFiles.writeAtomically(pending(keyFile), NetherNetKeyFiles.writeSec1(key));
+        NetherNetKeyFiles.writeAtomically(pending(certFile), chainPem);
+        recoverPair(certFile, keyFile);
+    }
+
+    /** Completes a committed pair write, or discards the key of one that never committed. */
+    static void recoverPair(Path certFile, Path keyFile) throws IOException {
+        Path pendingCert = pending(certFile);
+        Path pendingKey = pending(keyFile);
+        if (Files.exists(pendingCert)) {
+            // The key first: once the certificate is in place nothing marks
+            // the pair as unfinished. A pending certificate without a pending
+            // key means the key already moved.
+            if (Files.exists(pendingKey)) {
+                NetherNetKeyFiles.moveIntoPlace(pendingKey, keyFile);
+            }
+            NetherNetKeyFiles.moveIntoPlace(pendingCert, certFile);
+        } else {
+            Files.deleteIfExists(pendingKey);
+        }
+    }
+
+    private static Path pending(Path file) {
+        return file.resolveSibling(file.getFileName() + ".next");
+    }
+
+    private SslContext buildContext(Path certFile, Path domainKeyFile) throws Exception {
+        // Rewrites a domain key file of an older form, which the next
+        // renewal replaces anyway
+        PrivateKey key = NetherNetKeyFiles.load(domainKeyFile, logger).getPrivate();
         CertificateFactory factory = CertificateFactory.getInstance("X.509");
         List<X509Certificate> chain;
         try (var in = Files.newInputStream(certFile)) {
@@ -843,46 +868,13 @@ public final class NetherNetCertificateManager implements TlsContextSelector, Au
             throw new IllegalStateException("the certificate file holds no certificate");
         }
         // netty builds a context from a mismatched pair without complaint,
-        // producing handshakes no client can verify. The pair can drift
-        // apart here the same way it can on the manual path: an interrupted
-        // issuance leaves a new key beside the old certificate.
+        // producing handshakes no client can verify. Pairs are written as
+        // one (see writePair), but the files are the operator's to touch.
         String mismatch = keyMismatchReason(key, chain.get(0).getPublicKey());
         if (mismatch != null) {
             throw new IllegalStateException(mismatch);
         }
         return SslContextBuilder.forServer(key, chain.toArray(new X509Certificate[0])).build();
-    }
-
-    /**
-     * Replaces a file in one step. A crash or full disk mid write must not
-     * leave truncated material behind: a torn certificate wedges adoption
-     * and a torn key file can silently split into a state where the served
-     * certificate still works but renewal can never succeed again.
-     */
-    private static void writeAtomically(Path file, String content) throws IOException {
-        Path parent = file.getParent();
-        if (parent != null) {
-            Files.createDirectories(parent);
-        }
-        Path tempFile = file.resolveSibling(file.getFileName() + ".tmp");
-        try {
-            Files.writeString(tempFile, content, StandardCharsets.UTF_8);
-            try {
-                Files.move(tempFile, file, StandardCopyOption.REPLACE_EXISTING, StandardCopyOption.ATOMIC_MOVE);
-            } catch (AtomicMoveNotSupportedException e) {
-                Files.move(tempFile, file, StandardCopyOption.REPLACE_EXISTING);
-            }
-        } finally {
-            // A failed write or move must not strand the temporary file; the
-            // name is fixed, so a leftover would only be overwritten, but
-            // leaving debris in the operator's config folder is worse. A
-            // successful move already removed it, so this is normally a no
-            // op, and its own failure must not replace the real cause.
-            try {
-                Files.deleteIfExists(tempFile);
-            } catch (Exception ignored) {
-            }
-        }
     }
 
     /** The certificate chain from a PEM file, leaf first. */
@@ -891,23 +883,6 @@ public final class NetherNetCertificateManager implements TlsContextSelector, Au
             return CertificateFactory.getInstance("X.509").generateCertificates(in).stream()
                     .map(X509Certificate.class::cast).toList();
         }
-    }
-
-    private static byte[] readPemBlock(String pem, String label) {
-        String begin = "-----BEGIN " + label + "-----";
-        String end = "-----END " + label + "-----";
-        int start = pem.indexOf(begin);
-        int stop = pem.indexOf(end);
-        if (start < 0 || stop < 0) {
-            throw new IllegalArgumentException("missing " + label + " PEM block");
-        }
-        return Base64.getDecoder().decode(pem.substring(start + begin.length(), stop).replaceAll("\\s", ""));
-    }
-
-    private static String writePemBlock(byte[] der, String label) {
-        return "-----BEGIN " + label + "-----\n"
-                + Base64.getMimeEncoder(64, "\n".getBytes(StandardCharsets.UTF_8)).encodeToString(der)
-                + "\n-----END " + label + "-----\n";
     }
 
     @Override
