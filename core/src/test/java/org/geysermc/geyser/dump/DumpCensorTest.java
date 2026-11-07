@@ -25,7 +25,11 @@
 
 package org.geysermc.geyser.dump;
 
+import com.google.gson.Gson;
+import io.github.sendablemetatype.netty.channel.nethernet.nxs.ProviderClient;
+import io.github.sendablemetatype.netty.channel.nethernet.nxs.transport.AddressFamily;
 import org.geysermc.geyser.configuration.GeyserConfig;
+import org.geysermc.geyser.network.nethernet.NetherNetNxs;
 import org.geysermc.geyser.network.nethernet.NetherNetServer;
 import org.geysermc.geyser.text.AsteriskSerializer;
 import org.junit.jupiter.api.AfterEach;
@@ -41,8 +45,11 @@ import java.io.StringReader;
 import java.net.InetAddress;
 import java.net.InetSocketAddress;
 import java.util.List;
+import java.util.Set;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNull;
 
 class DumpCensorTest {
     private static final String CONFIG = """
@@ -134,12 +141,69 @@ class DumpCensorTest {
             List.of(endpoint("1.2.3.4", 19132), endpoint("192.168.1.5", 19132)), true,
             List.of(endpoint("2606:4700::1", 19132)));
 
-        DumpInfo.NetherNetInfo info = DumpInfo.NetherNetInfo.of(announced, null);
+        DumpInfo.NetherNetInfo info = DumpInfo.NetherNetInfo.of(announced, null, null);
         assertEquals(List.of("***:19132", "192.168.1.5:19132"), info.advertised());
         assertEquals(List.of("[***]:19132"), info.discovered());
 
         AsteriskSerializer.showSensitive = true;
-        assertEquals(List.of("[2606:4700::1]:19132"), DumpInfo.NetherNetInfo.of(announced, null).discovered());
+        assertEquals(List.of("[2606:4700::1]:19132"), DumpInfo.NetherNetInfo.of(announced, null, null).discovered());
+    }
+
+    @ParameterizedTest
+    @ValueSource(booleans = {false, true})
+    void censorsTheNxsTokenEvenInAFullDump(boolean full) throws Exception {
+        // "dump full" only ever unmasks, which is why a secret cannot rely on the asterisk processor
+        AsteriskSerializer.showSensitive = full;
+        GeyserConfig.SignalingConfig config = YamlConfigurationLoader.builder()
+            .source(() -> new BufferedReader(new StringReader("""
+                mode: nxs
+                nxs:
+                  token: yaml-secret
+                  endpoint: https://signal.example.net
+                """)))
+            .defaultOptions(InterfaceDefaultOptions::addTo)
+            .build().load().get(GeyserConfig.SignalingConfig.class);
+
+        CommentedConfigurationNode node = CommentedConfigurationNode.root(AsteriskSerializer.dumpOptions());
+        node.set(config);
+        assertEquals("***", node.node("nxs", "token").getString());
+        assertFalse(node.toString().contains("yaml-secret"));
+        assertEquals("https://signal.example.net", node.node("nxs", "endpoint").getString(), "the service is not secret");
+    }
+
+    /** NXS confirming a public IPv4, a public IPv6 and a LAN address. */
+    private static final NetherNetNxs.Published PUBLISHED = new NetherNetNxs.Published(
+        new ProviderClient.PublishedEndpoints(List.of(new InetSocketAddress("198.51.100.1", 19132),
+            new InetSocketAddress("2001:db8::1", 19133), new InetSocketAddress("192.168.1.5", 19132)),
+            Set.of(AddressFamily.IPV6, AddressFamily.IPV4)),
+        "srv_01HZX", -125_000);
+
+    @Test
+    void censorsPublicAddressesNxsPublishesButKeepsTheirPorts() throws Exception {
+        NetherNetServer.Announced announced = new NetherNetServer.Announced(19132, List.of(), true, List.of());
+
+        assertEquals("{\"confirmed\":true,\"instanceId\":\"srv_01HZX\",\"clockOffsetMillis\":-125000,"
+                + "\"addresses\":[\"***:19132\",\"[***]:19133\",\"192.168.1.5:19132\"],\"assistedFamilies\":[4,6]}",
+            new Gson().toJson(DumpInfo.NetherNetInfo.of(announced, null, PUBLISHED).nxs()));
+
+        AsteriskSerializer.showSensitive = true;
+        assertEquals(List.of("198.51.100.1:19132", "[2001:db8::1]:19133", "192.168.1.5:19132"),
+            DumpInfo.NetherNetInfo.of(announced, null, PUBLISHED).nxs().addresses(), "a full dump shows them");
+    }
+
+    @Test
+    void keepsTheNxsInstanceIdReadableWithoutAFullDump() {
+        // Support looks the server up by it, and registration already logs it
+        NetherNetServer.Announced announced = new NetherNetServer.Announced(19132, List.of(), false, List.of());
+        assertEquals("srv_01HZX", DumpInfo.NetherNetInfo.of(announced, null, PUBLISHED).nxs().instanceId());
+    }
+
+    @Test
+    void tellsNxsRunningWithoutConfirmedAddressesFromNotRunning() {
+        NetherNetServer.Announced announced = new NetherNetServer.Announced(19132, List.of(), false, List.of());
+        assertEquals("{\"confirmed\":false,\"clockOffsetMillis\":0,\"addresses\":[],\"assistedFamilies\":[]}",
+            new Gson().toJson(DumpInfo.NetherNetInfo.of(announced, null, new NetherNetNxs.Published(null, null, 0)).nxs()));
+        assertNull(DumpInfo.NetherNetInfo.of(announced, null, null).nxs());
     }
 
     @Test

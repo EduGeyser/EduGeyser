@@ -144,6 +144,12 @@ public class NethernetManagerImpl implements NethernetManager {
         return s != null ? s.announced() : null;
     }
 
+    /** The running server's NXS, or null when it is not running or the signaling mode has none. */
+    public @Nullable NetherNetNxs nxs() {
+        NetherNetServer s = server;
+        return s != null ? s.nxs() : null;
+    }
+
     /**
      * Called during Geyser shutdown to release all Nethernet resources,
      * the player threads included.

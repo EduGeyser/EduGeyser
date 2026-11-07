@@ -1,0 +1,36 @@
+bedrock:
+  address: 0.0.0.0
+  port: 19132
+  webrtc-port: 0
+  clone-remote-port: false
+  signaling:
+    # This installation never falls back to "nxs"
+    mode: hybrid
+    advertise-addresses: []
+    stun-discovery: true
+    builtin:
+      https:
+        certificate: ""
+        private-key: ""
+        password: ""
+    # Settings for the external signaling service. Only used in the "nxs" and "hybrid" modes, or when built-in signaling cannot run.
+    # Ours is run by the network team, ask them before changing it.
+    nxs:
+      token: ""
+      endpoint: https://signal.example.net
+advanced:
+  bedrock:
+    compression-level: 6
+    haproxy-protocol-whitelisted-ips: []
+    signaling-trusted-proxies: []
+    webrtc-proxy-protocol-relays: []
+    prefer-signaling-proxy-address: false
+    use-waterdogpe-forwarding: false
+    validate-bedrock-login: true
+    nethernet-debug: false
+  nxs:
+    assisted-joins: false
+    connection-checks: true
+    location: {}
+    deregister-on-shutdown: false
+config-version: 12

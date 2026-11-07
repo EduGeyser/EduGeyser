@@ -37,6 +37,7 @@ import org.junit.jupiter.params.provider.Arguments;
 import org.junit.jupiter.params.provider.MethodSource;
 import org.spongepowered.configurate.CommentedConfigurationNode;
 import org.spongepowered.configurate.ConfigurateException;
+import org.spongepowered.configurate.yaml.YamlConfigurationLoader;
 
 import java.io.File;
 import java.io.IOException;
@@ -46,6 +47,7 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.StandardCopyOption;
 import java.util.List;
+import java.util.Map;
 import java.util.Objects;
 import java.util.UUID;
 import java.util.stream.Stream;
@@ -407,6 +409,128 @@ public class ConfigLoaderTest {
         // On with a list keeps the list
         assertEquals(List.of("10.0.0.0/8"), config.advanced().bedrock().haproxyProtocolWhitelistedIps());
         assertEquals(Constants.CONFIG_VERSION, config.configVersion());
+    }
+
+    @ParameterizedTest
+    @MethodSource("platformTypes")
+    void testSignalingMigration(PlatformType platformType, Class<? extends GeyserConfig> configClass) throws Exception {
+        // Upstream Geyser's own test of its version 10 to 11 move
+        GeyserConfig config = new ConfigLoader(copyResourceToTempFile("tests", "v10-signaling.yml"), platformType)
+            .load0(configClass);
+
+        // The two lists become one, each address once, built-in's first
+        GeyserConfig.SignalingConfig signaling = config.bedrock().signaling();
+        assertEquals(List.of("1.1.1.1", "play.example.com:19133", "8.8.8.8:19133"), signaling.advertiseAddresses());
+        assertFalse(signaling.stunDiscovery());
+        assertEquals(GeyserConfig.SignalingConfig.Mode.HYBRID, signaling.mode());
+        assertTrue(config.advanced().nxs().assistedJoins());
+        assertEquals(Constants.CONFIG_VERSION, config.configVersion());
+    }
+
+    @ParameterizedTest
+    @MethodSource("platformTypes")
+    void testUpstreamNxsSettingsSurviveTheRewrite(PlatformType platformType, Class<? extends GeyserConfig> configClass) throws Exception {
+        // A config moving from Geyser keeps its NXS settings when the migration writes the file back, so it can
+        // move back again
+        File file = copyResourceToTempFile("tests", "upstream-v11-nxs.yml");
+        GeyserConfig config = new ConfigLoader(file, platformType).load0(configClass);
+
+        GeyserConfig.SignalingConfig signaling = config.bedrock().signaling();
+        assertEquals(GeyserConfig.SignalingConfig.Mode.NXS, signaling.mode());
+        assertEquals("file:secrets/nxs-token", signaling.nxs().token());
+        assertEquals("https://signal.example.net", signaling.nxs().endpoint());
+        GeyserConfig.AdvancedNxsConfig advanced = config.advanced().nxs();
+        assertTrue(advanced.assistedJoins());
+        assertFalse(advanced.connectionChecks());
+        assertEquals(Map.of("country", "NL", "city", "Amsterdam"), advanced.location());
+        assertTrue(advanced.deregisterOnShutdown());
+
+        CommentedConfigurationNode written = YamlConfigurationLoader.builder().file(file).build().load();
+        assertEquals(Constants.CONFIG_VERSION, written.node("config-version").getInt());
+        assertEquals("nxs", written.node("bedrock", "signaling", "mode").getString());
+        assertEquals("file:secrets/nxs-token", written.node("bedrock", "signaling", "nxs", "token").getString());
+        assertEquals("https://signal.example.net", written.node("bedrock", "signaling", "nxs", "endpoint").getString());
+        assertTrue(written.node("advanced", "nxs", "assisted-joins").getBoolean());
+        assertFalse(written.node("advanced", "nxs", "connection-checks").getBoolean(true));
+        assertEquals("NL", written.node("advanced", "nxs", "location", "country").getString());
+        assertEquals("Amsterdam", written.node("advanced", "nxs", "location", "city").getString());
+        assertTrue(written.node("advanced", "nxs", "deregister-on-shutdown").getBoolean());
+    }
+
+    @ParameterizedTest
+    @MethodSource("platformTypes")
+    void testUpstreamSignalingCommentsThatPromiseAFallbackAreReplaced(PlatformType platformType,
+                                                                      Class<? extends GeyserConfig> configClass) throws Exception {
+        // Upstream's own comments at version 11, which the rewrite would otherwise carry over
+        File file = copyResourceToTempFile("tests", "upstream-v11-comments.yml");
+        new ConfigLoader(file, platformType).load0(configClass);
+
+        CommentedConfigurationNode written = YamlConfigurationLoader.builder().file(file).build().load();
+        CommentedConfigurationNode mode = written.node("bedrock", "signaling", "mode");
+        assertEquals("hybrid", mode.getString());
+        assertFalse(mode.comment().contains("falls back"), mode.comment());
+        assertTrue(mode.comment().contains("does not switch to the signaling service by itself"), mode.comment());
+        assertEquals("Settings for the signaling service. Only used in the \"nxs\" and \"hybrid\" modes.",
+            written.node("bedrock", "signaling", "nxs").comment());
+        // A comment of the user's own stays
+        assertEquals("Our own provider, set up by the network team",
+            written.node("bedrock", "signaling", "nxs", "endpoint").comment().strip());
+    }
+
+    @ParameterizedTest
+    @MethodSource("platformTypes")
+    void testUpstreamCommentsAtTheSameVersionAreReplacedOnce(PlatformType platformType,
+                                                             Class<? extends GeyserConfig> configClass) throws Exception {
+        // Upstream Geyser at version 12 wrote these; no migration runs, so the fix-up alone has the file written
+        File file = copyResourceToTempFile("tests", "upstream-v12-comments.yml");
+        new ConfigLoader(file, platformType).load0(configClass);
+
+        CommentedConfigurationNode written = YamlConfigurationLoader.builder().file(file).build().load();
+        assertEquals(12, written.node("config-version").getInt());
+        assertEquals("hybrid", written.node("bedrock", "signaling", "mode").getString());
+        assertTrue(written.node("bedrock", "port").comment().startsWith("The port that Geyser listens on for Bedrock players"),
+            written.node("bedrock", "port").comment());
+        assertTrue(written.node("advanced", "bedrock", "validate-bedrock-login").comment()
+            .contains("block the NetherNet UDP port and the HTTP signaling TCP port"));
+        assertTrue(written.node("bedrock", "signaling", "mode").comment()
+            .contains("does not switch to the signaling service by itself"));
+        assertEquals("Settings for the signaling service. Only used in the \"nxs\" and \"hybrid\" modes.",
+            written.node("bedrock", "signaling", "nxs").comment());
+        assertEquals("Our own provider, set up by the network team",
+            written.node("bedrock", "signaling", "nxs", "endpoint").comment().strip());
+
+        // Nothing is left to fix, so the next start leaves the file alone
+        List<String> fixed = Files.readAllLines(file.toPath());
+        new ConfigLoader(file, platformType).load0(configClass);
+        assertEquals(fixed, Files.readAllLines(file.toPath()));
+    }
+
+    @ParameterizedTest
+    @MethodSource("platformTypes")
+    void testCommentsOfTheOperatorsOwnStayEvenWhenTheyQuoteUpstream(PlatformType platformType,
+                                                                    Class<? extends GeyserConfig> configClass) throws Exception {
+        // A comment of the operator's own that mentions a fallback, and upstream's "nxs" comment with a note appended
+        String expectedMode = "This installation never falls back to \"nxs\"";
+        List<String> expectedNxs = List.of(
+            "Settings for the external signaling service. Only used in the \"nxs\" and \"hybrid\" modes, or when built-in signaling cannot run.",
+            "Ours is run by the network team, ask them before changing it.");
+
+        // At version 12 nothing is fixed, so the file stays as it is
+        File current = copyResourceToTempFile("tests", "upstream-v12-own-comments.yml");
+        List<String> original = Files.readAllLines(current.toPath());
+        new ConfigLoader(current, platformType).load0(configClass);
+        assertEquals(original, Files.readAllLines(current.toPath()));
+
+        // At version 11 the migration writes the file, and both comments come along
+        File older = tempDirectory.resolve("own-comments-v11.yml").toFile();
+        Files.write(older.toPath(), original.stream()
+            .map(line -> line.equals("config-version: 12") ? "config-version: 11" : line).toList());
+        new ConfigLoader(older, platformType).load0(configClass);
+
+        CommentedConfigurationNode written = YamlConfigurationLoader.builder().file(older).build().load();
+        assertEquals(12, written.node("config-version").getInt());
+        assertEquals(expectedMode, written.node("bedrock", "signaling", "mode").comment().strip());
+        assertEquals(expectedNxs, written.node("bedrock", "signaling", "nxs").comment().lines().map(String::strip).toList());
     }
 
     @ParameterizedTest

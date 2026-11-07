@@ -35,6 +35,8 @@ import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
 import com.google.gson.JsonPrimitive;
 import com.google.gson.annotations.SerializedName;
+import io.github.sendablemetatype.netty.channel.nethernet.nxs.ProviderClient;
+import io.github.sendablemetatype.netty.channel.nethernet.nxs.transport.AddressFamily;
 import it.unimi.dsi.fastutil.objects.Object2IntMap;
 import it.unimi.dsi.fastutil.objects.Object2IntOpenHashMap;
 import lombok.Getter;
@@ -47,6 +49,7 @@ import org.geysermc.geyser.api.extension.Extension;
 import org.geysermc.geyser.api.util.MinecraftVersion;
 import org.geysermc.geyser.network.ConnectionRequests;
 import org.geysermc.geyser.network.bedrock.GameProtocol;
+import org.geysermc.geyser.network.nethernet.NetherNetNxs;
 import org.geysermc.geyser.network.nethernet.NetherNetServer;
 import org.geysermc.geyser.network.nethernet.NethernetManagerImpl;
 import org.geysermc.geyser.pack.ResourcePackHolder;
@@ -179,8 +182,14 @@ public class DumpInfo {
             Registries.BEDROCK_ENTITY_DEFINITIONS.get().values().stream().filter(def -> def instanceof CustomEntityDefinition).toArray().length
         );
 
-        this.netherNetInfo = geyser.nethernetManager() instanceof NethernetManagerImpl manager
-            ? NetherNetInfo.of(manager.announced(), manager.httpSignalingAddress()) : null;
+        if (geyser.nethernetManager() instanceof NethernetManagerImpl manager) {
+            // Read once: a shutdown can clear it in between
+            NetherNetNxs nxs = manager.nxs();
+            this.netherNetInfo = NetherNetInfo.of(manager.announced(), manager.httpSignalingAddress(),
+                nxs == null ? null : nxs.published());
+        } else {
+            this.netherNetInfo = null;
+        }
     }
 
     private JsonElement toGson(ConfigurationNode node) {
@@ -432,18 +441,41 @@ public class DumpInfo {
      *                      addresses, the address an HTTP join's Host header names, and {@code discovered}
      * @param stunDiscovery whether STUN discovery runs
      * @param discovered    the public addresses STUN discovery currently finds
+     * @param nxs           what the signaling service hands joining players, or null when NXS is not running
      */
     public record NetherNetInfo(int icePort, @Nullable Integer signalingPort, List<String> advertised,
-                                boolean stunDiscovery, List<String> discovered) {
+                                boolean stunDiscovery, List<String> discovered, @Nullable Nxs nxs) {
         static @Nullable NetherNetInfo of(NetherNetServer.@Nullable Announced announced,
-                                          @Nullable InetSocketAddress httpSignaling) {
+                                          @Nullable InetSocketAddress httpSignaling,
+                                          NetherNetNxs.@Nullable Published nxs) {
             return announced == null ? null : new NetherNetInfo(announced.icePort(),
                 httpSignaling == null ? null : httpSignaling.getPort(), censor(announced.advertised()),
-                announced.stunDiscovery(), censor(announced.discovered()));
+                announced.stunDiscovery(), censor(announced.discovered()), nxs == null ? null : Nxs.of(nxs));
         }
 
         private static List<String> censor(List<InetSocketAddress> addresses) {
             return addresses.stream().map(AsteriskSerializer::censor).toList();
+        }
+
+        /**
+         * NXS as upstream Geyser's dumps show it. Its instance ID is not secret and stays readable: support looks the
+         * server up by it, and registration logs it.
+         *
+         * @param confirmed         whether the service has confirmed {@code addresses}
+         * @param instanceId        the ID the service knows this server by, null until registered
+         * @param clockOffsetMillis the service's clock minus this machine's, which refuses requests when too far off
+         * @param addresses         the addresses the service hands players, censored like the others
+         * @param assistedFamilies  the address families the service assists joins over, 4 and 6
+         */
+        public record Nxs(boolean confirmed, @Nullable String instanceId, long clockOffsetMillis, List<String> addresses,
+                          List<Integer> assistedFamilies) {
+            static Nxs of(NetherNetNxs.Published published) {
+                ProviderClient.PublishedEndpoints endpoints = published.endpoints();
+                return new Nxs(endpoints != null, published.instanceId(), published.clockOffsetMillis(),
+                    endpoints == null ? List.of() : censor(endpoints.endpoints()),
+                    endpoints == null ? List.of() : endpoints.assistedFamilies().stream()
+                        .map(AddressFamily::number).sorted().toList());
+            }
         }
     }
 }

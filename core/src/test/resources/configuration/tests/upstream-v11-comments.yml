@@ -1,0 +1,40 @@
+bedrock:
+  address: 0.0.0.0
+  port: 19132
+  webrtc-port: 0
+  transport: nethernet
+  clone-remote-port: false
+  signaling:
+    # How Bedrock players find this server when using NetherNet.
+    # "builtin": Geyser runs its own signaling server on the Bedrock port, over TCP. This does not work if the Java server
+    # uses the same port (for example with "clone-remote-port"). In that case, Geyser automatically falls back to "nxs".
+    # "nxs": Geyser registers this server with the external signaling service configured in "nxs.endpoint" below.
+    # "hybrid": uses "builtin" and "nxs" at the same time.
+    mode: hybrid
+    advertise-addresses: []
+    stun-discovery: true
+    builtin:
+      https:
+        certificate: ""
+        private-key: ""
+        password: ""
+    # Settings for the external signaling service. Only used in the "nxs" and "hybrid" modes, or when built-in signaling cannot run.
+    nxs:
+      token: ""
+      # Our own provider, set up by the network team
+      endpoint: https://signal.example.net
+advanced:
+  bedrock:
+    broadcast-port: 0
+    compression-level: 6
+    use-haproxy-protocol: false
+    haproxy-protocol-whitelisted-ips: []
+    signaling-trusted-proxies: []
+    mtu: 1400
+    validate-bedrock-login: true
+  nxs:
+    assisted-joins: false
+    connection-checks: true
+    location: {}
+    deregister-on-shutdown: false
+config-version: 11

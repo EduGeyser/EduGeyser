@@ -161,8 +161,24 @@ final class NetherNetPingSnapshots {
      * @return the Java server's answer, or null when it gave none or has not answered yet
      */
     @Nullable GeyserPingInfo latest(@Nullable String host) {
+        return latest(host, waitNanos);
+    }
+
+    /**
+     * The answer there is for a host, without waiting: schedules a refresh when the snapshot is
+     * stale, as {@link #latest(String)} does, but never waits for one. For callers that must not
+     * block, such as NXS reporting the listing from its service client's thread.
+     *
+     * @param host the virtual host, or null
+     * @return the Java server's answer, or null when it gave none or has not answered yet
+     */
+    @Nullable GeyserPingInfo current(@Nullable String host) {
+        return latest(host, 0);
+    }
+
+    private @Nullable GeyserPingInfo latest(@Nullable String host, long budgetNanos) {
         long now = clock.getAsLong();
-        long deadline = now + waitNanos;
+        long deadline = now + budgetNanos;
         Snapshot own = host == null || host.isBlank() ? hostless : forHost(JoinAddress.parse(host, defaultPort), now);
         if (own != null) {
             own.requestedNanos = now;

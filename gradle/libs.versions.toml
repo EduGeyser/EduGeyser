@@ -150,6 +150,7 @@ minecraftauth = { group = "net.raphimc", name = "MinecraftAuth", version.ref = "
 mcprotocollib = { group = "org.geysermc.mcprotocollib", name = "protocol", version.ref = "mcprotocollib" }
 netty-transport-common = { group = "io.github.sendablemetatype.netty", name = "netty-transport-common", version.ref = "networkm" }
 nethernet = { group = "io.github.sendablemetatype.netty", name = "netty-transport-nethernet", version.ref = "networkm" }
+nethernet-nxs = { group = "io.github.sendablemetatype.netty", name = "netty-nethernet-nxs", version.ref = "networkm" }
 # Not a transport EduGeyser serves: the Protocol library's bedrock-connection still loads RakNet types
 # (its FrameIdCodec reads RakMessage), so the module stays on the class path until the Protocol fork drops them
 netty-transport-raknet = { group = "io.github.sendablemetatype.netty", name = "netty-transport-raknet", version.ref = "networkm" }

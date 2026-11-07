@@ -31,6 +31,7 @@ import org.geysermc.geyser.GeyserLogger;
 import org.spongepowered.configurate.CommentedConfigurationNode;
 import org.spongepowered.configurate.ConfigurateException;
 import org.spongepowered.configurate.ConfigurationNode;
+import org.spongepowered.configurate.NodePath;
 import org.spongepowered.configurate.serialize.SerializationException;
 import org.spongepowered.configurate.transformation.ConfigurationTransformation;
 import org.spongepowered.configurate.transformation.TransformAction;
@@ -38,10 +39,12 @@ import org.spongepowered.configurate.transformation.TransformAction;
 import java.util.Arrays;
 import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
 import java.util.UUID;
 import java.util.function.BiFunction;
+import java.util.stream.Stream;
 
 import static org.spongepowered.configurate.NodePath.path;
 import static org.spongepowered.configurate.transformation.TransformAction.remove;
@@ -67,6 +70,63 @@ public class ConfigMigrations {
         assistance - and use UDP instead of TCP.
         Disabling Bedrock authentication for other use-cases is NOT SUPPORTED, as it allows anyone to spoof usernames, and is therefore a security risk.
         All Floodgate functionality (including skin uploading and account linking) will also not work when this option is disabled.""";
+
+    /**
+     * Upstream Geyser's "port" comments, by the config versions it wrote them at: 5 to 8 (with its "will Geyser will"),
+     * three times at 8, 8 to 10, and 10 to 12. Each says the port is UDP only, or that RakNet uses it, which EduGeyser
+     * does not serve.
+     */
+    private static final List<String> UPSTREAM_PORT_COMMENTS = List.of("""
+        The port that will Geyser will listen on for incoming Bedrock connections.
+        Since Minecraft: Bedrock Edition uses UDP, this port must allow UDP traffic.""", """
+        The port that will Geyser will listen on for incoming Bedrock connections.
+        Since Minecraft: Bedrock Edition uses UDP, this port must allow UDP traffic.
+        Built-in signalling also uses this port over TCP, unless it is the Java server's port.""", """
+        The port that will Geyser will listen on for incoming Bedrock connections.
+        Built-in signalling uses this port over TCP, unless it is the Java server's port, and RakNet uses it over UDP.""", """
+        The port that will Geyser will listen on for incoming Bedrock connections.
+        Built-in signaling uses this port over TCP, unless it is the Java server's port, and RakNet uses it over UDP.""", """
+        The port that Geyser will listen on for incoming Bedrock connections.
+        Built-in signaling uses this port over TCP, and RakNet uses it over UDP.""", """
+        The port that Geyser will listen on for incoming Bedrock connections.
+        Built-in signaling uses this port over TCP (and UDP if "webrtc-port" is not set), and RakNet uses it over UDP.""");
+    /**
+     * Upstream Geyser's "mode" comments, by the config versions it wrote them at: 8, 8 to 10, and 10 to 12. Each
+     * promises a switch to the signaling service when built-in signaling cannot run, or a "none" mode upstream has
+     * dropped since; EduGeyser does neither.
+     */
+    private static final List<String> UPSTREAM_MODE_COMMENTS = List.of("""
+        Configures where signaling should be:
+        "builtin" runs local HTTP signaling over TCP on the Bedrock address and port,
+        "nxs" registers with the external NXS provider configured below, "hybrid" runs both, and "none" disables signaling.
+        Built-in signaling cannot share the Java server's port, e.g. with clone-remote-port; the external signaling provider is used instead.""", """
+        How Bedrock players find this server over NetherNet.
+        "builtin": Geyser runs a local signaling server on the Bedrock port over TCP. This option is not compatible
+        with running the Java server on the Bedrock port.
+        "nxs": Geyser registers with the external signaling service configured below.
+        "hybrid": uses both "builtin" and "nxs".
+        "none" turns signaling off.""", """
+        How Bedrock players find this server when using NetherNet.
+        "builtin": Geyser runs its own signaling server on the Bedrock port, over TCP. This does not work if the Java server
+        uses the same port (for example with "clone-remote-port"). In that case, Geyser automatically falls back to "nxs".
+        "nxs": Geyser registers this server with the external signaling service configured in "nxs.endpoint" below.
+        "hybrid": uses "builtin" and "nxs" at the same time.""");
+    /** Upstream Geyser's comments on the "nxs" section, at config version 8 and from 8 to 12, with the same promise. */
+    private static final List<String> UPSTREAM_NXS_COMMENTS = List.of(
+        "Settings for the external NXS signaling provider. Only used in the \"nxs\" and \"hybrid\" modes, or when built-in signaling cannot run.",
+        "Settings for the external signaling service. Only used in the \"nxs\" and \"hybrid\" modes, or when built-in signaling cannot run.");
+
+    /**
+     * Comments that upstream Geyser or an older EduGeyser wrote as defaults, each saying something untrue here. A
+     * config keeps the comments of whatever wrote it, a Geyser config at EduGeyser's own version included, so
+     * {@link #fixUp} replaces them at any version. Only these exact texts go: a comment the user wrote, or extended
+     * with notes of their own, stays as it is.
+     */
+    private static final Map<NodePath, List<String>> STALE_COMMENTS = Map.of(
+        path("bedrock", "port"), Stream.concat(Stream.of(OLD_PORT_COMMENT), UPSTREAM_PORT_COMMENTS.stream()).toList(),
+        path("advanced", "bedrock", "validate-bedrock-login"), List.of(OLD_VALIDATE_LOGIN_COMMENT),
+        path("bedrock", "signaling", "mode"), UPSTREAM_MODE_COMMENTS,
+        path("bedrock", "signaling", "nxs"), UPSTREAM_NXS_COMMENTS);
 
     public static final BiFunction<Class<? extends GeyserConfig>, GeyserBootstrap, ConfigurationTransformation.Versioned> TRANSFORMER = (configClass, bootstrap) ->
         ConfigurationTransformation.versionedBuilder()
@@ -253,10 +313,27 @@ public class ConfigMigrations {
                     }
                     return null;
                 })
-                .addAction(path("bedrock", "port"), replaceOldComment(OLD_PORT_COMMENT))
-                .addAction(path("advanced", "bedrock", "validate-bedrock-login"), replaceOldComment(OLD_VALIDATE_LOGIN_COMMENT))
                 .build())
         .build();
+
+    /**
+     * EduGeyser's own fixes, which run at any config version after the migrations, as upstream Geyser runs its
+     * moveRakNetOnly: they change nothing a version number stands for. For now they replace {@link #STALE_COMMENTS}.
+     *
+     * @return whether anything changed, so the loader writes the config back
+     */
+    static boolean fixUp(CommentedConfigurationNode root) {
+        boolean changed = false;
+        for (Map.Entry<NodePath, List<String>> stale : STALE_COMMENTS.entrySet()) {
+            CommentedConfigurationNode node = root.node(stale.getKey());
+            String comment = node.comment();
+            if (comment != null && stale.getValue().stream().anyMatch(text -> sameText(comment, text))) {
+                node.comment(null);
+                changed = true;
+            }
+        }
+        return changed;
+    }
 
     /**
      * Folds the "use-haproxy-protocol" switch into "haproxy-protocol-whitelisted-ips", which turns HAProxy protocol on
@@ -296,18 +373,14 @@ public class ConfigMigrations {
         }
     }
 
-    /** Drops a comment that is still an old default, so the current one is written; a comment of the user's own stays. */
-    private static TransformAction replaceOldComment(String oldDefault) {
-        return (path, value) -> {
-            if (value instanceof CommentedConfigurationNode commented && isComment(commented, oldDefault)) {
-                commented.comment(null);
-            }
-            return null;
-        };
+    private static boolean isComment(CommentedConfigurationNode node, String text) {
+        return node.comment() != null && sameText(node.comment(), text);
     }
 
-    private static boolean isComment(CommentedConfigurationNode node, String text) {
-        return node.comment() != null && node.comment().strip().equals(text.strip());
+    /** Whether a comment is the text, line by line: a YAML comment keeps neither indentation nor trailing spaces. */
+    private static boolean sameText(String comment, String text) {
+        return comment.strip().lines().map(String::strip).toList()
+            .equals(text.strip().lines().map(String::strip).toList());
     }
 
     static TransformAction renameAndMove(String... newPath) {

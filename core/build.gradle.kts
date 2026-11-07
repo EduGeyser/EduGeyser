@@ -61,6 +61,10 @@ dependencies {
     implementation(libs.nethernet) {
         exclude("io.netty", "*")
     }
+    // NXS: registration with a signaling service the config names ("nxs" and "hybrid" signaling modes)
+    implementation(libs.nethernet.nxs) {
+        exclude("io.netty", "*")
+    }
     implementation(libs.webrtc.java)
     // Sets NetworkM's log levels where the platform logs with Log4j2, which provides it
     compileOnly(libs.log4j.core)

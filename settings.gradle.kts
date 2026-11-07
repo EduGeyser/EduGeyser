@@ -36,6 +36,9 @@ if (extra.has("localNetworkM")) {
                         .using(project(":transport-$transport"))
                 }
             }
+            for (name in listOf("netty-nethernet-nxs", "nethernet-nxs")) {
+                substitute(module("io.github.sendablemetatype.netty:$name")).using(project(":nethernet-nxs"))
+            }
         }
     }
 }

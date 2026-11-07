@@ -46,9 +46,10 @@ dependencies {
     shadowBundle(libs.protocol.common)
     shadowBundle(libs.protocol.codec)
     // NetworkM is relocated, so every module of it must be shaded: transport-common for the
-    // NetherNet transport, and RakNet only for the Protocol library's references to it
+    // NetherNet transport, NXS on top of it, and RakNet only for the Protocol library's references to it
     shadowBundle(libs.netty.transport.common)
     shadowBundle(libs.nethernet)
+    shadowBundle(libs.nethernet.nxs)
     shadowBundle(libs.netty.transport.raknet)
     shadowBundle(libs.mcprotocollib)
 

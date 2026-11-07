@@ -419,6 +419,20 @@ class NetherNetPingSnapshotsTest {
     }
 
     @Test
+    void theCurrentAnswerNeverWaitsButStillRefreshes() {
+        NetherNetPingSnapshots waiting = queued(LONG_WAIT);
+        waiting.prime();
+        runRefresher();
+        advance(NetherNetPingSnapshots.MAX_AGE_NANOS);
+
+        // Stale with an ask that never runs: latest() would wait its whole budget here
+        assertEquals("-", motd(assertTimeoutPreemptively(WATCHDOG, () -> waiting.current(null))));
+        assertEquals(1, refresher.size(), "the stale snapshot still schedules its refresh");
+        runRefresher();
+        assertEquals(2, online(waiting.current(null)));
+    }
+
+    @Test
     void afterCloseNoRequestWaitsEvenWhileTheRefresherTakesAsks() {
         NetherNetPingSnapshots waiting = queued(LONG_WAIT);
         waiting.prime();

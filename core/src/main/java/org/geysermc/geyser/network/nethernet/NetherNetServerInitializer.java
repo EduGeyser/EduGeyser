@@ -26,6 +26,7 @@
 package org.geysermc.geyser.network.nethernet;
 
 import io.github.sendablemetatype.netty.channel.nethernet.NetherNetChildChannel;
+import io.github.sendablemetatype.netty.channel.nethernet.nxs.admission.AdmissionPrincipal;
 import io.netty.channel.Channel;
 import io.netty.channel.EventLoopGroup;
 import io.netty.channel.group.ChannelGroup;
@@ -35,8 +36,10 @@ import org.cloudburstmc.protocol.bedrock.data.PacketCompressionAlgorithm;
 import org.cloudburstmc.protocol.bedrock.netty.codec.compression.CompressionCodec;
 import org.cloudburstmc.protocol.bedrock.netty.codec.packet.BedrockPacketCodec;
 import org.cloudburstmc.protocol.bedrock.netty.codec.packet.BedrockPacketCodec_v3;
+import org.checkerframework.checker.nullness.qual.Nullable;
 import org.geysermc.geyser.GeyserImpl;
 import org.geysermc.geyser.network.GeyserServerInitializer;
+import org.geysermc.geyser.network.bedrock.GameProtocol;
 
 /**
  * Channel initializer for incoming Nethernet (WebRTC) connections, the only
@@ -58,13 +61,18 @@ public class NetherNetServerInitializer extends GeyserServerInitializer {
     private final ChannelGroup playerChannels;
     private final NetherNetConnectionGate connectionGate;
     private final NetherNetJoinLog joinLog;
+    private final @Nullable GameOutcomeReporter gameOutcomes;
 
+    /**
+     * @param gameOutcomes reports what became of the players NXS admitted, or null when NXS does not run
+     */
     public NetherNetServerInitializer(GeyserImpl geyser, EventLoopGroup eventLoopGroup, ChannelGroup playerChannels,
-                                      NetherNetJoinLog joinLog) {
+                                      NetherNetJoinLog joinLog, @Nullable GameOutcomeReporter gameOutcomes) {
         super(geyser, eventLoopGroup);
         this.playerChannels = playerChannels;
         this.connectionGate = new NetherNetConnectionGate(geyser);
         this.joinLog = joinLog;
+        this.gameOutcomes = gameOutcomes;
     }
 
     @Override
@@ -95,6 +103,16 @@ public class NetherNetServerInitializer extends GeyserServerInitializer {
     @Override
     protected void initPacketCodec(Channel channel) {
         channel.pipeline().addLast(BedrockPacketCodec.NAME, new BedrockPacketCodec_v3());
+    }
+
+    @Override
+    protected void postInitChannel(Channel channel) throws Exception {
+        super.postInitChannel(channel);
+        // NXS marks the children it admitted before the endpoint exposes them
+        if (gameOutcomes != null && channel.attr(AdmissionPrincipal.KEY).get() != null) {
+            channel.pipeline().addBefore(BedrockPeer.NAME, GameOutcomeReporter.HANDLER_NAME,
+                    gameOutcomes.observer(GameProtocol.SUPPORTED_BEDROCK_PROTOCOLS::contains));
+        }
     }
 
     @Override

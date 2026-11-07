@@ -156,6 +156,8 @@ public final class ConfigLoader {
         int currentVersion = migrations.version(node);
         migrations.apply(node);
         int newVersion = migrations.version(node);
+        // At any version, as a config written by upstream Geyser at this same version can need them too
+        boolean fixedUp = ConfigMigrations.fixUp(node);
 
         T config = node.get(configClass);
 
@@ -166,7 +168,8 @@ public final class ConfigLoader {
         CommentedConfigurationNode newRoot = CommentedConfigurationNode.root(loader.defaultOptions());
         newRoot.set(config);
 
-        if (originallyEmpty || currentVersion != newVersion) {
+        // A config nothing changed is left as it is
+        if (originallyEmpty || currentVersion != newVersion || fixedUp) {
             if (!originallyEmpty && currentVersion > 4) {
                 // Only copy comments over if the file already existed, and we are going to replace it
 
