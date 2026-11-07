@@ -394,7 +394,8 @@ public class GeyserImpl implements GeyserApi, EventRegistrar {
         }
 
         // -DgeyserUdpPort and -DpluginUdpPort keep the names hosting panels set. They take a port, or "server" for the
-        // Java server's, and set the Bedrock port, which HTTP signaling uses on TCP and NetherNet on UDP
+        // Java server's, and set the Bedrock port for TCP and UDP: NetherNet's UDP port follows it even over
+        // "webrtc-port", HTTP signaling's TCP port unless "port" under "signaling" is set (see NetherNetPortProperties)
         String geyserUdpPort = System.getProperty("geyserUdpPort", "");
         String pluginUdpPort = geyserUdpPort.isEmpty() ? System.getProperty("pluginUdpPort", "") : geyserUdpPort;
         if ("-1".equals(pluginUdpPort)) {
@@ -614,7 +615,7 @@ public class GeyserImpl implements GeyserApi, EventRegistrar {
         String address = config().bedrock().address();
         int icePort = config().bedrock().icePort();
         int signalingPort = config().bedrock().signalingPort();
-        // String.valueOf, otherwise we get commas
+        // A string, as the locale message would group the digits of a number with commas
         String port = icePort == signalingPort ? String.valueOf(icePort)
                 : icePort + " (UDP), " + signalingPort + " (TCP)";
         try {

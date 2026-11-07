@@ -85,11 +85,12 @@ import java.util.function.Function;
  *
  * Xbox RPC signaling (Type 7, JSON-RPC: the messaging endpoint with PmsgId,
  * used by Bedrock 26.20+ and Education 26.30+), Xbox signaling for short,
- * carries join codes, connection IDs and friend list joins. HTTP signaling, served on TCP at the Bedrock address and
- * the signaling port, carries direct connections and joins from the
- * Education server list. Every player's ICE traffic arrives on one UDP port,
- * the NetherNet UDP port, for joins from either source. Both ports are the
- * Bedrock port unless configured apart. LAN discovery stays off.
+ * carries join codes, connection IDs and friend list joins. HTTP signaling,
+ * served on TCP at the Bedrock address and the signaling port, carries
+ * direct connections and joins from the Education server list. Every
+ * player's ICE traffic arrives on one UDP port, the NetherNet UDP port, for
+ * joins from either source. Both ports are the Bedrock port unless
+ * configured apart. LAN discovery stays off.
  *
  * The endpoint admits an offer only when it proves the client's key, attested
  * by Minecraft's issuer or not (Education's self signed tokens prove theirs

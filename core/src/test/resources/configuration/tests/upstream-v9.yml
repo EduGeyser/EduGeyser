@@ -16,7 +16,7 @@ bedrock:
         password: ""
     nxs:
       advertise-addresses:
-      - 198.51.100.1:19133
+      - " 198.51.100.1:19133 "
       - "[2001:db8::1]:19133"
       token: ""
       endpoint: https://agent.warden.cloud

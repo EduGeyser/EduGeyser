@@ -182,7 +182,7 @@ public interface GeyserConfig {
         int port();
 
         @Comment("""
-            The UDP port for every player's NetherNet traffic, the NetherNet UDP port. 0 uses "port" above.
+            The NetherNet UDP port, which carries every player's NetherNet traffic. 0 uses "port" above.
             Players connect to it directly, so open it, and forward it when this server is behind a router.""")
         @DefaultNumeric(0)
         @NumericRange(from = 0, to = 65535)
@@ -515,7 +515,7 @@ public interface GeyserConfig {
             Whether to log NetherNet's debug messages, from NetherNet itself and from libwebrtc, its WebRTC library,
             such as what signaling and STUN discovery do. Useful when players cannot connect over NetherNet.
             Some servers write debug messages only to their log files, not to the console.
-            libwebrtc's own debug messages need a restart to start, a reload is not enough.""")
+            libwebrtc's own debug messages start only after a restart, not after a reload.""")
         @DefaultBoolean
         boolean nethernetDebug();
     }

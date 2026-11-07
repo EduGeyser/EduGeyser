@@ -372,7 +372,8 @@ public class ConfigLoaderTest {
     @ParameterizedTest
     @MethodSource("platformTypes")
     void testUpstreamVersion9ConfigMigration(PlatformType platformType, Class<? extends GeyserConfig> configClass) throws Exception {
-        // Upstream Geyser at version 9 (b3eed8c24) kept one list per signaling mode
+        // Upstream Geyser at version 9 (b3eed8c24) kept one list per signaling mode. The lists become one, each
+        // address once, built-in signaling's first, as upstream's own test checks
         GeyserConfig config = new ConfigLoader(copyResourceToTempFile("tests", "upstream-v9.yml"), platformType).load0(configClass);
 
         assertEquals(List.of("play.example.com", "198.51.100.1:19133", "[2001:db8::1]:19133"),
