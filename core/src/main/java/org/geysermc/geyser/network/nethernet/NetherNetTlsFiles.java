@@ -55,6 +55,7 @@ import java.security.cert.Certificate;
 import java.security.cert.CertificateFactory;
 import java.security.cert.X509Certificate;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.Collections;
 import java.util.List;
 import java.util.stream.Stream;
@@ -176,11 +177,8 @@ sealed interface NetherNetTlsFiles {
                     PrivateKeyInfo info = switch (block) {
                         case PEMKeyPair pair -> pair.getPrivateKeyInfo();
                         case PrivateKeyInfo plain -> plain;
-                        case PKCS8EncryptedPrivateKeyInfo encrypted ->
-                                encrypted.decryptPrivateKeyInfo(new JceOpenSSLPKCS8DecryptorProviderBuilder()
-                                        .setProvider(BOUNCY_CASTLE).build(passwordChars()));
-                        case PEMEncryptedKeyPair encrypted -> encrypted.decryptKeyPair(new JcePEMDecryptorProviderBuilder()
-                                .setProvider(BOUNCY_CASTLE).build(passwordChars())).getPrivateKeyInfo();
+                        case PKCS8EncryptedPrivateKeyInfo encrypted -> decrypt(encrypted);
+                        case PEMEncryptedKeyPair encrypted -> decrypt(encrypted);
                         default -> null;
                     };
                     if (info != null) {
@@ -195,7 +193,33 @@ sealed interface NetherNetTlsFiles {
             throw new GeneralSecurityException("the file " + privateKey + " holds no private key");
         }
 
-        /** The password of an encrypted key; resolved only then, so a key without one never needs it. */
+        private PrivateKeyInfo decrypt(PKCS8EncryptedPrivateKeyInfo encrypted)
+                throws GeneralSecurityException, OperatorCreationException, PKCSException {
+            char[] secret = passwordChars();
+            try {
+                return encrypted.decryptPrivateKeyInfo(new JceOpenSSLPKCS8DecryptorProviderBuilder()
+                        .setProvider(BOUNCY_CASTLE).build(secret));
+            } finally {
+                Arrays.fill(secret, '\0');
+            }
+        }
+
+        private PrivateKeyInfo decrypt(PEMEncryptedKeyPair encrypted) throws GeneralSecurityException, IOException {
+            char[] secret = passwordChars();
+            try {
+                return encrypted.decryptKeyPair(new JcePEMDecryptorProviderBuilder()
+                        .setProvider(BOUNCY_CASTLE).build(secret)).getPrivateKeyInfo();
+            } finally {
+                Arrays.fill(secret, '\0');
+            }
+        }
+
+        /**
+         * The password of an encrypted key; resolved only then, so a key
+         * without one never needs it. The caller clears the array once the
+         * key is decrypted; the config holds the password as a String anyway,
+         * so this only keeps the copies made here from lingering.
+         */
         private char[] passwordChars() throws GeneralSecurityException {
             String secret;
             try {
@@ -228,6 +252,15 @@ sealed interface NetherNetTlsFiles {
         @Override
         public Material read() throws IOException, GeneralSecurityException {
             char[] secret = password.resolve().toCharArray();
+            try {
+                return read(secret);
+            } finally {
+                // Once the key is out, on failure too; see Pem#passwordChars
+                Arrays.fill(secret, '\0');
+            }
+        }
+
+        private Material read(char[] secret) throws IOException, GeneralSecurityException {
             KeyStore store = KeyStore.getInstance("PKCS12");
             try (InputStream in = new ByteArrayInputStream(readFile(keystore, "PKCS12 file"))) {
                 store.load(in, secret);
