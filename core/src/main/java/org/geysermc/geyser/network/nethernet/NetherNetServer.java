@@ -112,8 +112,9 @@ public class NetherNetServer {
     private static final String STATUS_NONCE = NetherNetServerStatus.randomNonce();
     /**
      * The name the server identity carries as idp.domain. BDS uses "self" for
-     * self issued server identities; kept so the existing key file and the
-     * pins players hold for it carry on unchanged.
+     * self issued server identities. Players pin only the identity's key, not
+     * this name, which the onboarding guide calls untrusted display text, so
+     * changing it would not ask anyone to trust the server again.
      */
     private static final String IDENTITY_DOMAIN = "self";
     /**
