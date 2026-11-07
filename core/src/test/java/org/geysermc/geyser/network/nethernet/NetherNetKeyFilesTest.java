@@ -43,6 +43,7 @@ import java.util.Base64;
 import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertInstanceOf;
+import static org.junit.jupiter.api.Assertions.assertNotEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
@@ -108,6 +109,19 @@ class NetherNetKeyFilesTest {
                 () -> NetherNetKeyFiles.load(file, logger));
         assertTrue(refused.getMessage().contains("do not match"), refused.getMessage());
         assertEquals(mismatched, Files.readString(file), "a refused file is never rewritten");
+    }
+
+    @Test
+    void everyWriteGetsATemporaryFileOfItsOwn(@TempDir Path dir) throws Exception {
+        Path file = dir.resolve("account-key.pem");
+
+        // Two writers of the same file, as two conversions at once
+        Path first = NetherNetKeyFiles.writeTemporary(file, "first");
+        Path second = NetherNetKeyFiles.writeTemporary(file, "second");
+
+        assertNotEquals(first, second);
+        assertEquals("first", Files.readString(first), "a writer never replaces another's file");
+        assertEquals("second", Files.readString(second));
     }
 
     private static void assertSingleSec1Block(String pem) throws Exception {

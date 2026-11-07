@@ -66,6 +66,7 @@ import java.security.spec.ECGenParameterSpec;
 import java.security.spec.PKCS8EncodedKeySpec;
 import java.security.spec.X509EncodedKeySpec;
 import java.util.Set;
+import java.util.concurrent.ThreadLocalRandom;
 
 /**
  * The key files of the automatic certificate ({@code acme/account-key.pem}
@@ -130,6 +131,8 @@ final class NetherNetKeyFiles {
     }
 
     private static void rewrite(Path file, KeyPair pair) throws IOException, GeneralSecurityException {
+        // The read back checks the very file the move installs: the name is
+        // this write's own, so no other writer can have replaced it
         Path temporary = writeTemporary(file, writeSec1(pair));
         try {
             Parsed written = parse(Files.readString(temporary, StandardCharsets.UTF_8), temporary.toString());
@@ -253,8 +256,7 @@ final class NetherNetKeyFiles {
     /**
      * Removes a temporary file after a failed write or move. A successful
      * move already removed it, and a failure here must not hide the cause of
-     * the failure that left it; the fixed name means a leftover is replaced
-     * by the next write.
+     * the failure that left it.
      */
     private static void deleteQuietly(Path temporary) {
         try {
@@ -263,12 +265,16 @@ final class NetherNetKeyFiles {
         }
     }
 
-    /** Writes the text, synced, beside the file under a fixed name, so a crash leaves no growing debris. */
-    private static Path writeTemporary(Path file, String text) throws IOException {
+    /**
+     * Writes the text, synced, to a new file beside the target, named for
+     * this write alone: writers that shared one name deleted and replaced
+     * each other's file, so one could install another's half written file.
+     */
+    static Path writeTemporary(Path file, String text) throws IOException {
         Path directory = file.toAbsolutePath().getParent();
         Files.createDirectories(directory);
-        Path temporary = directory.resolve(file.getFileName() + ".tmp");
-        Files.deleteIfExists(temporary);
+        Path temporary = directory.resolve("." + file.getFileName() + "-"
+                + Long.toUnsignedString(ThreadLocalRandom.current().nextLong(), 36) + ".tmp");
         if (Files.getFileStore(directory).supportsFileAttributeView(PosixFileAttributeView.class)) {
             Files.createFile(temporary, PosixFilePermissions.asFileAttribute(OWNER_ONLY));
         } else {
