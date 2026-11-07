@@ -323,6 +323,41 @@ class NetherNetPingSnapshotsTest {
     }
 
     @Test
+    void aRequestDeniedAnAskWaitsForNone() throws InterruptedException {
+        NetherNetPingSnapshots waiting = queued(LONG_WAIT);
+        waiting.prime();
+        runRefresher();
+        advance(NetherNetPingSnapshots.MAX_AGE_NANOS);
+        // The host-less refresh hangs, and the asks of every host queue behind it up to the bound
+        waiting.prime();
+        List<Request> hosts = new ArrayList<>();
+        for (int i = 0; i < NetherNetPingSnapshots.MAX_HOSTS; i++) {
+            hosts.add(new Request(waiting, "host" + i + ".example.com"));
+        }
+        awaitQueued(NetherNetPingSnapshots.MAX_OUTSTANDING_ASKS);
+
+        // A new host takes the place of an idle one, but its ask finds no room
+        advance(NetherNetPingSnapshots.IDLE_NANOS);
+        assertEquals("-", motd(assertTimeoutPreemptively(WATCHDOG, () -> waiting.latest("late.example.com"))),
+                "the host-less answer, without waiting for the host-less refresh");
+        assertEquals(NetherNetPingSnapshots.MAX_OUTSTANDING_ASKS, refresher.size());
+
+        runRefresher();
+        for (Request host : hosts) {
+            host.join();
+        }
+    }
+
+    /** Returns once the given number of asks is queued, as requests on other threads queue them. */
+    private void awaitQueued(int asks) throws InterruptedException {
+        long deadline = System.nanoTime() + WATCHDOG.toNanos();
+        while (refresher.size() < asks) {
+            assertTrue(System.nanoTime() < deadline, "only " + refresher.size() + " asks queued");
+            Thread.sleep(1);
+        }
+    }
+
+    @Test
     void theFirstRequestAfterAQuietSpellGetsTheFreshAnswer() {
         assertEquals(1, online(assertTimeoutPreemptively(WATCHDOG, () -> live.latest(null))));
         skew.addAndGet(TimeUnit.HOURS.toNanos(2));

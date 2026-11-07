@@ -67,7 +67,7 @@ import java.util.function.LongSupplier;
  * request for it waits on. Apart from the map, at most {@link #MAX_OUTSTANDING_ASKS} asks are
  * queued or running in all: a snapshot gives up its place with its ask still queued, so without
  * that bound a passthrough that hangs would let new hosts queue asks without end. A request that
- * cannot schedule an ask does not wait.
+ * cannot schedule an ask waits for none, not even the host-less snapshot's.
  */
 final class NetherNetPingSnapshots {
 
@@ -144,8 +144,9 @@ final class NetherNetPingSnapshots {
     /**
      * The latest answer for a host. When the snapshot is stale or has an ask queued or running,
      * waits for that ask until the wait budget is spent; a host with no answer of its own by then
-     * is answered from the host-less snapshot, within the same budget. Returns early when
-     * interrupted, with the interrupt still set.
+     * is answered from the host-less snapshot, within the same budget. When no ask could be
+     * scheduled for the snapshot, waits for none. Returns early when interrupted, with the
+     * interrupt still set.
      *
      * @param host the virtual host the request named, such as its Host header, or null
      * @return the Java server's answer, or null when it gave none or has not answered yet
@@ -156,12 +157,18 @@ final class NetherNetPingSnapshots {
         Snapshot own = host == null || host.isBlank() ? hostless : forHost(JoinAddress.parse(host, defaultPort), now);
         if (own != null) {
             own.requestedNanos = now;
-            Answer answer = fresh(own, host, deadline);
+            Refresh refresh = refreshIfStale(own, host);
+            if (refresh == NoAsk.DENIED) {
+                // Asks pile up behind one that hangs, or the refresher stopped: waiting for the
+                // host-less ask would only hold the request
+                deadline = now;
+            }
+            Answer answer = settle(own, refresh, deadline);
             if (answer != null) {
                 return answer.info();
             }
         }
-        Answer fallback = fresh(hostless, null, deadline);
+        Answer fallback = settle(hostless, refreshIfStale(hostless, null), deadline);
         return fallback != null ? fallback.info() : null;
     }
 
@@ -190,13 +197,12 @@ final class NetherNetPingSnapshots {
         }
     }
 
-    /** The snapshot's answer, once its ask, if it has one, finished or the deadline passed. */
-    private @Nullable Answer fresh(Snapshot snapshot, @Nullable String host, long deadline) {
-        CountDownLatch ask = refreshIfStale(snapshot, host);
-        if (ask != null) {
+    /** The snapshot's answer, once the ask to wait for, if any, finished or the deadline passed. */
+    private @Nullable Answer settle(Snapshot snapshot, Refresh refresh, long deadline) {
+        if (refresh instanceof Pending(CountDownLatch done)) {
             try {
                 // Does not wait once the deadline passed
-                ask.await(deadline - clock.getAsLong(), TimeUnit.NANOSECONDS);
+                done.await(deadline - clock.getAsLong(), TimeUnit.NANOSECONDS);
             } catch (InterruptedException e) {
                 // HTTP signaling interrupts its status calls when it closes
                 Thread.currentThread().interrupt();
@@ -208,14 +214,13 @@ final class NetherNetPingSnapshots {
     /**
      * Schedules an ask when the snapshot is stale and none is queued or running.
      *
-     * @return the ask to wait for: the one this call scheduled or one already queued or running;
-     *         null when the snapshot is fresh or no ask could be scheduled
+     * @return the ask to wait for: the one this call scheduled or one already queued or running
      */
-    private @Nullable CountDownLatch refreshIfStale(Snapshot snapshot, @Nullable String host) {
+    private Refresh refreshIfStale(Snapshot snapshot, @Nullable String host) {
         State state = snapshot.state.get();
         return switch (state) {
-            case Asking(CountDownLatch done) -> done;
-            case Idle(long finished) when clock.getAsLong() - finished < MAX_AGE_NANOS -> null;
+            case Asking(CountDownLatch done) -> new Pending(done);
+            case Idle(long finished) when clock.getAsLong() - finished < MAX_AGE_NANOS -> NoAsk.FRESH;
             case Idle idle -> {
                 // Claimed against the very state judged stale (compareAndSet compares references,
                 // not record values), so a request that saw it stale while another ask finished
@@ -224,16 +229,17 @@ final class NetherNetPingSnapshots {
                 if (snapshot.state.compareAndSet(idle, claim)) {
                     yield ask(snapshot, host, idle, claim.done());
                 }
-                yield snapshot.state.get() instanceof Asking(CountDownLatch other) ? other : null;
+                yield snapshot.state.get() instanceof Asking(CountDownLatch other)
+                        ? new Pending(other) : NoAsk.FRESH;
             }
         };
     }
 
-    private @Nullable CountDownLatch ask(Snapshot snapshot, @Nullable String host, Idle before, CountDownLatch done) {
+    private Refresh ask(Snapshot snapshot, @Nullable String host, Idle before, CountDownLatch done) {
         if (!outstanding.tryAcquire()) {
             // Asks pile up behind one that hangs; the answer the snapshot has serves meanwhile
             abandon(snapshot, before, done);
-            return null;
+            return NoAsk.DENIED;
         }
         inFlight.add(done);
         try {
@@ -251,13 +257,13 @@ final class NetherNetPingSnapshots {
                     done.countDown();
                 }
             });
-            return done;
+            return new Pending(done);
         } catch (RejectedExecutionException e) {
             // Shutdown raced the request; the answer the snapshot has serves fine
             outstanding.release();
             inFlight.remove(done);
             abandon(snapshot, before, done);
-            return null;
+            return NoAsk.DENIED;
         }
     }
 
@@ -272,6 +278,22 @@ final class NetherNetPingSnapshots {
 
     /** One ask's result; null info when the Java server gave no answer. */
     private record Answer(@Nullable GeyserPingInfo info) {
+    }
+
+    /** What a request found to wait for when it looked at a snapshot. */
+    private sealed interface Refresh {
+    }
+
+    /** An ask is queued or running. */
+    private record Pending(CountDownLatch done) implements Refresh {
+    }
+
+    /** Nothing to wait for. */
+    private enum NoAsk implements Refresh {
+        /** The snapshot is fresh. */
+        FRESH,
+        /** The snapshot is stale, but the bound on asks is reached or the refresher stopped. */
+        DENIED
     }
 
     /** Whether a snapshot has an ask queued or running. */
