@@ -26,14 +26,24 @@
 package org.geysermc.geyser.network.nethernet;
 
 import io.github.sendablemetatype.webrtc.logging.Logging.Severity;
+import org.apache.logging.log4j.LogManager;
+import org.apache.logging.log4j.core.LoggerContext;
+import org.apache.logging.log4j.core.config.Configurator;
 import org.geysermc.geyser.GeyserLogger;
+import org.geysermc.geyser.network.nethernet.NetherNetDebugLogging.JulLevels;
 import org.geysermc.geyser.network.nethernet.NetherNetDebugLogging.Level;
+import org.geysermc.geyser.network.nethernet.NetherNetDebugLogging.Log4j2Levels;
 import org.geysermc.geyser.network.nethernet.NetherNetDebugLogging.Settings;
 import org.junit.jupiter.api.Test;
 
 import java.util.Map;
 
+import static org.geysermc.geyser.network.nethernet.NetherNetDebugLogging.NETWORKM_LOGGERS;
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNotEquals;
+import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.contains;
 import static org.mockito.Mockito.mock;
@@ -41,6 +51,9 @@ import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 
 class NetherNetDebugLoggingTest {
+
+    private static final Settings DEBUG = new Settings(Level.DEBUG, Severity.INFO);
+    private static final Settings OFF = new Settings(null, Severity.WARNING);
 
     private final GeyserLogger logger = mock(GeyserLogger.class);
 
@@ -90,5 +103,65 @@ class NetherNetDebugLoggingTest {
         assertEquals("io.github.sendablemetatype.netty", NetherNetDebugLogging.NETWORKM_LOGGERS);
         assertEquals("org.geysermc.geyser.shaded.io.github.sendablemetatype.netty",
             NetherNetDebugLogging.root("org.geysermc.geyser.shaded.io.github.sendablemetatype.netty.channel.nethernet"));
+    }
+
+    @Test
+    void turningDebugOffPutsBackTheLevelTheHostConfiguredInLog4j2() {
+        LoggerContext context = LoggerContext.getContext(false);
+        Configurator.setRootLevel(org.apache.logging.log4j.Level.DEBUG);
+        Configurator.setLevel(NETWORKM_LOGGERS, org.apache.logging.log4j.Level.WARN);
+        try {
+            Log4j2Levels levels = new Log4j2Levels(NETWORKM_LOGGERS);
+            NetherNetDebugLogging.apply(DEBUG, logger, levels);
+            assertTrue(LogManager.getLogger(NETWORKM_LOGGERS + ".channel").isDebugEnabled());
+
+            NetherNetDebugLogging.apply(OFF, logger, levels);
+            assertEquals(org.apache.logging.log4j.Level.WARN,
+                context.getConfiguration().getLoggerConfig(NETWORKM_LOGGERS).getExplicitLevel());
+            assertFalse(LogManager.getLogger(NETWORKM_LOGGERS + ".channel").isInfoEnabled(),
+                "the host's WARN, not the root's DEBUG");
+        } finally {
+            context.getConfiguration().removeLogger(NETWORKM_LOGGERS);
+            Configurator.setRootLevel(org.apache.logging.log4j.Level.ERROR);
+        }
+    }
+
+    @Test
+    void turningDebugOffRemovesTheLog4j2LoggerItAdded() {
+        LoggerContext context = LoggerContext.getContext(false);
+        Log4j2Levels levels = new Log4j2Levels(NETWORKM_LOGGERS);
+        NetherNetDebugLogging.apply(new Settings(Level.TRACE, Severity.VERBOSE), logger, levels);
+        // TRACE, then DEBUG: what comes back is still what the host had before the first change
+        NetherNetDebugLogging.apply(DEBUG, logger, levels);
+        assertEquals(NETWORKM_LOGGERS, context.getConfiguration().getLoggerConfig(NETWORKM_LOGGERS).getName());
+
+        NetherNetDebugLogging.apply(OFF, logger, levels);
+        assertNotEquals(NETWORKM_LOGGERS, context.getConfiguration().getLoggerConfig(NETWORKM_LOGGERS).getName());
+    }
+
+    @Test
+    void turningDebugOffPutsBackTheLevelTheHostSetInJavaUtilLogging() {
+        java.util.logging.Logger parent = java.util.logging.Logger.getLogger("io.github.sendablemetatype");
+        java.util.logging.Logger networkM = java.util.logging.Logger.getLogger(NETWORKM_LOGGERS);
+        parent.setLevel(java.util.logging.Level.FINE);
+        networkM.setLevel(java.util.logging.Level.WARNING);
+        try {
+            JulLevels levels = new JulLevels(NETWORKM_LOGGERS);
+            NetherNetDebugLogging.apply(DEBUG, logger, levels);
+            assertEquals(java.util.logging.Level.FINE, networkM.getLevel());
+
+            NetherNetDebugLogging.apply(OFF, logger, levels);
+            assertEquals(java.util.logging.Level.WARNING, networkM.getLevel());
+
+            // A logger without a level of its own takes its parent's again
+            networkM.setLevel(null);
+            JulLevels inheriting = new JulLevels(NETWORKM_LOGGERS);
+            NetherNetDebugLogging.apply(DEBUG, logger, inheriting);
+            NetherNetDebugLogging.apply(OFF, logger, inheriting);
+            assertNull(networkM.getLevel());
+        } finally {
+            networkM.setLevel(null);
+            parent.setLevel(null);
+        }
     }
 }

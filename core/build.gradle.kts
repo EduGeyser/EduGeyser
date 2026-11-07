@@ -110,6 +110,8 @@ dependencies {
     testImplementation(libs.junit)
     testImplementation(libs.gson.runtime) // Record support
     testImplementation(libs.mockito)
+    // NetherNetDebugLogging sets and restores levels in a real Log4j2 configuration
+    testImplementation(libs.log4j.core)
     testRuntimeOnly("org.junit.platform:junit-platform-launcher")
 
     // Annotation Processors

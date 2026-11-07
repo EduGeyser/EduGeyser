@@ -29,7 +29,9 @@ import io.github.sendablemetatype.netty.channel.nethernet.NetherNetServerChannel
 import io.github.sendablemetatype.webrtc.logging.Logging.Severity;
 import io.netty.util.internal.logging.InternalLogger;
 import io.netty.util.internal.logging.InternalLoggerFactory;
+import org.apache.logging.log4j.core.LoggerContext;
 import org.apache.logging.log4j.core.config.Configurator;
+import org.apache.logging.log4j.core.config.LoggerConfig;
 import org.checkerframework.checker.nullness.qual.Nullable;
 import org.geysermc.geyser.GeyserLogger;
 import org.slf4j.LoggerFactory;
@@ -43,7 +45,8 @@ import java.util.function.UnaryOperator;
  * to NetworkM: the threshold of libwebrtc's native log, which NetworkM's WebRTC engine routes into
  * SLF4J, and the level of NetworkM's own loggers. NetworkM leaves logger levels to its host (ruling
  * B-9), so EduGeyser sets them here: in Log4j2, which every platform but BungeeCord logs with, else in
- * java.util.logging, and checks that the change reached the loggers NetworkM writes to.
+ * java.util.logging, and checks that the change reached the loggers NetworkM writes to. When debug
+ * logging goes off again, the level the host had configured for NetworkM comes back exactly.
  */
 final class NetherNetDebugLogging {
 
@@ -62,10 +65,10 @@ final class NetherNetDebugLogging {
      */
     private static final String NATIVE_LOGGER = NETWORKM_LOGGERS + ".nethernet.webrtc.native";
 
-    // Guarded by the class. The level last set, to put back when debug logging goes off on a reload
-    private static @Nullable Level applied;
-    // java.util.logging holds its loggers weakly, so a level set on one is lost with it
-    private static java.util.logging.@Nullable Logger julLoggers;
+    // Guarded by the class. Found on first use
+    private static @Nullable LoggerLevels platformLevels;
+    // Guarded by the class. The levels holding a change, put back when debug logging goes off on a reload
+    private static @Nullable LoggerLevels changed;
 
     private NetherNetDebugLogging() {
     }
@@ -134,16 +137,24 @@ final class NetherNetDebugLogging {
      * NetherNet server that applies it.
      */
     static synchronized void apply(Settings settings, GeyserLogger logger) {
+        if (platformLevels == null) {
+            platformLevels = log4j2Present() ? new Log4j2Levels(NETWORKM_LOGGERS) : new JulLevels(NETWORKM_LOGGERS);
+        }
+        apply(settings, logger, platformLevels);
+    }
+
+    static synchronized void apply(Settings settings, GeyserLogger logger, LoggerLevels levels) {
         Level level = settings.loggers();
         if (level == null) {
-            if (applied != null) {
-                setLevel(null);
-                applied = null;
+            if (changed != null) {
+                changed.restore();
+                changed = null;
             }
             return;
         }
-        setLevel(level);
-        applied = level;
+        if (levels.set(level)) {
+            changed = levels;
+        }
         if (!takesEffect(level)) {
             logger.warning(LOG_PREFIX + "This server's logging did not take NetherNet's log level " + level
                     + ". To see NetherNet's messages, set the level of the loggers whose names start with "
@@ -179,32 +190,6 @@ final class NetherNetDebugLogging {
         return channelPackage.substring(0, channelPackage.length() - suffix.length());
     }
 
-    private static void setLevel(@Nullable Level level) {
-        if (log4j2Present()) {
-            try {
-                Log4j2.setLevel(NETWORKM_LOGGERS, level);
-                return;
-            } catch (RuntimeException | LinkageError e) {
-                // Not a usable Log4j2 core after all; java.util.logging may still reach the loggers
-            }
-        }
-        java.util.logging.Logger loggers = java.util.logging.Logger.getLogger(NETWORKM_LOGGERS);
-        try {
-            loggers.setLevel(level == null ? null : switch (level) {
-                case OFF -> java.util.logging.Level.OFF;
-                case ERROR -> java.util.logging.Level.SEVERE;
-                case WARN -> java.util.logging.Level.WARNING;
-                case INFO -> java.util.logging.Level.INFO;
-                case DEBUG -> java.util.logging.Level.FINE;
-                case TRACE -> java.util.logging.Level.FINEST;
-            });
-        } catch (RuntimeException e) {
-            // A bridge that takes java.util.logging elsewhere may refuse levels; the check after this reports it
-            return;
-        }
-        julLoggers = level == null ? null : loggers;
-    }
-
     private static boolean log4j2Present() {
         try {
             Class.forName("org.apache.logging.log4j.core.config.Configurator", false,
@@ -236,11 +221,110 @@ final class NetherNetDebugLogging {
         };
     }
 
-    /** Only loaded where Log4j2's core is present. */
-    private static final class Log4j2 {
-        static void setLevel(String name, @Nullable Level level) {
-            // Without a level, the loggers take their parent's again
-            Configurator.setLevel(name, level == null ? null : org.apache.logging.log4j.Level.valueOf(level.name()));
+    /**
+     * Sets the level of one logger, and so of the loggers below it that have no level of their own, as
+     * the platform's logging takes levels. The first change remembers the logger's own configured
+     * level, which {@link #restore} puts back exactly.
+     */
+    interface LoggerLevels {
+        /**
+         * Sets the level, the first time remembering the logger's own.
+         *
+         * @return whether the level was set
+         */
+        boolean set(Level level);
+
+        /** Puts back the logger's own level from before the first {@link #set}, if one changed it. */
+        void restore();
+    }
+
+    /** Levels in Log4j2's configuration. Only loaded where Log4j2's core is present. */
+    static final class Log4j2Levels implements LoggerLevels {
+        private final String name;
+        // Before the first change: whether the configuration had a logger of this name, and its own level,
+        // null when it takes its parent's
+        private boolean saved;
+        private boolean configured;
+        private org.apache.logging.log4j.@Nullable Level own;
+
+        Log4j2Levels(String name) {
+            this.name = name;
+        }
+
+        @Override
+        public boolean set(Level level) {
+            try {
+                if (!saved) {
+                    LoggerConfig current = LoggerContext.getContext(false).getConfiguration().getLoggerConfig(name);
+                    configured = current.getName().equals(name);
+                    own = configured ? current.getExplicitLevel() : null;
+                    saved = true;
+                }
+                Configurator.setLevel(name, org.apache.logging.log4j.Level.valueOf(level.name()));
+                return true;
+            } catch (RuntimeException | LinkageError e) {
+                // Not a usable Log4j2 core after all; the check after this reports it
+                return false;
+            }
+        }
+
+        @Override
+        public void restore() {
+            if (!saved) {
+                return;
+            }
+            saved = false;
+            if (configured) {
+                Configurator.setLevel(name, own);
+            } else {
+                // The logger this added goes again, so its descendants take their old parent's level
+                LoggerContext context = LoggerContext.getContext(false);
+                context.getConfiguration().removeLogger(name);
+                context.updateLoggers();
+            }
+        }
+    }
+
+    /** Levels in java.util.logging, for a platform without Log4j2. */
+    static final class JulLevels implements LoggerLevels {
+        // java.util.logging holds its loggers weakly, so a level set on one is lost with it
+        private final java.util.logging.Logger logger;
+        private boolean saved;
+        private java.util.logging.@Nullable Level own;
+
+        JulLevels(String name) {
+            this.logger = java.util.logging.Logger.getLogger(name);
+        }
+
+        @Override
+        public boolean set(Level level) {
+            java.util.logging.Level before = logger.getLevel();
+            try {
+                logger.setLevel(switch (level) {
+                    case OFF -> java.util.logging.Level.OFF;
+                    case ERROR -> java.util.logging.Level.SEVERE;
+                    case WARN -> java.util.logging.Level.WARNING;
+                    case INFO -> java.util.logging.Level.INFO;
+                    case DEBUG -> java.util.logging.Level.FINE;
+                    case TRACE -> java.util.logging.Level.FINEST;
+                });
+            } catch (RuntimeException e) {
+                // A bridge that takes java.util.logging elsewhere may refuse levels; the check after this reports it
+                return false;
+            }
+            if (!saved) {
+                own = before;
+                saved = true;
+            }
+            return true;
+        }
+
+        @Override
+        public void restore() {
+            if (saved) {
+                logger.setLevel(own);
+                saved = false;
+            }
         }
     }
 }
