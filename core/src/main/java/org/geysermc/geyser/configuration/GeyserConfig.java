@@ -146,6 +146,39 @@ public interface GeyserConfig {
         boolean stunDiscovery();
 
         void stunDiscovery(boolean stunDiscovery);
+
+        @Comment("Settings for built-in signaling, the HTTP signaling this server runs itself.")
+        BuiltinConfig builtin();
+
+        @ConfigSerializable
+        interface BuiltinConfig {
+            @Comment("""
+                Your own certificate for HTTP signaling over HTTPS. Players who connect over HTTPS do not see the trust prompt.
+                Plain HTTP stays on for players whose HTTPS connection fails.
+                Leave "certificate" empty to use "cert.pem" and "key.pem" in the "nethernet" folder if both exist,
+                or else a certificate for this server's public IP address that Geyser gets from Let's Encrypt.""")
+            HttpsConfig https();
+
+            @ConfigSerializable
+            interface HttpsConfig {
+                @Comment("""
+                    Path to a TLS certificate, relative to the folder of this config. This can be a PEM chain (put its key in
+                    "private-key") or a PKCS12 file (leave "private-key" empty). Geyser reloads it when the file changes.""")
+                @DefaultString()
+                String certificate();
+
+                @Comment("Path to the PEM private key for \"certificate\". Leave empty if \"certificate\" is a PKCS12 file.")
+                @DefaultString()
+                String privateKey();
+
+                @Comment("""
+                    Password for the PKCS12 file, or for the PEM private key if it is encrypted. Leave empty if there is none.
+                    You can also use "file:/path/to/password" to read it from a file, which is safer than writing it here.""")
+                @DefaultString()
+                @AsteriskSerializer.Secret
+                String password();
+            }
+        }
     }
 
     @ConfigSerializable

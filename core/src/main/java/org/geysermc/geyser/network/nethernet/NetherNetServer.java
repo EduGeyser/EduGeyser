@@ -605,32 +605,9 @@ public class NetherNetServer {
      *                port's relays
      */
     private void bindHttpSignaling(NetherNetServerChannel endpoint, TrustedProxies proxies) throws ConnectException {
-        // Manual certificate files win and are the ACME opt out (never
-        // silent ACME enrollment against the operator's intent); only when
-        // no files exist at bind does automatic management run. The manual
-        // source re-reads the files whenever they change, so certificates
-        // can be swapped live. Both sources pick per connection and withdraw
-        // TLS rather than serve anything a stock client would reject, such
-        // as an IP certificate to a client that dialed a domain.
-        Path nethernetDir = geyser.getBootstrap().getConfigFolder().resolve("nethernet");
-        Path manualCert = nethernetDir.resolve("cert.pem");
-        Path manualKey = nethernetDir.resolve("key.pem");
-        TlsContextSelector tlsSelector;
-        String tlsMode;
-        if (Files.exists(manualCert) && Files.exists(manualKey)) {
-            NetherNetManualTlsSource manualSource = new NetherNetManualTlsSource(manualCert, manualKey, logger);
-            tlsSelector = manualSource;
-            String problem = manualSource.currentProblem();
-            tlsMode = problem == null
-                    ? "TLS, manual certificate, reloaded on change"
-                    : "plaintext; manual certificate withheld: " + problem;
-        } else {
-            this.certificateManager = new NetherNetCertificateManager(nethernetDir, logger);
-            tlsSelector = certificateManager;
-            tlsMode = "automatic certificate management";
-        }
+        Tls tls = chooseTls();
         NetherNetHttpSignaling http = NetherNetHttpSignaling.builder(workerGroup)
-                .tls(tlsSelector)
+                .tls(tls.selector())
                 .tlsHandshakeFailures(joinLog::tlsHandshakeFailed)
                 .statusProvider(this::serveServerStatus)
                 .trustedProxies(proxies)
@@ -645,11 +622,62 @@ public class NetherNetServer {
             throw e;
         }
         this.httpSignaling = http;
-        logger.info(LOG_PREFIX + "HTTP signaling on TCP port " + http.boundAddress().getPort() + " (" + tlsMode
+        logger.info(LOG_PREFIX + "HTTP signaling on TCP port " + http.boundAddress().getPort() + " (" + tls.mode()
                 + describeProxies(proxies) + ")");
         if (certificateManager != null) {
             certificateManager.start();
         }
+    }
+
+    /** Where HTTP signaling takes its certificates from, and how the startup line describes that. */
+    private record Tls(TlsContextSelector selector, String mode) {
+    }
+
+    /**
+     * Picks the certificate source, first match wins: the files the config
+     * sets, then cert.pem and key.pem in the nethernet folder, then automatic
+     * management. Supplied material is the opt out from automatic management
+     * (never silent Let's Encrypt enrollment against the operator's intent),
+     * even when it cannot be read: TLS is then withdrawn and plain HTTP keeps
+     * joins working until the files are fixed, which the source notices on
+     * its own. Every source picks per connection and withdraws TLS rather
+     * than serve anything a stock client would reject, such as an IP
+     * certificate to a client that dialed a domain; plain HTTP is always on.
+     * Nothing is written into the config.
+     */
+    private Tls chooseTls() {
+        Path configFolder = geyser.getBootstrap().getConfigFolder();
+        Path nethernetDir = configFolder.resolve("nethernet");
+        GeyserConfig.SignalingConfig.BuiltinConfig.HttpsConfig https =
+                geyser.config().bedrock().signaling().builtin().https();
+        NetherNetTlsFiles files = null;
+        if (!https.certificate().isBlank()) {
+            try {
+                files = NetherNetTlsFiles.configured(https, configFolder);
+            } catch (IllegalArgumentException e) {
+                logger.error(LOG_PREFIX + "The certificate set in bedrock.signaling.builtin.https cannot be used: "
+                        + e.getMessage() + ". HTTP signaling serves plain HTTP only until it is fixed and Geyser restarts");
+                return new Tls(serverName -> null, "plaintext; the configured certificate has an invalid path");
+            }
+        } else {
+            if (!https.privateKey().isBlank() || !https.password().isBlank()) {
+                logger.warning(LOG_PREFIX + "\"private-key\" and \"password\" in bedrock.signaling.builtin.https do"
+                        + " nothing while \"certificate\" is empty");
+            }
+            NetherNetTlsFiles folder = NetherNetTlsFiles.nethernetFolder(nethernetDir);
+            if (folder.files().stream().allMatch(Files::exists)) {
+                files = folder;
+            }
+        }
+        if (files == null) {
+            this.certificateManager = new NetherNetCertificateManager(nethernetDir, logger);
+            return new Tls(certificateManager, "automatic certificate management");
+        }
+        NetherNetManualTlsSource source = new NetherNetManualTlsSource(files, logger);
+        String problem = source.currentProblem();
+        return new Tls(source, problem == null
+                ? "TLS, certificate from " + files.origin().description() + ", reloaded on change"
+                : "plaintext; certificate from " + files.origin().description() + " withheld: " + problem);
     }
 
     /** Which proxies HTTP signaling trusts, for its startup line; counts only, never addresses. */

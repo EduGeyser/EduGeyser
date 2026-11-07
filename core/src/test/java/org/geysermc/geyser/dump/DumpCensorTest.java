@@ -100,6 +100,33 @@ class DumpCensorTest {
             node.node("advertise-addresses").getList(String.class));
     }
 
+    @ParameterizedTest
+    @ValueSource(booleans = {false, true})
+    void censorsTheCertificatePasswordEvenInAFullDump(boolean full) throws Exception {
+        AsteriskSerializer.showSensitive = full;
+
+        assertEquals("***", dumpedHttps("hunter2").node("password").getString());
+        assertEquals("***", dumpedHttps("file:secrets/tls").node("password").getString());
+        assertEquals("tls.p12", dumpedHttps("hunter2").node("certificate").getString());
+        assertEquals("", dumpedHttps("").node("password").getString(), "an unset password stays visible as unset");
+    }
+
+    private static CommentedConfigurationNode dumpedHttps(String password) throws Exception {
+        GeyserConfig.SignalingConfig config = YamlConfigurationLoader.builder()
+            .source(() -> new BufferedReader(new StringReader("""
+                builtin:
+                  https:
+                    certificate: tls.p12
+                    password: "%s"
+                """.formatted(password))))
+            .defaultOptions(InterfaceDefaultOptions::addTo)
+            .build().load().get(GeyserConfig.SignalingConfig.class);
+
+        CommentedConfigurationNode node = CommentedConfigurationNode.root(AsteriskSerializer.dumpOptions());
+        node.set(config);
+        return node.node("builtin", "https");
+    }
+
     @Test
     void censorsTheAnnouncedNetherNetAddresses() throws Exception {
         NetherNetServer.Announced announced = new NetherNetServer.Announced(

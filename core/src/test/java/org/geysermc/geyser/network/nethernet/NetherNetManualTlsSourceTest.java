@@ -25,14 +25,28 @@
 
 package org.geysermc.geyser.network.nethernet;
 
+import org.bouncycastle.openssl.jcajce.JcaPKCS8Generator;
+import org.geysermc.geyser.GeyserLogger;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.io.TempDir;
 
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.security.KeyPair;
 import java.util.List;
+import java.util.concurrent.TimeUnit;
 
+import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.mockito.ArgumentMatchers.contains;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.verify;
 
 class NetherNetManualTlsSourceTest {
+    private final GeyserLogger logger = mock(GeyserLogger.class);
+    private long now;
 
     @Test
     void anIpCertificateServesOnlyClientsThatDialedAnIp() {
@@ -56,5 +70,38 @@ class NetherNetManualTlsSourceTest {
         assertTrue(NetherNetManualTlsSource.names(names, false, "play.example.com"));
         assertFalse(NetherNetManualTlsSource.names(names, false, "example.com"));
         assertFalse(NetherNetManualTlsSource.names(names, false, "a.play.example.com"));
+    }
+
+    @Test
+    void withdrawsTlsForACertificateNoStockClientTrusts(@TempDir Path dir) throws Exception {
+        writePair(dir);
+        NetherNetManualTlsSource source = new NetherNetManualTlsSource(
+                NetherNetTlsFilesTest.configured(dir, "chain.pem", "key.pem", ""), logger, () -> now);
+
+        // Plain HTTP stays on: refusing TLS is what sends clients there
+        assertNull(source.select(null));
+        assertTrue(source.currentProblem().startsWith("a stock client rejects the certificate"), source.currentProblem());
+        verify(logger).warning(contains("The HTTPS certificate from the files set in bedrock.signaling.builtin.https is not served"));
+    }
+
+    @Test
+    void readsTheFilesAgainOnceTheyAppear(@TempDir Path dir) throws Exception {
+        NetherNetManualTlsSource source = new NetherNetManualTlsSource(
+                NetherNetTlsFilesTest.configured(dir, "chain.pem", "key.pem", ""), logger, () -> now);
+
+        assertEquals(dir.resolve("chain.pem") + " does not exist", source.currentProblem());
+        verify(logger).warning(contains("cannot be used: " + dir.resolve("chain.pem") + " does not exist"));
+
+        writePair(dir);
+        assertEquals(dir.resolve("chain.pem") + " does not exist", source.currentProblem(),
+                "the files are checked at most once a second");
+        now += TimeUnit.SECONDS.toNanos(1);
+        assertTrue(source.currentProblem().startsWith("a stock client rejects the certificate"), source.currentProblem());
+    }
+
+    private static void writePair(Path dir) throws Exception {
+        KeyPair key = NetherNetKeyFiles.generateP256();
+        Files.writeString(dir.resolve("chain.pem"), NetherNetTlsFilesTest.pem(NetherNetTlsFilesTest.selfSigned(key)));
+        Files.writeString(dir.resolve("key.pem"), NetherNetTlsFilesTest.pem(new JcaPKCS8Generator(key.getPrivate(), null)));
     }
 }

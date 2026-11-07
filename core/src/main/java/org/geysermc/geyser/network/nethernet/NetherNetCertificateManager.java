@@ -104,8 +104,9 @@ import java.util.concurrent.atomic.AtomicReference;
  * renews a Let's Encrypt certificate for the server's public IP address
  * (current clients validate against the IP, so only IP certificates work).
  *
- * Active only when the operator has not supplied a manual
- * nethernet/cert.pem + key.pem pair. IP certificates come from the
+ * Active only when the operator supplies no certificate, neither through
+ * the bedrock.signaling.builtin.https keys of the config nor as
+ * nethernet/cert.pem and key.pem. IP certificates come from the
  * "shortlived" profile (about 6.5 days of validity), so renewal is a
  * first class loop: re issue at two thirds of the lifetime, roughly every
  * 4.5 days, and atomically swap the TLS context; signaling connections are

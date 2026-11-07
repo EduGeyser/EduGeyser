@@ -97,11 +97,12 @@ public class AsteriskSerializer implements JsonSerializer<String> {
     }
 
     /**
-     * Options for writing a config into a dump, censoring its {@link Asterisk} values.
+     * Options for writing a config into a dump, censoring its {@link Asterisk} and {@link Secret} values.
      */
     public static ConfigurationOptions dumpOptions() {
         return InterfaceDefaultOptions.addTo(ConfigurationOptions.defaults(), builder ->
-                builder.addProcessor(Asterisk.class, CONFIGURATE_SERIALIZER))
+                builder.addProcessor(Asterisk.class, CONFIGURATE_SERIALIZER)
+                    .addProcessor(Secret.class, String.class, CONFIGURATE_SECRET))
             .shouldCopyDefaults(false);
     }
 
@@ -129,9 +130,33 @@ public class AsteriskSerializer implements JsonSerializer<String> {
         }
     }
 
+    /**
+     * Censors a value that is never safe to publish, such as a token or a password.
+     * <p>
+     * Unlike {@link Asterisk} this ignores {@code showSensitive}, so a full dump censors it too: a
+     * dump is routinely posted to a public paste, and a reader helping with support has no use for
+     * the secret itself. An empty value is left alone so that "not configured" stays visible.
+     */
+    private static final Processor.Factory<Secret, String> CONFIGURATE_SECRET = (data, fieldType) -> (value, destination) -> {
+        if (value == null || value.isEmpty()) {
+            return;
+        }
+        try {
+            destination.set("***");
+        } catch (SerializationException e) {
+            throw new RuntimeException("Unable to censor a secret", e); // Error over silently printing a secret.
+        }
+    };
+
     @Target({ElementType.FIELD, ElementType.METHOD})
     @Retention(RetentionPolicy.RUNTIME)
     public @interface Asterisk {
+
+    }
+
+    @Target({ElementType.FIELD, ElementType.METHOD})
+    @Retention(RetentionPolicy.RUNTIME)
+    public @interface Secret {
 
     }
 }

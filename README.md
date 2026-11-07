@@ -29,7 +29,7 @@ Connection ID, join code, and Xbox friends list joins run over Microsoft's signa
 
 A server list entry only advertises an IP and port, which is the same as typing them into Bedrock's server list. For such direct connections the client tries three modes in order, and EduGeyser serves the first two:
 
-1. **NetherNet with HTTPS signaling.** EduGeyser obtains a certificate for the server's IP from Let's Encrypt automatically. You can also place your own `cert.pem` and `key.pem` in the `nethernet` folder next to the Geyser config; EduGeyser checks that they are valid.
+1. **NetherNet with HTTPS signaling.** EduGeyser obtains a certificate for the server's IP from Let's Encrypt automatically. You can also use your own certificate: set `certificate`, `private-key` and `password` under `bedrock.signaling.builtin.https` in the config (a PEM chain and its key, or a PKCS12 file), as in upstream Geyser, or place `cert.pem` and `key.pem` in the `nethernet` folder next to the Geyser config. EduGeyser checks that the certificate is valid and reloads it when its files change.
 2. **NetherNet with HTTP signaling**, used when no valid certificate is available or the client rejects the HTTPS connection. The server proves its identity with the key in `nethernet/identity.pem`, the same file upstream Geyser uses (EduGeyser moves a key from the older `nethernet/identity-key.pem` there). The client shows a trust prompt on the first connection and again whenever that key changes.
 3. **RakNet**, if both NetherNet modes fail. EduGeyser does not serve it, so such a join fails.
 
