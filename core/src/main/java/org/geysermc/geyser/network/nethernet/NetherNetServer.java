@@ -116,7 +116,6 @@ public class NetherNetServer {
      * pins players hold for it carry on unchanged.
      */
     private static final String IDENTITY_DOMAIN = "self";
-    private static final String IDENTITY_KEY_FILE = "identity-key.pem";
     /**
      * How long restartSignaling waits for its fresh token and the connection
      * made with it. An authentication takes seconds and the Xbox source gives
@@ -384,13 +383,14 @@ public class NetherNetServer {
     private boolean bind() {
         ServerIdentity identity;
         try {
-            identity = ServerIdentity.loadOrCreate(
-                    geyser.getBootstrap().getConfigFolder().resolve("nethernet").resolve(IDENTITY_KEY_FILE),
-                    IDENTITY_DOMAIN);
+            identity = NetherNetIdentityFile.load(geyser.getBootstrap().getConfigFolder().resolve("nethernet"),
+                    IDENTITY_DOMAIN, logger);
         } catch (IOException | GeneralSecurityException e) {
             // Every client checks the identity on every answer, so there is
             // nothing to serve without it.
-            logger.error(LOG_PREFIX + "Server identity unavailable: " + e.getMessage());
+            logger.error(LOG_PREFIX + "NetherNet will not start: the server identity cannot be loaded ("
+                    + e.getMessage() + "). Only delete the key file if it cannot be recovered: a new key makes every"
+                    + " player who joins over plain HTTP trust this server again");
             return false;
         }
 
