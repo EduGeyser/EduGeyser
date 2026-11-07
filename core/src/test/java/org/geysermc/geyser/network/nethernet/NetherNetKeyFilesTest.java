@@ -37,8 +37,13 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.security.GeneralSecurityException;
+import java.nio.file.attribute.AclEntry;
+import java.nio.file.attribute.AclFileAttributeView;
+import java.nio.file.attribute.PosixFileAttributeView;
+import java.nio.file.attribute.PosixFilePermissions;
 import java.security.KeyPair;
 import java.util.Base64;
+import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -122,6 +127,26 @@ class NetherNetKeyFilesTest {
         assertNotEquals(first, second);
         assertEquals("first", Files.readString(first), "a writer never replaces another's file");
         assertEquals("second", Files.readString(second));
+    }
+
+    @Test
+    void writesKeysReadableOnlyByTheirOwner(@TempDir Path dir) throws Exception {
+        Path written = dir.resolve("domain-key.pem");
+        NetherNetKeyFiles.writeAtomically(written, NetherNetKeyFiles.writeSec1(NetherNetKeyFiles.generateP256()));
+        // A converted file replaces one the directory's access applies to
+        Path converted = dir.resolve("account-key.pem");
+        Files.writeString(converted, twoBlocks(NetherNetKeyFiles.generateP256()));
+        NetherNetKeyFiles.load(converted, logger);
+
+        for (Path file : List.of(written, converted)) {
+            if (Files.getFileStore(dir).supportsFileAttributeView(PosixFileAttributeView.class)) {
+                assertEquals("rw-------", PosixFilePermissions.toString(Files.getPosixFilePermissions(file)));
+            } else {
+                List<AclEntry> acl = Files.getFileAttributeView(file, AclFileAttributeView.class).getAcl();
+                assertEquals(1, acl.size(), () -> file.getFileName() + " is readable by others: " + acl);
+                assertEquals(Files.getOwner(file), acl.getFirst().principal());
+            }
+        }
     }
 
     private static void assertSingleSec1Block(String pem) throws Exception {

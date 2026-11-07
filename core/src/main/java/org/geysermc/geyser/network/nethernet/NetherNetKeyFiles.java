@@ -50,13 +50,20 @@ import java.nio.ByteBuffer;
 import java.nio.channels.FileChannel;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.AtomicMoveNotSupportedException;
+import java.nio.file.FileStore;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.StandardCopyOption;
 import java.nio.file.StandardOpenOption;
+import java.nio.file.attribute.AclEntry;
+import java.nio.file.attribute.AclEntryPermission;
+import java.nio.file.attribute.AclEntryType;
+import java.nio.file.attribute.AclFileAttributeView;
+import java.nio.file.attribute.FileAttribute;
 import java.nio.file.attribute.PosixFileAttributeView;
 import java.nio.file.attribute.PosixFilePermission;
 import java.nio.file.attribute.PosixFilePermissions;
+import java.nio.file.attribute.UserPrincipal;
 import java.security.GeneralSecurityException;
 import java.security.KeyFactory;
 import java.security.KeyPair;
@@ -65,6 +72,8 @@ import java.security.MessageDigest;
 import java.security.spec.ECGenParameterSpec;
 import java.security.spec.PKCS8EncodedKeySpec;
 import java.security.spec.X509EncodedKeySpec;
+import java.util.EnumSet;
+import java.util.List;
 import java.util.Set;
 import java.util.concurrent.ThreadLocalRandom;
 
@@ -240,7 +249,7 @@ final class NetherNetKeyFiles {
     }
 
     /**
-     * Replaces a file in one step, owner-only on POSIX. A crash or full disk
+     * Replaces a file in one step, readable only by its owner. A crash or full disk
      * mid write leaves the previous file whole: a torn certificate wedges
      * adoption, and a torn key cannot be recovered.
      */
@@ -269,14 +278,24 @@ final class NetherNetKeyFiles {
      * Writes the text, synced, to a new file beside the target, named for
      * this write alone: writers that shared one name deleted and replaced
      * each other's file, so one could install another's half written file.
+     * The file is owner-only from the moment it exists (POSIX permissions,
+     * or an owner-only ACL on Windows), as NetworkM's identity key writer
+     * makes its files: the move keeps its permissions, so a key replaced
+     * this way never takes on the directory's wider access.
      */
     static Path writeTemporary(Path file, String text) throws IOException {
         Path directory = file.toAbsolutePath().getParent();
         Files.createDirectories(directory);
         Path temporary = directory.resolve("." + file.getFileName() + "-"
                 + Long.toUnsignedString(ThreadLocalRandom.current().nextLong(), 36) + ".tmp");
-        if (Files.getFileStore(directory).supportsFileAttributeView(PosixFileAttributeView.class)) {
+        FileStore store = Files.getFileStore(directory);
+        if (store.supportsFileAttributeView(PosixFileAttributeView.class)) {
             Files.createFile(temporary, PosixFilePermissions.asFileAttribute(OWNER_ONLY));
+        } else if (store.supportsFileAttributeView(AclFileAttributeView.class)) {
+            // Set at creation, not after: a handle another account opened in
+            // between would keep its access. An ACL given at creation also
+            // inherits nothing from the directory.
+            Files.createFile(temporary, ownerOnlyAcl(directory));
         } else {
             Files.createFile(temporary);
         }
@@ -288,6 +307,27 @@ final class NetherNetKeyFiles {
             channel.force(true);
         }
         return temporary;
+    }
+
+    private static FileAttribute<List<AclEntry>> ownerOnlyAcl(Path directory) throws IOException {
+        UserPrincipal owner = directory.getFileSystem().getUserPrincipalLookupService()
+                .lookupPrincipalByName(System.getProperty("user.name"));
+        List<AclEntry> entries = List.of(AclEntry.newBuilder()
+                .setType(AclEntryType.ALLOW)
+                .setPrincipal(owner)
+                .setPermissions(EnumSet.allOf(AclEntryPermission.class))
+                .build());
+        return new FileAttribute<>() {
+            @Override
+            public String name() {
+                return "acl:acl";
+            }
+
+            @Override
+            public List<AclEntry> value() {
+                return entries;
+            }
+        };
     }
 
     static void moveIntoPlace(Path source, Path target) throws IOException {
