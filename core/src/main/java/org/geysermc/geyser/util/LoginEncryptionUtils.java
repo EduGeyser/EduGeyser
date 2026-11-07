@@ -238,8 +238,8 @@ public class LoginEncryptionUtils {
      * whose key exchange would bind the login to its key, never runs (DTLS secures NetherNet), so
      * without this a Login captured from another player could be replayed over a new connection.
      * Real clients sign the Login with the offer's key on every path, Education included (captured
-     * 2026-11-05). A channel without a binding, and one whose offer proved no key, passes. Not used
-     * behind WaterdogPE, see {@link #transportAcceptsForwardedLogin}.
+     * 2026-11-05). A connection whose offer proved no key passes; one that is not NetherNet is
+     * refused. Not used behind WaterdogPE, see {@link #transportAcceptsForwardedLogin}.
      *
      * @return whether the login may go on; if not, the session is being disconnected
      */
@@ -254,7 +254,9 @@ public class LoginEncryptionUtils {
      * binding. The proxy re-signs the login with its own key, so it never matches the key the offer
      * proved; the proxy vouches for the player instead, and the address and XUID it forwarded have
      * been accepted before this. Spending the binding still lets one login through per connection.
-     * Upstream Geyser does the same (d01ef5b6c, 5f32ee9b8).
+     * Upstream Geyser does the same (d01ef5b6c, 5f32ee9b8), but admits a connection that is not
+     * NetherNet, which its RakNet listener authenticates; here the proxy connects over NetherNet
+     * too, so such a connection is refused as on the direct path.
      *
      * @return whether the login may go on; if not, the session is being disconnected
      */
@@ -266,10 +268,18 @@ public class LoginEncryptionUtils {
 
     private static boolean admitted(GeyserSession session, TransportIdentityBinding.Result binding, String refusal) {
         return switch (binding) {
-            case ACCEPTED, UNBOUND, NOT_NETHERNET -> true;
+            case ACCEPTED, UNBOUND -> true;
             case MISMATCH, SPENT -> {
                 session.getGeyser().getLogger().debug("Login refused by the NetherNet transport (" + binding + ")");
                 session.disconnect(refusal);
+                yield false;
+            }
+            // NetherNet is the only Bedrock transport, a proxy's connection included, and NetworkM
+            // counts a NetherNet connection that lacks a binding as UNBOUND. So this connection did
+            // not come through the NetherNet endpoint, and nothing ties the login to it.
+            case NOT_NETHERNET -> {
+                session.getGeyser().getLogger().warning("Refused a Bedrock login on a connection that is not NetherNet");
+                session.disconnect("disconnectionScreen.internalError.cantConnect");
                 yield false;
             }
         };

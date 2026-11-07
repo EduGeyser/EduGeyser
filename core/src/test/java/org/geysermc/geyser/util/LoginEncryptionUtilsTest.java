@@ -142,11 +142,21 @@ class LoginEncryptionUtilsTest {
     }
 
     @Test
-    void aLoginOnAChannelWithoutABindingGoesOn() throws Exception {
-        GeyserSession session = sessionOn(new EmbeddedChannel());
+    void aLoginOnNetherNetWithoutAProvenKeyGoesOn() throws Exception {
+        EmbeddedChannel channel = new EmbeddedChannel();
+        TransportIdentityBinding.install(channel, TransportIdentityBinding.unbound());
+        GeyserSession session = sessionOn(channel);
 
         assertTrue(LoginEncryptionUtils.transportAcceptsLoginKey(session, p384KeyPair().getPublic()));
         verify(session, never()).disconnect(anyString());
+    }
+
+    @Test
+    void aLoginOnAConnectionThatIsNotNetherNetIsRefused() throws Exception {
+        GeyserSession session = sessionOn(new EmbeddedChannel());
+
+        assertFalse(LoginEncryptionUtils.transportAcceptsLoginKey(session, p384KeyPair().getPublic()));
+        verify(session).disconnect(anyString());
     }
 
     @Test
@@ -169,11 +179,11 @@ class LoginEncryptionUtilsTest {
     }
 
     @Test
-    void aForwardedLoginOnAChannelWithoutABindingGoesOn() {
+    void aForwardedLoginOnAConnectionThatIsNotNetherNetIsRefused() {
         GeyserSession session = sessionOn(new EmbeddedChannel());
 
-        assertTrue(LoginEncryptionUtils.transportAcceptsForwardedLogin(session));
-        verify(session, never()).disconnect(anyString());
+        assertFalse(LoginEncryptionUtils.transportAcceptsForwardedLogin(session));
+        verify(session).disconnect(anyString());
     }
 
     private static Channel boundChannel(PublicKey proven) {
