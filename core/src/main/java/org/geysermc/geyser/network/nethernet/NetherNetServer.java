@@ -140,6 +140,26 @@ public class NetherNetServer {
      * again.
      */
     private static final Duration TERMINATION_WAIT = Duration.ofSeconds(10);
+    /**
+     * How long HTTP signaling gives {@link #serveServerStatus} before it
+     * answers a status request with the last document it served for the
+     * same Host, or an empty 200. Set here rather than left to NetworkM's
+     * default, because {@link #STATUS_PASSTHROUGH_WAIT} is derived from it.
+     */
+    private static final Duration STATUS_TIMEOUT = Duration.ofSeconds(1);
+    /**
+     * How long a status request waits for a fresh answer from the Java
+     * server: the status deadline less a 250 ms margin for the rest of the
+     * call. Geyser's ping event, the MOTD conversion and the document's JSON
+     * take a few milliseconds; the margin absorbs a garbage collection pause
+     * or a slow ping event listener. It errs large because a missed deadline
+     * costs more than a shorter wait: a Host that HTTP signaling has not
+     * served yet then gets an empty 200 and no MOTD. The passthroughs fire
+     * the platform's ping event in process or read the legacy passthrough's
+     * cached ping, which takes milliseconds unless an event listener does
+     * slow work, so 750 ms leaves them room.
+     */
+    private static final Duration STATUS_PASSTHROUGH_WAIT = STATUS_TIMEOUT.minusMillis(250);
 
     private final GeyserImpl geyser;
     private final GeyserLogger logger;
@@ -234,7 +254,7 @@ public class NetherNetServer {
         // again, so each start gets snapshots of its own.
         NetherNetPingSnapshots snapshots = new NetherNetPingSnapshots(
                 host -> pingResponder.passthrough(statusPingAddress(), host), passthroughExecutor,
-                geyser.config().bedrock().signalingPort(), System::nanoTime, logger);
+                geyser.config().bedrock().signalingPort(), System::nanoTime, STATUS_PASSTHROUGH_WAIT, logger);
         // Before HTTP signaling listens, so early probes find an answer
         snapshots.prime();
         pingSnapshots = snapshots;
@@ -327,6 +347,9 @@ public class NetherNetServer {
             // event chain and deserves the interrupt
             passthroughExecutor.shutdownNow();
             passthroughExecutor = null;
+            // HTTP signaling still serves until closeChannels, and the asks
+            // shutdownNow discarded would hold their requests to the budget
+            pingSnapshots.close();
         }
         closeChannels();
         if (signalingTokens != null) {
@@ -674,6 +697,7 @@ public class NetherNetServer {
                 .tls(tls.selector())
                 .tlsHandshakeFailures(joinLog::tlsHandshakeFailed)
                 .statusProvider(this::serveServerStatus)
+                .statusTimeout(STATUS_TIMEOUT)
                 .trustedProxies(proxies)
                 .build();
         try {
@@ -809,11 +833,13 @@ public class NetherNetServer {
 
     /**
      * Answers an HTTP status request. HTTP signaling calls this off its I/O
-     * threads, at most 64 at a time with a 1 s deadline. Only the Java ping
-     * passthrough can block for long, so its answer comes from
+     * threads, at most 64 at a time, each with {@link #STATUS_TIMEOUT}. Only
+     * the Java ping passthrough can block for long, so its answer comes from
      * {@link NetherNetPingSnapshots}, one per virtual host when the
-     * passthrough answers by host, and is never waited for. The rest is built
-     * per request: Geyser's ping event sees the requester, through trusted
+     * passthrough answers by host. A request whose snapshot is stale waits
+     * for the refresh for at most {@link #STATUS_PASSTHROUGH_WAIT}, and gets
+     * the older answer when the refresh is late. The rest is built per
+     * request: Geyser's ping event sees the requester, through trusted
      * proxies as configured, and changes only that requester's answer (see
      * {@link #statusAnswer}), and a player count without passthrough is
      * current.
