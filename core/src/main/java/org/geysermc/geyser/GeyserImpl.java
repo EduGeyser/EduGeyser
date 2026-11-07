@@ -601,9 +601,10 @@ public class GeyserImpl implements GeyserApi, EventRegistrar {
         String address = config().bedrock().address();
         int icePort = config().bedrock().icePort();
         int signalingPort = config().bedrock().signalingPort();
-        // A string, as the locale message would group the digits of a number with commas
-        String port = icePort == signalingPort ? String.valueOf(icePort)
-                : icePort + " (UDP), " + signalingPort + " (TCP)";
+        // A string, as the locale message would group the digits of a number with commas. The "nxs" signaling mode
+        // takes no TCP port
+        String port = icePort == signalingPort || !config().bedrock().signaling().mode().builtin()
+                ? String.valueOf(icePort) : icePort + " (UDP), " + signalingPort + " (TCP)";
         try {
             NethernetIds ids = loadOrGenerateNethernetIds(log);
             if (ids != null) {

@@ -65,9 +65,11 @@ public class ConnectionTestCommand extends GeyserCommand {
         GeyserCommandSource source = context.sender();
         source.sendMessage("The connection test is not available: it pinged over RakNet, which EduGeyser does not "
                 + "serve, so it cannot check this server.");
-        source.sendMessage("Bedrock players join over NetherNet: make sure UDP port " + listener.icePort()
-                + " (NetherNet) and TCP port " + listener.signalingPort()
-                + " (HTTP signaling) are open and forwarded to this server.");
+        // The "nxs" signaling mode runs no HTTP signaling, so its TCP port needs nothing
+        source.sendMessage("Bedrock players join over NetherNet: make sure UDP port " + listener.icePort() + " (NetherNet)"
+                + (listener.signaling().mode().builtin()
+                ? " and TCP port " + listener.signalingPort() + " (HTTP signaling) are" : " is")
+                + " open and forwarded to this server.");
 
         GeyserConfig.AdvancedBedrockConfig bedrock = geyser.config().advanced().bedrock();
         // Issue: did someone list HAProxy proxies, and they didn't mean it?
