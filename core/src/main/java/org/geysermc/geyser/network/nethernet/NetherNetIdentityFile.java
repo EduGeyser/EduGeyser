@@ -58,7 +58,8 @@ final class NetherNetIdentityFile {
      * Loads the server identity from {@code identity.pem}, creating it when
      * no key exists yet. A key only in {@code identity-key.pem} is written to
      * {@code identity.pem} first; once {@code identity.pem} holds the same
-     * key, the old file is deleted; when {@code identity.pem} cannot be
+     * key, the old file is deleted, except in the cases
+     * {@link #retireLegacy} keeps it for; when {@code identity.pem} cannot be
      * created, the old file's key is used and the next start tries again. An
      * old file with another key, or one that cannot be read, is left alone
      * with a warning that it is ignored.
@@ -116,16 +117,45 @@ final class NetherNetIdentityFile {
                     + LEGACY_FILE + " to silence this, or delete " + FILE + " and restart to go back to the other key");
             return identity;
         }
-        try {
-            Files.delete(legacy);
-        } catch (IOException e) {
-            logger.warning(LOG_PREFIX + "Could not delete " + legacy + " (" + e.getMessage() + "); it is no longer used,"
-                    + " as " + FILE + " holds the same key");
+        if (moved) {
+            logger.info(LOG_PREFIX + "Moved the server identity key from " + LEGACY_FILE + " to " + FILE
+                    + ", the file upstream Geyser uses (SHA-256 " + identity.fingerprint() + ")");
         }
-        logger.info(LOG_PREFIX + (moved
-                ? "Moved the server identity key from " + LEGACY_FILE + " to " + FILE + ", the file upstream Geyser uses"
-                : "Deleted " + LEGACY_FILE + ", as " + FILE + " holds the same key")
-                + " (SHA-256 " + identity.fingerprint() + ")");
+        if (retireLegacy(legacy, file, logger) && !moved) {
+            logger.info(LOG_PREFIX + "Deleted " + LEGACY_FILE + ", as " + FILE + " holds the same key (SHA-256 "
+                    + identity.fingerprint() + ")");
+        }
         return identity;
+    }
+
+    /**
+     * Deletes {@code identity-key.pem} once {@code identity.pem} holds its
+     * key, unless that could lose the key or is not this server's to do. A
+     * symbolic link is left alone, as it was set up on purpose, such as a
+     * Kubernetes secret mount. A file that is {@code identity.pem} itself,
+     * as when {@code identity.pem} is a link to it, is the key that is kept. A
+     * file that cannot be deleted, such as on a read-only mount, stays too.
+     * Each case is logged; none fails the start.
+     *
+     * @return whether the file was deleted
+     */
+    static boolean retireLegacy(Path legacy, Path file, GeyserLogger logger) {
+        String keep = LOG_PREFIX + "Leaving " + legacy + " in place, as ";
+        String reason = "; " + FILE + " holds the same key and is the file NetherNet uses";
+        if (Files.isSymbolicLink(legacy)) {
+            logger.info(keep + "it is a symbolic link" + reason + ", so the link can be removed");
+            return false;
+        }
+        try {
+            if (Files.isSameFile(legacy, file)) {
+                logger.info(keep + FILE + " is the same file (a link to it), which holds the key NetherNet uses");
+                return false;
+            }
+            Files.delete(legacy);
+            return true;
+        } catch (IOException e) {
+            logger.warning(keep + "it cannot be deleted (" + e.getMessage() + ")" + reason);
+            return false;
+        }
     }
 }

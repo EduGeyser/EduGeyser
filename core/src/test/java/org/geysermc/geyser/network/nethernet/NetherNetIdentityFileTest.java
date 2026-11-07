@@ -62,6 +62,7 @@ import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.contains;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 
 class NetherNetIdentityFileTest {
@@ -136,15 +137,41 @@ class NetherNetIdentityFileTest {
     }
 
     @Test
+    void neverDeletesTheKeyThatIdentityPemLinksTo(@TempDir Path dir) throws Exception {
+        Path legacy = writeLegacy(dir, p384());
+        String fingerprint = ServerIdentity.load(legacy, "self").fingerprint();
+        symbolicLink(dir.resolve("identity.pem"), legacy);
+
+        assertEquals(fingerprint, NetherNetIdentityFile.load(dir, "self", logger).fingerprint());
+
+        assertTrue(Files.exists(legacy), "identity.pem holds no key of its own");
+        assertEquals(fingerprint, NetherNetIdentityFile.load(dir, "self", logger).fingerprint(), "the next start");
+        verify(logger, times(2)).info(contains("identity.pem is the same file"));
+    }
+
+    @Test
+    void leavesALinkedOldFileInPlace(@TempDir Path dir) throws Exception {
+        // As a Kubernetes secret mount sets it up
+        Path target = writeLegacy(Files.createDirectory(dir.resolve("secret")), p384());
+        Path legacy = symbolicLink(dir.resolve("identity-key.pem"), target);
+        String fingerprint = ServerIdentity.load(target, "self").fingerprint();
+
+        ServerIdentity identity = NetherNetIdentityFile.load(dir, "self", logger);
+
+        assertEquals(fingerprint, identity.fingerprint());
+        assertFalse(Files.isSymbolicLink(dir.resolve("identity.pem")), "the key moved into a file of its own");
+        assertTrue(Files.isSymbolicLink(legacy));
+        assertTrue(Files.exists(target));
+        verify(logger).info(contains("Moved the server identity key"));
+        verify(logger).info(contains("it is a symbolic link"));
+    }
+
+    @Test
     void keepsTheOldKeyWhenTheNewFileCannotBeCreated(@TempDir Path dir) throws Exception {
         Path legacy = writeLegacy(dir, p384());
         String fingerprint = ServerIdentity.load(legacy, "self").fingerprint();
         // NetworkM refuses to create a key through a symbolic link, as on a file system without hard links
-        try {
-            Files.createSymbolicLink(dir.resolve("identity.pem"), dir.resolve("elsewhere.pem"));
-        } catch (IOException | UnsupportedOperationException e) {
-            assumeTrue(false, "cannot create symbolic links here: " + e);
-        }
+        symbolicLink(dir.resolve("identity.pem"), dir.resolve("elsewhere.pem"));
 
         ServerIdentity identity = NetherNetIdentityFile.load(dir, "self", logger);
 
@@ -182,6 +209,16 @@ class NetherNetIdentityFileTest {
         ECPublicKey publicKey = assertInstanceOf(ECPublicKey.class, pair.getPublic());
         assertEquals(384, publicKey.getParams().getCurve().getField().getFieldSize());
         return publicKey;
+    }
+
+    private static Path symbolicLink(Path link, Path target) {
+        try {
+            return Files.createSymbolicLink(link, target);
+        } catch (IOException | UnsupportedOperationException e) {
+            // Windows needs Developer Mode or elevation to create one
+            assumeTrue(false, "cannot create symbolic links here: " + e);
+            throw new AssertionError(e);
+        }
     }
 
     /** The two-block file earlier EduGeyser builds wrote: the JDK's PKCS#8, then the SPKI. */
