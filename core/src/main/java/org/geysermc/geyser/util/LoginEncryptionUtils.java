@@ -113,7 +113,10 @@ public class LoginEncryptionUtils {
 
             PublicKey identityPublicKey = result.identityClaims().parsedIdentityPublicKey();
 
-            if (!transportAcceptsLoginKey(session, identityPublicKey)) {
+            // A proxy re-signs the login with its own key, so the key only lines up for a direct client;
+            // a forwarded login spends the binding below, once its forwarded fields are accepted
+            boolean forwarded = geyser.config().advanced().bedrock().useWaterdogpeForwarding();
+            if (!forwarded && !transportAcceptsLoginKey(session, identityPublicKey)) {
                 return false;
             }
 
@@ -194,6 +197,9 @@ public class LoginEncryptionUtils {
                     session.disconnect("Did not receive IP and xuid forwarded from the proxy!");
                     return false;
                 }
+                if (!transportAcceptsForwardedLogin(session)) {
+                    return false;
+                }
             }
 
             String displayName = extraData.displayName;
@@ -247,18 +253,38 @@ public class LoginEncryptionUtils {
      * Bedrock encryption, whose handshake would bind the login to its key, so without this a Login
      * captured from another player could be replayed over a new connection. Real clients sign the
      * Login with the offer's key on every path, Education included (captured 2026-11-05). A
-     * channel without a binding, and one whose offer proved no key, passes.
+     * channel without a binding, and one whose offer proved no key, passes. Not used behind
+     * WaterdogPE, see {@link #transportAcceptsForwardedLogin}.
      *
      * @return whether the login may go on; if not, the session is being disconnected
      */
     static boolean transportAcceptsLoginKey(GeyserSession session, PublicKey identityPublicKey) {
         Channel channel = session.getUpstream().getSession().getPeer().getChannel();
-        TransportIdentityBinding.Result binding = TransportIdentityBinding.verifyLogin(channel, identityPublicKey);
+        return admitted(session, TransportIdentityBinding.verifyLogin(channel, identityPublicKey),
+                "The login is not signed with the key this connection was opened with.");
+    }
+
+    /**
+     * Admits a login WaterdogPE forwarded (use-waterdogpe-forwarding) by spending the NetherNet
+     * binding. The proxy re-signs the login with its own key, so it never matches the key the offer
+     * proved; the proxy vouches for the player instead, and the address and XUID it forwarded have
+     * been accepted before this. Spending the binding still lets one login through per connection.
+     * Upstream Geyser does the same (d01ef5b6c, 5f32ee9b8).
+     *
+     * @return whether the login may go on; if not, the session is being disconnected
+     */
+    static boolean transportAcceptsForwardedLogin(GeyserSession session) {
+        Channel channel = session.getUpstream().getSession().getPeer().getChannel();
+        return admitted(session, TransportIdentityBinding.acceptForwardedIdentity(channel),
+                "This connection already carried a login.");
+    }
+
+    private static boolean admitted(GeyserSession session, TransportIdentityBinding.Result binding, String refusal) {
         return switch (binding) {
             case ACCEPTED, UNBOUND, NOT_NETHERNET -> true;
             case MISMATCH, SPENT -> {
-                session.getGeyser().getLogger().debug("Login key refused by the NetherNet transport (" + binding + ")");
-                session.disconnect("The login is not signed with the key this connection was opened with.");
+                session.getGeyser().getLogger().debug("Login refused by the NetherNet transport (" + binding + ")");
+                session.disconnect(refusal);
                 yield false;
             }
         };

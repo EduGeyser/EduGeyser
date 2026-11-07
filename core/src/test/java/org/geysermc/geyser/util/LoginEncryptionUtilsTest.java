@@ -81,6 +81,33 @@ class LoginEncryptionUtilsTest {
         verify(session, never()).disconnect(anyString());
     }
 
+    @Test
+    void aForwardedLoginGoesOnWhateverKeyTheProxySignedItWith() throws Exception {
+        // The offer proved the proxy's NetherNet key; the forwarded login is re-signed by the proxy
+        GeyserSession session = sessionOn(boundChannel(p384Key()));
+
+        assertTrue(LoginEncryptionUtils.transportAcceptsForwardedLogin(session));
+        verify(session, never()).disconnect(anyString());
+    }
+
+    @Test
+    void aForwardedLoginSpendsTheBindingSoNoSecondLoginFollows() throws Exception {
+        PublicKey proven = p384Key();
+        GeyserSession session = sessionOn(boundChannel(proven));
+
+        assertTrue(LoginEncryptionUtils.transportAcceptsForwardedLogin(session));
+        assertFalse(LoginEncryptionUtils.transportAcceptsForwardedLogin(session));
+        assertFalse(LoginEncryptionUtils.transportAcceptsLoginKey(session, proven));
+    }
+
+    @Test
+    void aForwardedLoginOnAChannelWithoutABindingGoesOn() {
+        GeyserSession session = sessionOn(new EmbeddedChannel());
+
+        assertTrue(LoginEncryptionUtils.transportAcceptsForwardedLogin(session));
+        verify(session, never()).disconnect(anyString());
+    }
+
     private static Channel boundChannel(PublicKey proven) {
         EmbeddedChannel channel = new EmbeddedChannel();
         TransportIdentityBinding.install(channel, TransportIdentityBinding.forKey(proven));
