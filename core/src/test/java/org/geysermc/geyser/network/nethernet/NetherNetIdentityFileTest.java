@@ -167,6 +167,19 @@ class NetherNetIdentityFileTest {
     }
 
     @Test
+    void deletesTheOldFileOnlyIfItStillHoldsTheKeptKey(@TempDir Path dir) throws Exception {
+        ServerIdentity kept = ServerIdentity.loadOrCreate(dir.resolve("identity.pem"), "self");
+        // The old file compared equal earlier, then changed before the delete
+        Path legacy = writeLegacy(dir, p384());
+        String changed = Files.readString(legacy);
+
+        assertFalse(NetherNetIdentityFile.retireLegacy(legacy, dir.resolve("identity.pem"), kept, "self", logger));
+
+        assertEquals(changed, Files.readString(legacy));
+        verify(logger).warning(contains("it changed and now holds another key"));
+    }
+
+    @Test
     void keepsTheOldKeyWhenTheNewFileCannotBeCreated(@TempDir Path dir) throws Exception {
         Path legacy = writeLegacy(dir, p384());
         String fingerprint = ServerIdentity.load(legacy, "self").fingerprint();

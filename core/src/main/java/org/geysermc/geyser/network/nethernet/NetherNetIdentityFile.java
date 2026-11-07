@@ -121,7 +121,7 @@ final class NetherNetIdentityFile {
             logger.info(LOG_PREFIX + "Moved the server identity key from " + LEGACY_FILE + " to " + FILE
                     + ", the file upstream Geyser uses (SHA-256 " + identity.fingerprint() + ")");
         }
-        if (retireLegacy(legacy, file, logger) && !moved) {
+        if (retireLegacy(legacy, file, identity, domain, logger) && !moved) {
             logger.info(LOG_PREFIX + "Deleted " + LEGACY_FILE + ", as " + FILE + " holds the same key (SHA-256 "
                     + identity.fingerprint() + ")");
         }
@@ -130,16 +130,19 @@ final class NetherNetIdentityFile {
 
     /**
      * Deletes {@code identity-key.pem} once {@code identity.pem} holds its
-     * key, unless that could lose the key or is not this server's to do. A
+     * key, unless that could lose the key or is not this server's to do. The
+     * file is read again right before it is deleted, and deleted only if it
+     * still holds the key kept, as it may have changed since it was compared. A
      * symbolic link is left alone, as it was set up on purpose, such as a
      * Kubernetes secret mount. A file that is {@code identity.pem} itself,
      * as when {@code identity.pem} is a link to it, is the key that is kept. A
      * file that cannot be deleted, such as on a read-only mount, stays too.
      * Each case is logged; none fails the start.
      *
+     * @param kept the identity loaded from {@code identity.pem}
      * @return whether the file was deleted
      */
-    static boolean retireLegacy(Path legacy, Path file, GeyserLogger logger) {
+    static boolean retireLegacy(Path legacy, Path file, ServerIdentity kept, String domain, GeyserLogger logger) {
         String keep = LOG_PREFIX + "Leaving " + legacy + " in place, as ";
         String reason = "; " + FILE + " holds the same key and is the file NetherNet uses";
         if (Files.isSymbolicLink(legacy)) {
@@ -151,6 +154,23 @@ final class NetherNetIdentityFile {
                 logger.info(keep + FILE + " is the same file (a link to it), which holds the key NetherNet uses");
                 return false;
             }
+        } catch (IOException e) {
+            logger.warning(keep + "it cannot be compared with " + FILE + " (" + e.getMessage() + ")" + reason);
+            return false;
+        }
+        String now;
+        try {
+            now = ServerIdentity.load(legacy, domain).fingerprint();
+        } catch (IOException | GeneralSecurityException e) {
+            logger.warning(keep + "it cannot be read again (" + e.getMessage() + ")" + reason);
+            return false;
+        }
+        if (!now.equals(kept.fingerprint())) {
+            logger.warning(keep + "it changed and now holds another key (SHA-256 " + now + "); NetherNet uses the key"
+                    + " in " + FILE + " (SHA-256 " + kept.fingerprint() + ")");
+            return false;
+        }
+        try {
             Files.delete(legacy);
             return true;
         } catch (IOException e) {
