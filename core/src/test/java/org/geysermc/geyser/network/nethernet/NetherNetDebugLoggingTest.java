@@ -30,6 +30,7 @@ import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.core.LoggerContext;
 import org.apache.logging.log4j.core.config.Configurator;
 import org.geysermc.geyser.GeyserLogger;
+import org.geysermc.geyser.network.nethernet.NetherNetDebugLogging.Backend;
 import org.geysermc.geyser.network.nethernet.NetherNetDebugLogging.JulLevels;
 import org.geysermc.geyser.network.nethernet.NetherNetDebugLogging.Level;
 import org.geysermc.geyser.network.nethernet.NetherNetDebugLogging.Log4j2Levels;
@@ -41,6 +42,7 @@ import java.util.Map;
 import static org.geysermc.geyser.network.nethernet.NetherNetDebugLogging.NETWORKM_LOGGERS;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertInstanceOf;
 import static org.junit.jupiter.api.Assertions.assertNotEquals;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -48,6 +50,7 @@ import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.contains;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 
 class NetherNetDebugLoggingTest {
@@ -111,7 +114,7 @@ class NetherNetDebugLoggingTest {
         Configurator.setRootLevel(org.apache.logging.log4j.Level.DEBUG);
         Configurator.setLevel(NETWORKM_LOGGERS, org.apache.logging.log4j.Level.WARN);
         try {
-            Log4j2Levels levels = new Log4j2Levels(NETWORKM_LOGGERS);
+            Backend levels = new Backend.Separate(new Log4j2Levels(NETWORKM_LOGGERS));
             NetherNetDebugLogging.apply(DEBUG, logger, levels);
             assertTrue(LogManager.getLogger(NETWORKM_LOGGERS + ".channel").isDebugEnabled());
 
@@ -129,7 +132,7 @@ class NetherNetDebugLoggingTest {
     @Test
     void turningDebugOffRemovesTheLog4j2LoggerItAdded() {
         LoggerContext context = LoggerContext.getContext(false);
-        Log4j2Levels levels = new Log4j2Levels(NETWORKM_LOGGERS);
+        Backend levels = new Backend.Separate(new Log4j2Levels(NETWORKM_LOGGERS));
         NetherNetDebugLogging.apply(new Settings(Level.TRACE, Severity.VERBOSE), logger, levels);
         // TRACE, then DEBUG: what comes back is still what the host had before the first change
         NetherNetDebugLogging.apply(DEBUG, logger, levels);
@@ -146,7 +149,7 @@ class NetherNetDebugLoggingTest {
         parent.setLevel(java.util.logging.Level.FINE);
         networkM.setLevel(java.util.logging.Level.WARNING);
         try {
-            JulLevels levels = new JulLevels(NETWORKM_LOGGERS);
+            Backend levels = new Backend.Separate(new JulLevels(NETWORKM_LOGGERS));
             NetherNetDebugLogging.apply(DEBUG, logger, levels);
             assertEquals(java.util.logging.Level.FINE, networkM.getLevel());
 
@@ -155,7 +158,7 @@ class NetherNetDebugLoggingTest {
 
             // A logger without a level of its own takes its parent's again
             networkM.setLevel(null);
-            JulLevels inheriting = new JulLevels(NETWORKM_LOGGERS);
+            Backend inheriting = new Backend.Separate(new JulLevels(NETWORKM_LOGGERS));
             NetherNetDebugLogging.apply(DEBUG, logger, inheriting);
             NetherNetDebugLogging.apply(OFF, logger, inheriting);
             assertNull(networkM.getLevel());
@@ -163,5 +166,38 @@ class NetherNetDebugLoggingTest {
             networkM.setLevel(null);
             parent.setLevel(null);
         }
+    }
+
+    @Test
+    void aSharedSlf4jLoggerIsFoundByTheNameItAnswersWith() {
+        // BungeeCord's binding names every logger it hands out after its one shared logger
+        assertEquals(new Backend.Shared("BungeeCord"), NetherNetDebugLogging.backend(name -> "BungeeCord", false));
+
+        Backend.Separate log4j2 = assertInstanceOf(Backend.Separate.class, NetherNetDebugLogging.backend(name -> name, true));
+        assertInstanceOf(Log4j2Levels.class, log4j2.levels());
+        Backend.Separate jul = assertInstanceOf(Backend.Separate.class, NetherNetDebugLogging.backend(name -> name, false));
+        assertInstanceOf(JulLevels.class, jul.levels());
+    }
+
+    @Test
+    void onASharedLoggerNothingChangesAndTheOperatorLearnsWhy() {
+        java.util.logging.Logger networkM = java.util.logging.Logger.getLogger(NETWORKM_LOGGERS);
+        Backend bungee = new Backend.Shared("BungeeCord");
+
+        // libwebrtc keeps its default threshold, as nothing would show what a lower one passes on
+        assertEquals(Severity.WARNING, NetherNetDebugLogging.apply(DEBUG, logger, bungee));
+        assertEquals(Severity.WARNING,
+            NetherNetDebugLogging.apply(new Settings(Level.OFF, Severity.NONE), logger, bungee));
+        assertNull(networkM.getLevel());
+
+        verify(logger, times(2)).warning(contains("nethernet-debug and -DgeyserNetherNetLogLevel have no effect on"
+            + " BungeeCord: it writes the messages of every plugin and library to one shared logger, \"BungeeCord\""));
+        verify(logger, times(2)).warning(contains("libwebrtc's own debug messages never show on BungeeCord"));
+        // Never a logger configuration, which cannot work there
+        verify(logger, never()).warning(contains("set the level of the loggers"));
+
+        GeyserLogger quiet = mock(GeyserLogger.class);
+        assertEquals(Severity.WARNING, NetherNetDebugLogging.apply(OFF, quiet, bungee));
+        verify(quiet, never()).warning(anyString());
     }
 }

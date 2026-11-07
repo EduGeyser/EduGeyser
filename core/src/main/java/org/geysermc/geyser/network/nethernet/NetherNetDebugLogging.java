@@ -34,7 +34,9 @@ import org.apache.logging.log4j.core.config.Configurator;
 import org.apache.logging.log4j.core.config.LoggerConfig;
 import org.checkerframework.checker.nullness.qual.Nullable;
 import org.geysermc.geyser.GeyserLogger;
+import org.slf4j.ILoggerFactory;
 import org.slf4j.LoggerFactory;
+import org.slf4j.helpers.NOPLoggerFactory;
 
 import java.util.Arrays;
 import java.util.Locale;
@@ -47,6 +49,14 @@ import java.util.function.UnaryOperator;
  * B-9), so EduGeyser sets them here: in Log4j2, which every platform but BungeeCord logs with, else in
  * java.util.logging, and checks that the change reached the loggers NetworkM writes to. When debug
  * logging goes off again, the level the host had configured for NetworkM comes back exactly.
+ * <p>
+ * BungeeCord takes no levels for NetworkM at all. Its SLF4J binding gives every logger name the same
+ * BungeeLogger, at level ALL, whose console and file handlers show INFO and above unless BungeeCord
+ * starts with -Dnet.md_5.bungee.console-log-level or file-log-level set lower (BungeeCord's
+ * JDK14LoggerFactory and BungeeLogger, unchanged since June 2025, so in the 1.21-R0.4 build EduGeyser
+ * compiles against). A level set on a logger name reaches nothing there, and changing the shared
+ * logger or its handlers would change every plugin's output, so nothing is changed there and the
+ * operator is told why.
  */
 final class NetherNetDebugLogging {
 
@@ -64,9 +74,11 @@ final class NetherNetDebugLogging {
      * name to itself (NativeLogBridge.LOGGER_NAME), so this repeats it.
      */
     private static final String NATIVE_LOGGER = NETWORKM_LOGGERS + ".nethernet.webrtc.native";
+    /** The threshold NetworkM's WebRTC engine passes libwebrtc's messages on from by default. */
+    private static final Severity DEFAULT_NATIVE_THRESHOLD = Severity.WARNING;
 
     // Guarded by the class. Found on first use
-    private static @Nullable LoggerLevels platformLevels;
+    private static @Nullable Backend platform;
     // Guarded by the class. The levels holding a change, put back when debug logging goes off on a reload
     private static @Nullable LoggerLevels changed;
 
@@ -128,39 +140,94 @@ final class NetherNetDebugLogging {
             logger.warning(LOG_PREFIX + "Invalid -D" + LEVEL_PROPERTY + " \"" + property
                     + "\", expected OFF, ERROR, WARN, INFO, DEBUG or TRACE");
         }
-        return debug ? new Settings(Level.DEBUG, Level.DEBUG.nativeThreshold) : new Settings(null, Severity.WARNING);
+        return debug ? new Settings(Level.DEBUG, Level.DEBUG.nativeThreshold) : new Settings(null, DEFAULT_NATIVE_THRESHOLD);
     }
 
     /**
      * Sets NetworkM's logger levels to the settings, or puts back the host's when an earlier call
      * changed them and these leave them alone. Logger levels are process wide, so this outlives the
      * NetherNet server that applies it.
+     *
+     * @return the threshold for libwebrtc's messages, which the settings ask for unless this
+     *         platform's logging cannot show NetherNet's messages apart from everything else
      */
-    static synchronized void apply(Settings settings, GeyserLogger logger) {
-        if (platformLevels == null) {
-            platformLevels = log4j2Present() ? new Log4j2Levels(NETWORKM_LOGGERS) : new JulLevels(NETWORKM_LOGGERS);
+    static synchronized Severity apply(Settings settings, GeyserLogger logger) {
+        if (platform == null) {
+            platform = backend(NetherNetDebugLogging::slf4jLoggerName, log4j2Present());
         }
-        apply(settings, logger, platformLevels);
+        return apply(settings, logger, platform);
     }
 
-    static synchronized void apply(Settings settings, GeyserLogger logger, LoggerLevels levels) {
+    static synchronized Severity apply(Settings settings, GeyserLogger logger, Backend backend) {
         Level level = settings.loggers();
         if (level == null) {
             if (changed != null) {
                 changed.restore();
                 changed = null;
             }
-            return;
+            return settings.nativeThreshold();
         }
-        if (levels.set(level)) {
-            changed = levels;
+        return switch (backend) {
+            case Backend.Shared(String shared) -> {
+                logger.warning(LOG_PREFIX + "nethernet-debug and -D" + LEVEL_PROPERTY + " have no effect on BungeeCord:"
+                        + " it writes the messages of every plugin and library to one shared logger, \"" + shared
+                        + "\", so NetherNet's messages cannot get a level of their own.");
+                logger.warning(LOG_PREFIX + "NetherNet's warnings and errors, libwebrtc's included, still show."
+                        + " NetherNet's debug messages, which include the libwebrtc warnings NetherNet treats as"
+                        + " routine, show only if BungeeCord starts with -Dnet.md_5.bungee.console-log-level=FINE"
+                        + " (and -Dnet.md_5.bungee.file-log-level=FINE for its log file), which shows every other"
+                        + " plugin's debug messages too. libwebrtc's own debug messages never show on BungeeCord.");
+                // Lower, libwebrtc would format messages that nothing shows
+                yield DEFAULT_NATIVE_THRESHOLD;
+            }
+            case Backend.Separate(LoggerLevels levels) -> {
+                if (levels.set(level)) {
+                    changed = levels;
+                }
+                if (!takesEffect(level)) {
+                    logger.warning(LOG_PREFIX + "This server's logging did not take NetherNet's log level " + level
+                            + ". To see NetherNet's messages, set the level of the loggers whose names start with "
+                            + NETWORKM_LOGGERS + " to " + level + " in this server's logging configuration.");
+                }
+                noteFixedNativeThreshold(settings.nativeThreshold(), System.getProperty(NATIVE_SEVERITY_PROPERTY), logger);
+                yield settings.nativeThreshold();
+            }
+        };
+    }
+
+    /**
+     * How this platform's logging takes levels for NetworkM.
+     *
+     * @param slf4jLoggerNames the name of the logger SLF4J hands out for a name
+     * @param log4j2           whether Log4j2's core is present
+     */
+    static Backend backend(UnaryOperator<String> slf4jLoggerNames, boolean log4j2) {
+        String actual = slf4jLoggerNames.apply(NATIVE_LOGGER);
+        if (!NATIVE_LOGGER.equals(actual)) {
+            return new Backend.Shared(actual);
         }
-        if (!takesEffect(level)) {
-            logger.warning(LOG_PREFIX + "This server's logging did not take NetherNet's log level " + level
-                    + ". To see NetherNet's messages, set the level of the loggers whose names start with "
-                    + NETWORKM_LOGGERS + " to " + level + " in this server's logging configuration.");
+        return new Backend.Separate(log4j2 ? new Log4j2Levels(NETWORKM_LOGGERS) : new JulLevels(NETWORKM_LOGGERS));
+    }
+
+    /**
+     * The name of the logger SLF4J hands out for a name. BungeeCord's binding names each after its one
+     * shared logger. Without a binding, SLF4J drops every message, which is no shared logger: NetworkM's
+     * own loggers then go through Netty to Log4j2 or java.util.logging.
+     */
+    private static String slf4jLoggerName(String name) {
+        ILoggerFactory factory = LoggerFactory.getILoggerFactory();
+        return factory instanceof NOPLoggerFactory ? name : factory.getLogger(name).getName();
+    }
+
+    /** How this platform's logging takes levels for NetworkM's loggers. */
+    sealed interface Backend {
+        /** Each logger name stays apart, so NetworkM's levels can be set. */
+        record Separate(LoggerLevels levels) implements Backend {
         }
-        noteFixedNativeThreshold(settings.nativeThreshold(), System.getProperty(NATIVE_SEVERITY_PROPERTY), logger);
+
+        /** One logger, so named, takes the messages of every logger name, as on BungeeCord. */
+        record Shared(String logger) implements Backend {
+        }
     }
 
     /** Tells the operator when libwebrtc already holds a higher threshold, which only a restart lowers. */

@@ -221,8 +221,7 @@ public class NetherNetServer {
         // Before anything logs, so every NetherNet line follows it from the first
         NetherNetDebugLogging.Settings logging = NetherNetDebugLogging.read(
                 geyser.config().advanced().bedrock().nethernetDebug(), System::getProperty, logger);
-        NetherNetDebugLogging.apply(logging, logger);
-        nativeLogThreshold = logging.nativeThreshold();
+        nativeLogThreshold = NetherNetDebugLogging.apply(logging, logger);
 
         passthroughExecutor = Executors.newSingleThreadExecutor(runnable -> {
             Thread thread = new Thread(runnable, "Nethernet Status");
