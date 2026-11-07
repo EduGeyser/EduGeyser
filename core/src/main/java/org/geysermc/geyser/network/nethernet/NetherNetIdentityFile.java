@@ -58,8 +58,10 @@ final class NetherNetIdentityFile {
      * Loads the server identity from {@code identity.pem}, creating it when
      * no key exists yet. A key only in {@code identity-key.pem} is written to
      * {@code identity.pem} first; once {@code identity.pem} holds the same
-     * key, the old file is deleted. An old file with another key, or one that
-     * cannot be read, is left alone with a warning that it is ignored.
+     * key, the old file is deleted; when {@code identity.pem} cannot be
+     * created, the old file's key is used and the next start tries again. An
+     * old file with another key, or one that cannot be read, is left alone
+     * with a warning that it is ignored.
      *
      * @param nethernetDir the folder of both files
      * @param domain       the name the identity carries
@@ -90,9 +92,19 @@ final class NetherNetIdentityFile {
             // the start, as a new one would make every player trust the
             // server again
             old = ServerIdentity.load(legacy, domain);
-            // False when another process created the file meanwhile, which is
-            // then judged like a file that was there before
-            moved = old.writeKeyFile(file);
+            try {
+                // False when another process created the file meanwhile, which
+                // is then judged like a file that was there before
+                moved = old.writeKeyFile(file);
+            } catch (IOException e) {
+                // Such as a file system without hard links, where NetworkM
+                // cannot create the file without risking another one. The
+                // old file still holds the key, so the server keeps it.
+                logger.warning(LOG_PREFIX + "Could not move the server identity key to " + FILE + " ("
+                        + e.getMessage() + "); NetherNet uses the key in " + LEGACY_FILE + " (SHA-256 "
+                        + old.fingerprint() + ") and tries again on the next start");
+                return old;
+            }
         }
 
         // Read back through the same reader every later start uses

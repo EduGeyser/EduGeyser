@@ -37,6 +37,7 @@ import org.geysermc.geyser.GeyserLogger;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
+import java.io.IOException;
 import java.io.StringReader;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
@@ -56,6 +57,7 @@ import static org.junit.jupiter.api.Assertions.assertInstanceOf;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.junit.jupiter.api.Assumptions.assumeTrue;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.contains;
 import static org.mockito.Mockito.mock;
@@ -131,6 +133,24 @@ class NetherNetIdentityFileTest {
         assertArrayEquals(identity.publicKey().getEncoded(), written.getEncoded());
         assertFalse(Files.exists(dir.resolve("identity-key.pem")));
         verify(logger, never()).warning(anyString());
+    }
+
+    @Test
+    void keepsTheOldKeyWhenTheNewFileCannotBeCreated(@TempDir Path dir) throws Exception {
+        Path legacy = writeLegacy(dir, p384());
+        String fingerprint = ServerIdentity.load(legacy, "self").fingerprint();
+        // NetworkM refuses to create a key through a symbolic link, as on a file system without hard links
+        try {
+            Files.createSymbolicLink(dir.resolve("identity.pem"), dir.resolve("elsewhere.pem"));
+        } catch (IOException | UnsupportedOperationException e) {
+            assumeTrue(false, "cannot create symbolic links here: " + e);
+        }
+
+        ServerIdentity identity = NetherNetIdentityFile.load(dir, "self", logger);
+
+        assertEquals(fingerprint, identity.fingerprint(), "the server keeps its key");
+        assertTrue(Files.exists(legacy));
+        verify(logger).warning(contains("Could not move the server identity key to identity.pem"));
     }
 
     @Test
