@@ -1,0 +1,35 @@
+bedrock:
+  address: 0.0.0.0
+  port: 19132
+  webrtc-port: 0
+  transport: nethernet
+  clone-remote-port: false
+  signaling:
+    mode: nxs
+    advertise-addresses: []
+    stun-discovery: true
+    builtin:
+      https:
+        certificate: ""
+        private-key: ""
+        password: ""
+    nxs:
+      token: file:secrets/nxs-token
+      endpoint: https://signal.example.net
+advanced:
+  bedrock:
+    broadcast-port: 0
+    compression-level: 6
+    use-haproxy-protocol: false
+    haproxy-protocol-whitelisted-ips: []
+    signaling-trusted-proxies: []
+    mtu: 1400
+    validate-bedrock-login: true
+  nxs:
+    assisted-joins: true
+    connection-checks: false
+    location:
+      country: NL
+      city: Amsterdam
+    deregister-on-shutdown: true
+config-version: 11

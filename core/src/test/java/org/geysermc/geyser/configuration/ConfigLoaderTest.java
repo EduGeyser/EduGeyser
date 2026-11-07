@@ -37,6 +37,7 @@ import org.junit.jupiter.params.provider.Arguments;
 import org.junit.jupiter.params.provider.MethodSource;
 import org.spongepowered.configurate.CommentedConfigurationNode;
 import org.spongepowered.configurate.ConfigurateException;
+import org.spongepowered.configurate.yaml.YamlConfigurationLoader;
 
 import java.io.File;
 import java.io.IOException;
@@ -46,6 +47,7 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.StandardCopyOption;
 import java.util.List;
+import java.util.Map;
 import java.util.Objects;
 import java.util.UUID;
 import java.util.stream.Stream;
@@ -407,6 +409,52 @@ public class ConfigLoaderTest {
         // On with a list keeps the list
         assertEquals(List.of("10.0.0.0/8"), config.advanced().bedrock().haproxyProtocolWhitelistedIps());
         assertEquals(Constants.CONFIG_VERSION, config.configVersion());
+    }
+
+    @ParameterizedTest
+    @MethodSource("platformTypes")
+    void testSignalingMigration(PlatformType platformType, Class<? extends GeyserConfig> configClass) throws Exception {
+        // Upstream Geyser's own test of its version 10 to 11 move
+        GeyserConfig config = new ConfigLoader(copyResourceToTempFile("tests", "v10-signaling.yml"), platformType)
+            .load0(configClass);
+
+        // The two lists become one, each address once, built-in's first
+        GeyserConfig.SignalingConfig signaling = config.bedrock().signaling();
+        assertEquals(List.of("1.1.1.1", "play.example.com:19133", "8.8.8.8:19133"), signaling.advertiseAddresses());
+        assertFalse(signaling.stunDiscovery());
+        assertEquals(GeyserConfig.SignalingConfig.Mode.HYBRID, signaling.mode());
+        assertTrue(config.advanced().nxs().assistedJoins());
+        assertEquals(Constants.CONFIG_VERSION, config.configVersion());
+    }
+
+    @ParameterizedTest
+    @MethodSource("platformTypes")
+    void testUpstreamNxsSettingsSurviveTheRewrite(PlatformType platformType, Class<? extends GeyserConfig> configClass) throws Exception {
+        // A config moving from Geyser keeps its NXS settings when the migration writes the file back, so it can
+        // move back again
+        File file = copyResourceToTempFile("tests", "upstream-v11-nxs.yml");
+        GeyserConfig config = new ConfigLoader(file, platformType).load0(configClass);
+
+        GeyserConfig.SignalingConfig signaling = config.bedrock().signaling();
+        assertEquals(GeyserConfig.SignalingConfig.Mode.NXS, signaling.mode());
+        assertEquals("file:secrets/nxs-token", signaling.nxs().token());
+        assertEquals("https://signal.example.net", signaling.nxs().endpoint());
+        GeyserConfig.AdvancedNxsConfig advanced = config.advanced().nxs();
+        assertTrue(advanced.assistedJoins());
+        assertFalse(advanced.connectionChecks());
+        assertEquals(Map.of("country", "NL", "city", "Amsterdam"), advanced.location());
+        assertTrue(advanced.deregisterOnShutdown());
+
+        CommentedConfigurationNode written = YamlConfigurationLoader.builder().file(file).build().load();
+        assertEquals(Constants.CONFIG_VERSION, written.node("config-version").getInt());
+        assertEquals("nxs", written.node("bedrock", "signaling", "mode").getString());
+        assertEquals("file:secrets/nxs-token", written.node("bedrock", "signaling", "nxs", "token").getString());
+        assertEquals("https://signal.example.net", written.node("bedrock", "signaling", "nxs", "endpoint").getString());
+        assertTrue(written.node("advanced", "nxs", "assisted-joins").getBoolean());
+        assertFalse(written.node("advanced", "nxs", "connection-checks").getBoolean(true));
+        assertEquals("NL", written.node("advanced", "nxs", "location", "country").getString());
+        assertEquals("Amsterdam", written.node("advanced", "nxs", "location", "city").getString());
+        assertTrue(written.node("advanced", "nxs", "deregister-on-shutdown").getBoolean());
     }
 
     @ParameterizedTest

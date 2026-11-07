@@ -45,6 +45,7 @@ import org.spongepowered.configurate.objectmapping.meta.Comment;
 
 import java.util.Collections;
 import java.util.List;
+import java.util.Map;
 import java.util.UUID;
 
 @ConfigSerializable
@@ -126,6 +127,22 @@ public interface GeyserConfig {
     @ConfigSerializable
     interface SignalingConfig {
         @Comment("""
+            How players find this server besides Xbox signaling (join codes, connection IDs and friend list joins),
+            which is always on.
+            "builtin": Geyser runs HTTP signaling itself on the TCP port below. Players who add this server by address
+            and the Education server list connect there. It cannot run on the Java server's port (as with
+            "clone-remote-port"); Geyser then logs an error and does not switch to the signaling service by itself.
+            "nxs": Geyser registers this server with the signaling service in "nxs.endpoint" below, and players join
+            through the addresses that service hands out. HTTP signaling does not run, so players who add this server
+            by its own address and the Education server list cannot join.
+            "hybrid": "builtin" and "nxs" at the same time.""")
+        default Mode mode() {
+            return Mode.BUILTIN;
+        }
+
+        void mode(Mode mode);
+
+        @Comment("""
             The TCP port for HTTP signaling, which players adding this server by address and the Education server list
             connect to. 0 uses the Bedrock "port". Set this to a second TCP port from your host when the Java server
             holds the TCP side of the Bedrock port, as it does with "clone-remote-port".""")
@@ -141,7 +158,7 @@ public interface GeyserConfig {
             A host name is looked up when NetherNet starts, and NetherNet stops if it does not resolve.
             You can list an address this machine does not have, such as your public IP, if your router forwards
             the NetherNet UDP port to this machine. You need to set up the port forwarding yourself.
-            Listing any address turns "stun-discovery" off.
+            Listing any address turns "stun-discovery" off for HTTP and Xbox signaling.
             Leave empty to use this machine's own addresses, plus the public address found with "stun-discovery".""")
         @AsteriskSerializer.Asterisk
         default List<String> advertiseAddresses() {
@@ -152,14 +169,34 @@ public interface GeyserConfig {
             Finds this server's public address by asking public STUN servers from the NetherNet UDP port, when
             "advertise-addresses" is empty. Players on other networks need that address when this server is behind a
             router, and joins over Xbox signaling (join codes, connection IDs and friend list joins) do not say which
-            address the player reached.""")
+            address the player reached. In the "nxs" and "hybrid" modes the signaling service uses this too, with its own
+            STUN servers.""")
         @DefaultBoolean(true)
         boolean stunDiscovery();
 
         void stunDiscovery(boolean stunDiscovery);
 
-        @Comment("Settings for built-in signaling, the HTTP signaling this server runs itself.")
+        @Comment("Settings for built-in signaling, the HTTP signaling this server runs itself. Only used in the \"builtin\" and \"hybrid\" modes.")
         BuiltinConfig builtin();
+
+        @Comment("Settings for the signaling service. Only used in the \"nxs\" and \"hybrid\" modes.")
+        NxsConfig nxs();
+
+        enum Mode {
+            BUILTIN,
+            NXS,
+            HYBRID;
+
+            /** Whether HTTP signaling runs. */
+            public boolean builtin() {
+                return this == BUILTIN || this == HYBRID;
+            }
+
+            /** Whether this server registers with the signaling service. */
+            public boolean nxs() {
+                return this == NXS || this == HYBRID;
+            }
+        }
 
         @ConfigSerializable
         interface BuiltinConfig {
@@ -192,6 +229,22 @@ public interface GeyserConfig {
                 String password();
             }
         }
+
+        @ConfigSerializable
+        interface NxsConfig {
+            @Comment("""
+                Access token for the signaling service. Leave empty to register without an account.
+                To read it from a file, which is safer than writing it here, give the file's path instead: "file:/path/to/token",
+                or the path alone if it starts with "/", "./" or "../" or is absolute. A relative path is relative to the
+                "nethernet" folder next to this config.""")
+            @DefaultString()
+            @AsteriskSerializer.Secret
+            String token();
+
+            @Comment("Address of the signaling service (NXS).")
+            @DefaultString("https://agent.warden.cloud")
+            String endpoint();
+        }
     }
 
     @ConfigSerializable
@@ -218,7 +271,9 @@ public interface GeyserConfig {
 
         @Comment("""
             The NetherNet UDP port, which carries every player's NetherNet traffic. 0 uses "port" above.
-            Players connect to it directly, so open it, and forward it when this server is behind a router.""")
+            Players connect to it directly, so open it, and forward it when this server is behind a router. Players who
+            join through the signaling service ("nxs" and "hybrid" signaling modes) cannot connect otherwise, unless
+            "assisted-joins" under "advanced.nxs" is on.""")
         @DefaultNumeric(0)
         @NumericRange(from = 0, to = 65535)
         int webrtcPort();
@@ -227,15 +282,17 @@ public interface GeyserConfig {
                 Some hosting services change your Java port everytime you start the server and require the same port to be used for Bedrock.
                 This option makes the Bedrock port the same as the Java port every time you start the server.
                 The Java server then holds the TCP side of that port, so HTTP signaling does not start unless "port" under
-                "signaling" names a second TCP port. Without one, joins from the server list do not work, only joins over
-                Xbox signaling (join codes, connection IDs and friend list joins).""")
+                "signaling" names a second TCP port. Without one, joins from the server list do not work. Joins over Xbox
+                signaling (join codes, connection IDs and friend list joins) still work, and so do joins through the
+                signaling service when "mode" under "signaling" is "nxs" or "hybrid".""")
         @DefaultBoolean
         @PluginSpecific
         boolean cloneRemotePort();
 
         @Comment("""
             Signaling is how Bedrock players set up their NetherNet connection to this server: HTTP signaling (TCP) for
-            direct connections and server list joins, and Xbox signaling for join codes, connection IDs and friend list joins.""")
+            direct connections and server list joins, Xbox signaling for join codes, connection IDs and friend list joins,
+            and optionally a signaling service (NXS), see "mode".""")
         SignalingConfig signaling();
 
         void address(String address);
@@ -595,6 +652,35 @@ public interface GeyserConfig {
     }
 
     @ConfigSerializable
+    interface AdvancedNxsConfig {
+        @Comment("""
+            Lets the signaling service help players connect when they cannot reach this server directly,
+            for example when the server is behind a NAT without port forwarding.""")
+        @DefaultBoolean()
+        boolean assistedJoins();
+
+        @Comment("""
+            Lets the signaling service check from several regions that players can reach this server,
+            and stop offering addresses that fail.""")
+        @DefaultBoolean(true)
+        boolean connectionChecks();
+
+        @Comment("""
+            Where this server is: "country" (a two-letter code), "city", "latitude" and "longitude".
+            Leave empty to let the signaling service estimate or configure it.""")
+        default Map<String, String> location() {
+            return Map.of();
+        }
+
+        @Comment("""
+            Removes this server from the signaling service when Geyser shuts down.
+            Enable this if the "nethernet" folder is lost on every restart (for example, in a container without a volume).
+            Otherwise, every restart registers this server again as a new one.""")
+        @DefaultBoolean()
+        boolean deregisterOnShutdown();
+    }
+
+    @ConfigSerializable
     interface AdvancedConfig {
         @Comment("""
             Specify how many days player skin images will be cached to disk to save downloading them from the internet.
@@ -637,5 +723,8 @@ public interface GeyserConfig {
 
         @Comment("Advanced networking options for Geyser's Bedrock listener")
         AdvancedBedrockConfig bedrock();
+
+        @Comment("Advanced options for the signaling service. Only used in the \"nxs\" and \"hybrid\" signaling modes.")
+        AdvancedNxsConfig nxs();
     }
 }

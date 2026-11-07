@@ -31,6 +31,8 @@ if (extra.has("localNetworkM")) {
                 substitute(module("io.github.sendablemetatype.netty:netty-transport-$transport"))
                     .using(project(":transport-$transport"))
             }
+            substitute(module("io.github.sendablemetatype.netty:netty-nethernet-nxs"))
+                .using(project(":nethernet-nxs"))
         }
     }
 }

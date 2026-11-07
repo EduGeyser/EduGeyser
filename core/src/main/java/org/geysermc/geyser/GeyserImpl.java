@@ -451,6 +451,18 @@ public class GeyserImpl implements GeyserApi, EventRegistrar {
         // clone-remote-port and the UDP port property, then NetherNet's own port properties
         NetherNetPortProperties.apply(config.bedrock(), pluginPlatform, javaPort, System::getProperty, logger);
 
+        String signalingModeProperty = System.getProperty("geyserSignalingMode", "");
+        if (!signalingModeProperty.isEmpty()) {
+            try {
+                GeyserConfig.SignalingConfig.Mode mode = GeyserConfig.SignalingConfig.Mode.valueOf(signalingModeProperty.toUpperCase(Locale.ROOT));
+                config.bedrock().signaling().mode(mode);
+                logger.info("Signaling mode set from system property: " + mode.name().toLowerCase(Locale.ROOT));
+            } catch (IllegalArgumentException e) {
+                logger.error("Invalid signaling mode from system property: " + signalingModeProperty
+                        + "! Use \"builtin\", \"hybrid\" or \"nxs\". Defaulting to the configured signaling mode.");
+            }
+        }
+
         String stunDiscoveryProperty = System.getProperty("geyserStunDiscovery", "");
         if (!stunDiscoveryProperty.isEmpty()) {
             if (stunDiscoveryProperty.equalsIgnoreCase("true") || stunDiscoveryProperty.equalsIgnoreCase("false")) {
