@@ -255,6 +255,11 @@ public class ConfigMigrations {
                 })
                 .addAction(path("bedrock", "port"), replaceOldComment(OLD_PORT_COMMENT))
                 .addAction(path("advanced", "bedrock", "validate-bedrock-login"), replaceOldComment(OLD_VALIDATE_LOGIN_COMMENT))
+                // Upstream's comments promise what EduGeyser never does: a switch to the signaling service when
+                // built-in signaling cannot run, or a "none" mode that upstream has dropped since
+                .addAction(path("bedrock", "signaling", "mode"),
+                    replaceUpstreamComment("falls back to \"nxs\"", "\"none\" turns signaling off"))
+                .addAction(path("bedrock", "signaling", "nxs"), replaceUpstreamComment("when built-in signaling cannot run"))
                 .build())
         .build();
 
@@ -300,6 +305,20 @@ public class ConfigMigrations {
     private static TransformAction replaceOldComment(String oldDefault) {
         return (path, value) -> {
             if (value instanceof CommentedConfigurationNode commented && isComment(commented, oldDefault)) {
+                commented.comment(null);
+            }
+            return null;
+        };
+    }
+
+    /**
+     * Drops a comment that still holds one of upstream Geyser's default sentences, so EduGeyser's is written; a
+     * comment of the user's own stays.
+     */
+    private static TransformAction replaceUpstreamComment(String... sentences) {
+        return (path, value) -> {
+            if (value instanceof CommentedConfigurationNode commented && commented.comment() != null
+                    && Arrays.stream(sentences).anyMatch(commented.comment()::contains)) {
                 commented.comment(null);
             }
             return null;

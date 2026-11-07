@@ -459,6 +459,26 @@ public class ConfigLoaderTest {
 
     @ParameterizedTest
     @MethodSource("platformTypes")
+    void testUpstreamSignalingCommentsThatPromiseAFallbackAreReplaced(PlatformType platformType,
+                                                                      Class<? extends GeyserConfig> configClass) throws Exception {
+        // Upstream's own comments at version 11, which the rewrite would otherwise carry over
+        File file = copyResourceToTempFile("tests", "upstream-v11-comments.yml");
+        new ConfigLoader(file, platformType).load0(configClass);
+
+        CommentedConfigurationNode written = YamlConfigurationLoader.builder().file(file).build().load();
+        CommentedConfigurationNode mode = written.node("bedrock", "signaling", "mode");
+        assertEquals("hybrid", mode.getString());
+        assertFalse(mode.comment().contains("falls back"), mode.comment());
+        assertTrue(mode.comment().contains("does not switch to the signaling service by itself"), mode.comment());
+        assertEquals("Settings for the signaling service. Only used in the \"nxs\" and \"hybrid\" modes.",
+            written.node("bedrock", "signaling", "nxs").comment());
+        // A comment of the user's own stays
+        assertEquals("Our own provider, set up by the network team",
+            written.node("bedrock", "signaling", "nxs", "endpoint").comment().strip());
+    }
+
+    @ParameterizedTest
+    @MethodSource("platformTypes")
     void testUpstreamVersion12ConfigLoadsUnchanged(PlatformType platformType, Class<? extends GeyserConfig> configClass) throws Exception {
         // Upstream Geyser at version 12 (64bb3993b), the same version EduGeyser writes
         File file = copyResourceToTempFile("tests", "upstream-v12.yml");
