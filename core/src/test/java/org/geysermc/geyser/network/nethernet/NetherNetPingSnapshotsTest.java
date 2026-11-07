@@ -38,9 +38,12 @@ import java.util.List;
 import java.util.Queue;
 import java.util.concurrent.ConcurrentLinkedQueue;
 import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.Executor;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.RejectedExecutionException;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicLong;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -99,7 +102,11 @@ class NetherNetPingSnapshotsTest {
 
     /** Snapshots on the test's clock and queue that wait up to the given budget. */
     private NetherNetPingSnapshots queued(Duration wait) {
-        return new NetherNetPingSnapshots(this::ask, refresher::add, BEDROCK_PORT, this::now, wait,
+        return onTestClock(refresher::add, wait);
+    }
+
+    private NetherNetPingSnapshots onTestClock(Executor refresher, Duration wait) {
+        return new NetherNetPingSnapshots(this::ask, refresher, BEDROCK_PORT, this::now, wait,
                 mock(GeyserLogger.class));
     }
 
@@ -349,6 +356,44 @@ class NetherNetPingSnapshotsTest {
     }
 
     @Test
+    void requestsWaitingOnAClaimThatWasDeniedWaitForNoOther() throws InterruptedException {
+        AtomicBoolean rejectNext = new AtomicBoolean();
+        CountDownLatch rejecting = new CountDownLatch(1);
+        CountDownLatch reject = new CountDownLatch(1);
+        // Queues asks, except that the one after rejectNext is set blocks until the test lets it
+        // fail, as an executor that shuts down meanwhile does
+        NetherNetPingSnapshots waiting = onTestClock(task -> {
+            if (rejectNext.getAndSet(false)) {
+                rejecting.countDown();
+                try {
+                    reject.await();
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                }
+                throw new RejectedExecutionException("shut down");
+            }
+            refresher.add(task);
+        }, LONG_WAIT);
+        waiting.prime();
+        runRefresher();
+        advance(NetherNetPingSnapshots.MAX_AGE_NANOS);
+        // The host-less refresh hangs
+        waiting.prime();
+
+        rejectNext.set(true);
+        Request claimant = new Request(waiting, "lobby.example.com");
+        assertTrue(rejecting.await(WATCHDOG.toNanos(), TimeUnit.NANOSECONDS));
+        Request observer = new Request(waiting, "lobby.example.com");
+        observer.awaitWaiting();
+        reject.countDown();
+
+        claimant.join();
+        observer.join();
+        assertEquals("-", motd(claimant.answer));
+        assertEquals("-", motd(observer.answer), "the host-less answer, without waiting for the host-less refresh");
+    }
+
+    @Test
     void afterCloseNoRequestWaitsEvenWhileTheRefresherTakesAsks() {
         NetherNetPingSnapshots waiting = queued(LONG_WAIT);
         waiting.prime();
@@ -474,7 +519,7 @@ class NetherNetPingSnapshotsTest {
 
         /** Fails when the request does not return within {@link #WATCHDOG}, as when it waits out its budget. */
         void join() throws InterruptedException {
-            assertTrue(thread.join(WATCHDOG), "the request returned without waiting out its budget");
+            assertTrue(thread.join(WATCHDOG), "the request still waits after " + WATCHDOG);
         }
     }
 }

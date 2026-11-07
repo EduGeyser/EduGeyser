@@ -102,12 +102,12 @@ final class NetherNetPingSnapshots {
     private final Map<JoinAddress, Snapshot> byHost = new ConcurrentHashMap<>();
     private final Semaphore outstanding = new Semaphore(MAX_OUTSTANDING_ASKS);
     /**
-     * The asks whose claim is published, until they finish or are given back, so {@link #close}
-     * can wake their requests. Guarded by itself, as is {@link #closed}: a claim is published and
-     * added here in one step that close cannot come between, so close reaches every ask a request
-     * can find. Each one holds an outstanding permit or is about to be given back.
+     * The published claims until they open, so {@link #close} can open them for the requests that
+     * wait on them. Guarded by itself, as is {@link #closed}: a claim is published and added here
+     * in one step that close cannot come between, so close reaches every claim a request can
+     * find. The ask of each holds an outstanding permit, or the claim is about to be given back.
      */
-    private final Set<CountDownLatch> inFlight = new HashSet<>();
+    private final Set<Claim> inFlight = new HashSet<>();
     /** Set once by {@link #close}; no ask is claimed after it. */
     private boolean closed;
 
@@ -145,7 +145,7 @@ final class NetherNetPingSnapshots {
     void close() {
         synchronized (inFlight) {
             closed = true;
-            inFlight.forEach(CountDownLatch::countDown);
+            inFlight.forEach(Claim::open);
             inFlight.clear();
         }
     }
@@ -154,8 +154,8 @@ final class NetherNetPingSnapshots {
      * The latest answer for a host. When the snapshot is stale or has an ask queued or running,
      * waits for that ask until the wait budget is spent; a host with no answer of its own by then
      * is answered from the host-less snapshot, within the same budget. When no ask could be
-     * scheduled for the snapshot, waits for none. Returns early when interrupted, with the
-     * interrupt still set.
+     * scheduled for the snapshot, whether this request or the one whose claim it waited on found
+     * that out, waits for no other. Returns early when interrupted, with the interrupt still set.
      *
      * @param host the virtual host the request named, such as its Host header, or null
      * @return the Java server's answer, or null when it gave none or has not answered yet
@@ -166,18 +166,18 @@ final class NetherNetPingSnapshots {
         Snapshot own = host == null || host.isBlank() ? hostless : forHost(JoinAddress.parse(host, defaultPort), now);
         if (own != null) {
             own.requestedNanos = now;
-            Refresh refresh = refreshIfStale(own, host);
-            if (refresh == NoAsk.DENIED) {
+            if (!settle(refreshIfStale(own, host), deadline)) {
                 // Asks pile up behind one that hangs, or the refresher stopped: waiting for the
                 // host-less ask would only hold the request
                 deadline = now;
             }
-            Answer answer = settle(own, refresh, deadline);
+            Answer answer = own.answer;
             if (answer != null) {
                 return answer.info();
             }
         }
-        Answer fallback = settle(hostless, refreshIfStale(hostless, null), deadline);
+        settle(refreshIfStale(hostless, null), deadline);
+        Answer fallback = hostless.answer;
         return fallback != null ? fallback.info() : null;
     }
 
@@ -206,18 +206,21 @@ final class NetherNetPingSnapshots {
         }
     }
 
-    /** The snapshot's answer, once the ask to wait for, if any, finished or the deadline passed. */
-    private @Nullable Answer settle(Snapshot snapshot, Refresh refresh, long deadline) {
-        if (refresh instanceof Pending(CountDownLatch done)) {
-            try {
+    /**
+     * Waits for the ask to wait for, if any, until it finished or the deadline passed.
+     *
+     * @return false when no ask could be scheduled for the snapshot, whether this request or the
+     *         one whose claim it waited on found that out
+     */
+    private boolean settle(Refresh refresh, long deadline) {
+        return switch (refresh) {
+            case NoAsk found -> found != NoAsk.DENIED;
+            case Pending(Claim claim) -> {
                 // Does not wait once the deadline passed
-                done.await(deadline - clock.getAsLong(), TimeUnit.NANOSECONDS);
-            } catch (InterruptedException e) {
-                // HTTP signaling interrupts its status calls when it closes
-                Thread.currentThread().interrupt();
+                claim.await(deadline - clock.getAsLong());
+                yield !claim.denied();
             }
-        }
-        return snapshot.answer;
+        };
     }
 
     /**
@@ -226,34 +229,41 @@ final class NetherNetPingSnapshots {
      * @return the ask to wait for: the one this call scheduled or one already queued or running
      */
     private Refresh refreshIfStale(Snapshot snapshot, @Nullable String host) {
-        State state = snapshot.state.get();
-        return switch (state) {
-            case Asking(CountDownLatch done) -> new Pending(done);
-            case Idle(long finished) when clock.getAsLong() - finished < MAX_AGE_NANOS -> NoAsk.FRESH;
-            case Idle idle -> claim(snapshot, host, idle);
-        };
+        while (true) {
+            Refresh found = switch (snapshot.state.get()) {
+                case Asking(Claim claim) -> new Pending(claim);
+                case Idle(long finished) when clock.getAsLong() - finished < MAX_AGE_NANOS -> NoAsk.FRESH;
+                case Idle stale -> claim(snapshot, host, stale);
+            };
+            if (found != null) {
+                return found;
+            }
+            // Another request claimed the snapshot first, or gave its claim back; look again, so
+            // that a claim given back is tried again rather than taken for a fresh snapshot
+        }
     }
 
     /**
      * Claims a stale snapshot for an ask and schedules it. The claim is made against the very
      * state judged stale (compareAndSet compares references, not record values), so a request
      * that saw it stale while another ask finished does not ask again right after.
+     *
+     * @return what to wait for, or null when another request changed the state first
      */
-    private Refresh claim(Snapshot snapshot, @Nullable String host, Idle stale) {
-        CountDownLatch done = new CountDownLatch(1);
+    private @Nullable Refresh claim(Snapshot snapshot, @Nullable String host, Idle stale) {
+        Claim claim = new Claim();
         synchronized (inFlight) {
             if (closed) {
                 return NoAsk.DENIED;
             }
-            if (!snapshot.state.compareAndSet(stale, new Asking(done))) {
-                return snapshot.state.get() instanceof Asking(CountDownLatch other)
-                        ? new Pending(other) : NoAsk.FRESH;
+            if (!snapshot.state.compareAndSet(stale, new Asking(claim))) {
+                return null;
             }
-            inFlight.add(done);
+            inFlight.add(claim);
         }
         if (!outstanding.tryAcquire()) {
             // Asks pile up behind one that hangs; the answer the snapshot has serves meanwhile
-            abandon(snapshot, stale, done);
+            abandon(snapshot, stale, claim);
             return NoAsk.DENIED;
         }
         try {
@@ -267,35 +277,33 @@ final class NetherNetPingSnapshots {
                     // rather than as fast as requests arrive
                     snapshot.state.set(new Idle(clock.getAsLong()));
                     outstanding.release();
-                    release(done);
+                    claim.open();
+                    forget(claim);
                 }
             });
-            return new Pending(done);
+            return new Pending(claim);
         } catch (RejectedExecutionException e) {
             // Shutdown raced the request; the answer the snapshot has serves fine
             outstanding.release();
-            abandon(snapshot, stale, done);
+            abandon(snapshot, stale, claim);
             return NoAsk.DENIED;
         }
     }
 
     /**
-     * Gives back the claim of an ask that never got scheduled, and wakes the requests that found
-     * the claim meanwhile and wait on it.
+     * Gives back a claim whose ask never got scheduled. The requests that found the claim
+     * meanwhile and wait on it learn that, so none of them waits for another ask.
      */
-    private void abandon(Snapshot snapshot, Idle stale, CountDownLatch done) {
+    private void abandon(Snapshot snapshot, Idle stale, Claim claim) {
         snapshot.state.set(stale);
-        release(done);
+        claim.deny();
+        forget(claim);
     }
 
-    /**
-     * Wakes the requests waiting for an ask, then forgets it. In that order, so that close never
-     * misses an ask a request still waits for.
-     */
-    private void release(CountDownLatch done) {
-        done.countDown();
+    /** Forgets a claim once it is open, never before, so close never misses one a request waits on. */
+    private void forget(Claim claim) {
         synchronized (inFlight) {
-            inFlight.remove(done);
+            inFlight.remove(claim);
         }
     }
 
@@ -307,8 +315,8 @@ final class NetherNetPingSnapshots {
     private sealed interface Refresh {
     }
 
-    /** An ask is queued or running. */
-    private record Pending(CountDownLatch done) implements Refresh {
+    /** An ask is queued or running, or was until its claim opened. */
+    private record Pending(Claim claim) implements Refresh {
     }
 
     /** Nothing to wait for. */
@@ -327,11 +335,43 @@ final class NetherNetPingSnapshots {
     private record Idle(long finishedNanos) implements State {
     }
 
+    /** A request claimed the snapshot for an ask, which is queued or running or about to be. */
+    private record Asking(Claim claim) implements State {
+    }
+
     /**
-     * An ask is queued or running; {@code done} opens once it finished or was given up, or on
+     * A snapshot's claim for one ask, which every request for the snapshot waits on. It opens
+     * once the ask finished, once the claim was given back with no ask scheduled, or on
      * {@link NetherNetPingSnapshots#close}.
      */
-    private record Asking(CountDownLatch done) implements State {
+    private static final class Claim {
+        private final CountDownLatch opened = new CountDownLatch(1);
+        /** Written before the claim opens, so every request that waited on it reads it. */
+        private volatile boolean denied;
+
+        void open() {
+            opened.countDown();
+        }
+
+        /** Opens the claim of an ask that could not be scheduled. */
+        void deny() {
+            denied = true;
+            open();
+        }
+
+        boolean denied() {
+            return denied;
+        }
+
+        /** Waits until the claim opens or the time is up; returns early when interrupted. */
+        void await(long nanos) {
+            try {
+                opened.await(nanos, TimeUnit.NANOSECONDS);
+            } catch (InterruptedException e) {
+                // HTTP signaling interrupts its status calls when it closes; the interrupt stays set
+                Thread.currentThread().interrupt();
+            }
+        }
     }
 
     private static final class Snapshot {
