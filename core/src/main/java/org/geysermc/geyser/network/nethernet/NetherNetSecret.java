@@ -81,7 +81,9 @@ record NetherNetSecret(String value, Path directory) {
      *
      * @throws IOException if the value names a file that is not a regular
      *                     file of at most 16 KiB or cannot be read. The message
-     *                     names the path, never the value.
+     *                     names the path only for a {@code file:} reference or
+     *                     when something exists there, since a value that only
+     *                     looks like a path may be the secret itself.
      */
     String resolve() throws IOException {
         String trimmed = value.trim();
@@ -103,7 +105,20 @@ record NetherNetSecret(String value, Path directory) {
             }
             return stripLineTerminator(Files.readString(source));
         } catch (IOException | RuntimeException e) {
+            if (!trimmed.startsWith(FILE) && !exists(source)) {
+                // A literal secret that only looks like a path must not reach the log, nor its cause's message
+                throw new IOException("the password looks like a file path, but no file is there. It is not shown,"
+                        + " since it may be the password itself; to name a file, write file:<path>");
+            }
             throw new IOException("the password file " + source + " cannot be read (" + e.getMessage() + ")", e);
+        }
+    }
+
+    private static boolean exists(Path path) {
+        try {
+            return Files.exists(path);
+        } catch (RuntimeException e) {
+            return false;
         }
     }
 

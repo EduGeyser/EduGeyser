@@ -101,6 +101,15 @@ class NetherNetSecretTest {
     }
 
     @Test
+    void neverShowsABarePathWithNothingThere(@TempDir Path dir) {
+        // A literal password that happens to start with a slash, as a base64 value can
+        String looksLikeAPath = "/k8Hq2wZ+secret";
+        IOException error = assertThrows(IOException.class, () -> new NetherNetSecret(looksLikeAPath, dir).resolve());
+        assertFalse(error.getMessage().contains("k8Hq2wZ"), error.getMessage());
+        assertNull(error.getCause());
+    }
+
+    @Test
     void namesTheUnreadablePathButNeverTheValue(@TempDir Path dir) throws Exception {
         IOException missing = assertThrows(IOException.class, () -> new NetherNetSecret("file:missing", dir).resolve());
         assertTrue(missing.getMessage().contains(dir.resolve("missing").toString()), missing.getMessage());
