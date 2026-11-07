@@ -69,6 +69,7 @@ import java.util.concurrent.TimeUnit;
 import java.util.function.Consumer;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.junit.jupiter.api.Assertions.fail;
 import static org.mockito.Mockito.RETURNS_DEEP_STUBS;
@@ -130,6 +131,41 @@ class NetherNetNxsLifecycleTest {
             assertTrue(errors.stream().noneMatch(error -> error.contains("NXS did not start")), errors.toString());
         } finally {
             endpoint.close().syncUninterruptibly();
+        }
+    }
+
+    @Test
+    void stopsDuringTheStartShareOneStageThatCompletesAfterTheCleanup(@TempDir Path folder) throws Exception {
+        NetherNetServerChannel endpoint = boundEndpoint();
+        try {
+            Path state = folder.resolve("provider-state");
+            NetherNetNxs nxs = new NetherNetNxs(geyser(closedTcpPort()), folder, NetherNetNxsLifecycleTest::pong);
+            nxs.start(endpoint, List.of(), false);
+            // While the start still runs on its own thread, creating keys and opening NXS on the endpoint
+            CompletionStage<Void> first = nxs.stop();
+            CompletionStage<Void> second = nxs.stop();
+            CompletableFuture<Boolean> cleanAtCompletion = second.toCompletableFuture()
+                .thenApply(ignored -> endpoint.sources().isEmpty() && lockFree(state));
+
+            assertSame(first, second, "every caller waits for the same stop");
+            assertTrue(cleanAtCompletion.get(20, TimeUnit.SECONDS),
+                "NXS is off the endpoint and its lock free by the time a stop completes");
+            assertTrue(errors.stream().noneMatch(error -> error.contains("NXS did not start")), errors.toString());
+        } finally {
+            endpoint.close().syncUninterruptibly();
+        }
+    }
+
+    /** Whether no client holds the registration's lock; true also when no start got as far as taking it. */
+    private static boolean lockFree(Path state) {
+        if (Files.notExists(state)) {
+            return true;
+        }
+        try {
+            new ProviderStateStore(state).close();
+            return true;
+        } catch (Exception held) {
+            return false;
         }
     }
 

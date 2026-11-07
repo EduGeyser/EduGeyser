@@ -100,6 +100,8 @@ public final class NetherNetNxs implements EventRegistrar {
     private @Nullable ProviderClient client;
     private @Nullable ProviderShutdown shutdown;
     private CompletionStage<Void> stopped = CompletableFuture.completedFuture(null);
+    /** The one stop, once asked for. */
+    private @Nullable CompletionStage<Void> stop;
 
     private volatile @Nullable HostTransport transport;
     private volatile @Nullable String instanceId;
@@ -273,35 +275,28 @@ public final class NetherNetNxs implements EventRegistrar {
 
     /**
      * Stops NXS: drains, tells the service this server stopped accepting players, deregisters when configured to,
-     * and releases the registration's directory. A start still in progress finishes first.
+     * and releases the registration's directory. A start still in progress finishes first. Every call returns the
+     * same stage, so no caller goes on before the cleanup another call set off.
      *
      * @return completes once the registration's directory is free for the next start
      */
     CompletionStage<Void> stop() {
-        CompletableFuture<Void> started;
         synchronized (lifecycle) {
-            started = opening;
-            if (stopping) {
-                return started.handle((ignored, failure) -> null).thenCompose(ignored -> stopped());
-            }
-            stopping = true;
-            if (subscribed) {
-                geyser.eventBus().unregisterAll(this);
-            }
-        }
-        return started.handle((ignored, failure) -> null).thenCompose(ignored -> {
-            synchronized (lifecycle) {
-                if (client != null) {
-                    stopClient();
+            if (stop == null) {
+                stopping = true;
+                if (subscribed) {
+                    geyser.eventBus().unregisterAll(this);
                 }
-                return stopped;
+                stop = opening.handle((ignored, failure) -> null).thenCompose(ignored -> {
+                    synchronized (lifecycle) {
+                        if (client != null) {
+                            stopClient();
+                        }
+                        return stopped;
+                    }
+                });
             }
-        });
-    }
-
-    private CompletionStage<Void> stopped() {
-        synchronized (lifecycle) {
-            return stopped;
+            return stop;
         }
     }
 
