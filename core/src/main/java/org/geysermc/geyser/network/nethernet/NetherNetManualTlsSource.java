@@ -30,45 +30,44 @@ import io.netty.handler.ssl.SslContext;
 import io.netty.handler.ssl.SslContextBuilder;
 import org.geysermc.geyser.GeyserLogger;
 
-import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.attribute.FileTime;
-import java.security.KeyFactory;
-import java.security.PrivateKey;
-import java.security.PublicKey;
-import java.security.Signature;
-import java.security.cert.CertificateFactory;
 import java.security.cert.CertificateParsingException;
 import java.security.cert.X509Certificate;
-import java.security.spec.PKCS8EncodedKeySpec;
 import java.time.Instant;
 import java.util.ArrayList;
-import java.util.Base64;
 import java.util.Collection;
 import java.util.List;
 import java.util.Locale;
 import java.util.concurrent.TimeUnit;
+import java.util.function.LongSupplier;
 
 /**
- * Serves the operator supplied TLS material for HTTP signaling. Consulted per
- * connection: cert.pem and key.pem are re-read whenever their modification
- * times change, so certificates can be swapped while the server is live, with
- * no rebind and no restart.
+ * Serves the operator supplied TLS material for HTTP signaling, from the
+ * config's {@code bedrock.signaling.builtin.https} keys or from cert.pem and
+ * key.pem in the nethernet folder (see {@link NetherNetTlsFiles}). Consulted
+ * per connection: the files are read again whenever their modification times
+ * or sizes change, so certificates can be swapped while the server is live,
+ * with no rebind and no restart.
  *
  * Every certificate passes {@link NetherNetCertificateManager#clientRejectionReason}
  * before being served, and expiry is re-checked per connection, because a
  * certificate a stock client rejects is strictly worse than none: the 26.40
  * client treats an invalid certificate as terminal for signaling and goes to
  * RakNet, which this server does not serve, while a server that refuses TLS
- * outright sends it to plain HTTP and its TOFU flow. Returning null here is that refusal. For the same reason a
- * connection is only served a certificate that names what the client asked
- * for: the domain it sent as SNI, or an IP address when it sent none, which
- * clients do when they dial an IP.
+ * outright sends it to plain HTTP and its TOFU flow. Returning null here is
+ * that refusal, and plain HTTP stays on whatever this source serves. For the
+ * same reason a connection is only served a certificate that names what the
+ * client asked for: the domain it sent as SNI, or an IP address when it sent
+ * none, which clients do when they dial an IP.
  *
- * Removing both files while live withdraws TLS but cannot hand over to
- * automatic certificate management, which only starts when no manual files
- * exist at bind; that handover needs a restart.
+ * Material that cannot be read at all also leaves TLS withdrawn rather than
+ * handing over to automatic certificate management: an operator who supplied
+ * a certificate did not ask for Let's Encrypt enrollment, and the files heal
+ * live once fixed. Removing the nethernet folder's files hands over on the
+ * next restart, as automatic management only starts when no material is
+ * supplied at bind.
  */
 final class NetherNetManualTlsSource implements TlsContextSelector {
 
@@ -78,22 +77,24 @@ final class NetherNetManualTlsSource implements TlsContextSelector {
 
     private static final String LOG_PREFIX = "[Nethernet] ";
 
-    private final Path certPath;
-    private final Path keyPath;
+    private final NetherNetTlsFiles files;
     private final GeyserLogger logger;
+    private final LongSupplier nanoTime;
 
     /**
-     * Change detection state: modification times and sizes of both files,
+     * Change detection state: modification times and sizes of every file,
      * re-checked at most once per second so probe floods cannot turn the
-     * per connection consultation into a syscall storm.
+     * per connection consultation into a syscall storm. Sizes participate so
+     * same tick swaps on coarse mtime filesystems are still noticed when the
+     * content length moved.
      */
     private static final long CHECK_INTERVAL_NANOS = TimeUnit.SECONDS.toNanos(1);
+    private record FileState(Path file, FileTime modified, long size) {
+    }
+
     private boolean checkedOnce;
     private long lastCheckNanos;
-    private FileTime certTime;
-    private FileTime keyTime;
-    private long certSize;
-    private long keySize;
+    private List<FileState> fileStates;
     private SslContext context;
     private Instant expiry;
     /** The DNS names the served certificate names, lowercase. */
@@ -104,10 +105,15 @@ final class NetherNetManualTlsSource implements TlsContextSelector {
     private boolean expiryWarned;
     private boolean missingWarned;
 
-    NetherNetManualTlsSource(Path certPath, Path keyPath, GeyserLogger logger) {
-        this.certPath = certPath;
-        this.keyPath = keyPath;
+    NetherNetManualTlsSource(NetherNetTlsFiles files, GeyserLogger logger) {
+        this(files, logger, System::nanoTime);
+    }
+
+    /** With the clock the file check interval is measured on, so tests need not wait for it. */
+    NetherNetManualTlsSource(NetherNetTlsFiles files, GeyserLogger logger, LongSupplier nanoTime) {
+        this.files = files;
         this.logger = logger;
+        this.nanoTime = nanoTime;
     }
 
     @Override
@@ -149,7 +155,7 @@ final class NetherNetManualTlsSource implements TlsContextSelector {
 
     /** The context to serve whatever the client asked for, or null while TLS is withheld. */
     private SslContext current() {
-        long now = System.nanoTime();
+        long now = nanoTime.getAsLong();
         if (!checkedOnce || now - lastCheckNanos >= CHECK_INTERVAL_NANOS) {
             checkedOnce = true;
             lastCheckNanos = now;
@@ -161,9 +167,9 @@ final class NetherNetManualTlsSource implements TlsContextSelector {
         if (expiry != null && !Instant.now().isBefore(expiry)) {
             if (!expiryWarned) {
                 expiryWarned = true;
-                logger.warning(LOG_PREFIX + "Manual certificate expired " + expiry
-                        + "; withdrawing TLS so updated clients fall back to plain HTTP with"
-                        + " their trust prompt. Replace or remove nethernet/cert.pem and key.pem");
+                logger.warning(LOG_PREFIX + "The HTTPS certificate from " + files.origin().description()
+                        + " expired " + expiry + "; withdrawing TLS so updated clients fall back to plain HTTP with"
+                        + " their trust prompt. " + files.origin().remedy());
             }
             return null;
         }
@@ -177,7 +183,7 @@ final class NetherNetManualTlsSource implements TlsContextSelector {
     synchronized String currentProblem() {
         current();
         if (context == null) {
-            return problem == null ? "certificate files unreadable" : problem;
+            return problem == null ? "the certificate files cannot be read" : problem;
         }
         if (expiry != null && !Instant.now().isBefore(expiry)) {
             return "certificate expired " + expiry;
@@ -187,42 +193,41 @@ final class NetherNetManualTlsSource implements TlsContextSelector {
 
     private void checkFiles() {
         try {
-            if (!Files.exists(certPath) || !Files.exists(keyPath)) {
-                if (context != null && !missingWarned) {
-                    missingWarned = true;
-                    logger.warning(LOG_PREFIX + "Manual certificate files removed; withdrawing TLS."
-                            + " Automatic certificate management takes over on the next restart");
+            List<FileState> states = new ArrayList<>();
+            for (Path file : files.files()) {
+                if (!Files.exists(file)) {
+                    withdrawForMissing(file);
+                    return;
                 }
-                context = null;
-                certTime = null;
-                keyTime = null;
-                return;
+                states.add(new FileState(file, Files.getLastModifiedTime(file), Files.size(file)));
             }
             missingWarned = false;
-            FileTime certModified = Files.getLastModifiedTime(certPath);
-            FileTime keyModified = Files.getLastModifiedTime(keyPath);
-            long newCertSize = Files.size(certPath);
-            long newKeySize = Files.size(keyPath);
-            // Sizes participate so same tick swaps on coarse mtime
-            // filesystems are still noticed when the content length moved.
-            if (!certModified.equals(certTime) || !keyModified.equals(keyTime)
-                    || newCertSize != certSize || newKeySize != keySize) {
-                certTime = certModified;
-                keyTime = keyModified;
-                certSize = newCertSize;
-                keySize = newKeySize;
+            if (!states.equals(fileStates)) {
+                fileStates = states;
                 reload();
             }
         } catch (Exception e) {
-            logger.debug(LOG_PREFIX + "Manual certificate check failed: " + e.getMessage());
+            logger.debug(LOG_PREFIX + "HTTPS certificate check failed: " + e.getMessage());
         }
     }
 
+    private void withdrawForMissing(Path file) {
+        problem = file + " does not exist";
+        if (!missingWarned) {
+            missingWarned = true;
+            logger.warning(LOG_PREFIX + "The HTTPS certificate from " + files.origin().description()
+                    + " cannot be used: " + problem + ". TLS is withdrawn, and HTTP signaling serves plain HTTP. "
+                    + files.origin().remedy());
+        }
+        context = null;
+        fileStates = null;
+    }
+
     /**
-     * Parses, validates, and builds the current files. Any failure leaves TLS
+     * Reads, validates, and builds the current files. Any failure leaves TLS
      * withdrawn rather than serving material a client would reject; the file
-     * times stay recorded either way so a broken pair is not re-parsed on
-     * every connection.
+     * states stay recorded either way so a broken set is not re-read on every
+     * connection.
      */
     private void reload() {
         boolean replacing = context != null || problem != null;
@@ -230,38 +235,39 @@ final class NetherNetManualTlsSource implements TlsContextSelector {
         expiry = null;
         expiryWarned = false;
         try {
-            List<X509Certificate> chain;
-            try (var in = Files.newInputStream(certPath)) {
-                chain = CertificateFactory.getInstance("X.509").generateCertificates(in).stream()
-                        .map(X509Certificate.class::cast).toList();
-            }
+            NetherNetTlsFiles.Material material = files.read();
+            List<X509Certificate> chain = material.chain();
             String rejection = NetherNetCertificateManager.clientRejectionReason(chain);
             if (rejection != null) {
                 problem = "a stock client rejects the certificate (" + rejection + ")";
-                logger.warning(LOG_PREFIX + "Manual certificate not served: " + problem
-                        + ". TLS is withdrawn; updated clients fall back to plain HTTP with"
-                        + " their trust prompt");
+                logger.warning(LOG_PREFIX + "The HTTPS certificate from " + files.origin().description()
+                        + " is not served: " + problem + ". TLS is withdrawn; updated clients fall back to plain"
+                        + " HTTP with their trust prompt");
                 return;
             }
-            String mismatch = keyMismatchReason(chain.get(0));
+            // Netty builds a context from a mismatched pair without complaint,
+            // producing handshakes no client can verify
+            String mismatch = NetherNetCertificateManager.keyMismatchReason(material.key(), chain.getFirst().getPublicKey());
             if (mismatch != null) {
                 problem = mismatch;
-                logger.warning(LOG_PREFIX + "Manual certificate not served: " + problem
-                        + ". TLS is withdrawn until the pair matches; a half finished swap"
-                        + " heals when the second file lands");
+                logger.warning(LOG_PREFIX + "The HTTPS certificate from " + files.origin().description()
+                        + " is not served: " + problem + ". TLS is withdrawn until the pair matches; a half finished"
+                        + " swap heals when the second file lands");
                 return;
             }
-            readNames(chain.get(0));
-            context = SslContextBuilder.forServer(certPath.toFile(), keyPath.toFile()).build();
-            expiry = chain.get(0).getNotAfter().toInstant();
+            readNames(chain.getFirst());
+            context = SslContextBuilder.forServer(material.key(), chain.toArray(new X509Certificate[0])).build();
+            expiry = chain.getFirst().getNotAfter().toInstant();
             problem = null;
             if (replacing) {
-                logger.info(LOG_PREFIX + "Manual certificate reloaded (valid until " + expiry + ")");
+                logger.info(LOG_PREFIX + "HTTPS certificate from " + files.origin().description()
+                        + " reloaded (valid until " + expiry + ")");
             }
         } catch (Exception e) {
-            problem = "failed to load (" + (e.getMessage() != null ? e.getMessage() : e.toString()) + ")";
-            logger.warning(LOG_PREFIX + "Manual certificate " + problem + "; TLS is withdrawn."
-                    + " Fix or remove nethernet/cert.pem and key.pem");
+            problem = e.getMessage() != null ? e.getMessage() : e.toString();
+            logger.warning(LOG_PREFIX + "The HTTPS certificate from " + files.origin().description()
+                    + " cannot be used: " + problem + ". TLS is withdrawn, and HTTP signaling serves plain HTTP. "
+                    + files.origin().remedy());
         }
     }
 
@@ -286,47 +292,5 @@ final class NetherNetManualTlsSource implements TlsContextSelector {
         }
         dnsNames = List.copyOf(dns);
         namesIpAddress = ip;
-    }
-
-    /**
-     * Whether key.pem holds the private half of the certificate, so a half
-     * finished swap (new cert copied, old key still in place) withdraws TLS
-     * instead of serving handshakes no client can verify while we log
-     * success. Netty's SslContextBuilder does not check correspondence. A
-     * key this cannot inspect (PKCS#1 armor, encrypted, exotic algorithm)
-     * skips the check rather than rejecting material netty may accept.
-     */
-    private String keyMismatchReason(X509Certificate leaf) {
-        PrivateKey key;
-        try {
-            String pem = Files.readString(keyPath, StandardCharsets.UTF_8);
-            int begin = pem.indexOf("-----BEGIN PRIVATE KEY-----");
-            int end = pem.indexOf("-----END PRIVATE KEY-----");
-            if (begin < 0 || end < 0) {
-                return null;
-            }
-            byte[] der = Base64.getMimeDecoder().decode(
-                    pem.substring(begin + "-----BEGIN PRIVATE KEY-----".length(), end).replaceAll("\\s", ""));
-            key = parsePrivateKey(new PKCS8EncodedKeySpec(der));
-        } catch (Exception e) {
-            return null;
-        }
-        if (key == null) {
-            return null;
-        }
-        // The comparison itself is shared with the automatic path, which can
-        // drift its pair apart the same way.
-        String mismatch = NetherNetCertificateManager.keyMismatchReason(key, leaf.getPublicKey());
-        return mismatch == null ? null : "key.pem: " + mismatch;
-    }
-
-    private static PrivateKey parsePrivateKey(PKCS8EncodedKeySpec spec) {
-        for (String algorithm : new String[]{"EC", "RSA", "EdDSA"}) {
-            try {
-                return KeyFactory.getInstance(algorithm).generatePrivate(spec);
-            } catch (Exception ignored) {
-            }
-        }
-        return null;
     }
 }
