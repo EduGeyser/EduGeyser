@@ -132,7 +132,7 @@ class NetherNetServerTest {
             }
         };
         NetherNetServer server = new NetherNetServer(geyser(config, freeUdpPort()), group, "1234567890", "custom",
-                "device", () -> engine);
+                "device", threshold -> engine);
 
         assertFalse(server.start());
 

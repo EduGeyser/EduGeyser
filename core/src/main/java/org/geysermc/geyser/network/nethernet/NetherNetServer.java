@@ -40,6 +40,7 @@ import io.github.sendablemetatype.netty.channel.nethernet.signaling.http.StatusR
 import io.github.sendablemetatype.netty.channel.nethernet.signaling.http.TlsContextSelector;
 import io.github.sendablemetatype.netty.util.address.TrustedProxies;
 import io.github.sendablemetatype.netty.util.nethernet.ServerIdentity;
+import io.github.sendablemetatype.webrtc.logging.Logging.Severity;
 import io.netty.bootstrap.ServerBootstrap;
 import io.netty.channel.Channel;
 import io.netty.channel.ChannelFuture;
@@ -75,7 +76,7 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.function.BooleanSupplier;
-import java.util.function.Supplier;
+import java.util.function.Function;
 
 /**
  * Nethernet (WebRTC) server: one NetherNet endpoint that takes joins from two
@@ -144,8 +145,11 @@ public class NetherNetServer {
     private final PlayFabTokenManager tokenManager;
     private final String connectionId;
     private final BedrockPingHandler pingResponder;
-    /** Creates the WebRTC engine each endpoint owns and closes with itself. */
-    private final Supplier<? extends NetherNetEngine> engines;
+    /**
+     * Creates the WebRTC engine each endpoint owns and closes with itself,
+     * passing on libwebrtc's messages from the given severity up.
+     */
+    private final Function<Severity, ? extends NetherNetEngine> engines;
 
     // Tracks live player connections so a real teardown (shutdown or an
     // API-initiated stop with players online) can cleanly disconnect them
@@ -177,6 +181,7 @@ public class NetherNetServer {
     private volatile NetherNetPingSnapshots pingSnapshots;
     private volatile boolean running;
     private volatile InetSocketAddress statusPingAddress;
+    private volatile Severity nativeLogThreshold = Severity.WARNING;
 
     public NetherNetServer(GeyserImpl geyser, EventLoopGroup playerEventLoopGroup,
                            String connectionId, String playfabCustomId, String playfabDeviceId) {
@@ -185,7 +190,7 @@ public class NetherNetServer {
     }
 
     NetherNetServer(GeyserImpl geyser, EventLoopGroup playerEventLoopGroup, String connectionId,
-                    String playfabCustomId, String playfabDeviceId, Supplier<? extends NetherNetEngine> engines) {
+                    String playfabCustomId, String playfabDeviceId, Function<Severity, ? extends NetherNetEngine> engines) {
         this.engines = engines;
         this.geyser = geyser;
         this.logger = geyser.getLogger();
@@ -211,6 +216,12 @@ public class NetherNetServer {
         if (running) {
             return true;
         }
+
+        // Before anything logs, so every NetherNet line follows it from the first
+        NetherNetDebugLogging.Settings logging = NetherNetDebugLogging.read(
+                geyser.config().advanced().bedrock().nethernetDebug(), System::getProperty, logger);
+        NetherNetDebugLogging.apply(logging, logger);
+        nativeLogThreshold = logging.nativeThreshold();
 
         passthroughExecutor = Executors.newSingleThreadExecutor(runnable -> {
             Thread thread = new Thread(runnable, "Nethernet Status");
@@ -446,7 +457,7 @@ public class NetherNetServer {
             // both sources alike.
             ServerBootstrap bootstrap = new ServerBootstrap();
             bootstrap.group(bossGroup, workerGroup)
-                    .channelFactory(NetherNetChannelFactory.server(engines))
+                    .channelFactory(NetherNetChannelFactory.server(() -> engines.apply(nativeLogThreshold)))
                     .option(NetherChannelOption.NETHER_SERVER_IDENTITY, identity)
                     .option(NetherChannelOption.NETHER_SERVER_SHARED_ICE_PORT, true)
                     // The relays only: a proxy trusted on HTTP signaling gains
@@ -870,9 +881,9 @@ public class NetherNetServer {
      * can spread players across. Each factory spawns three native threads
      * once used, so the pool stays small on small hosts and caps at four.
      */
-    private static NetherNetEngine createEngine() {
+    private static NetherNetEngine createEngine(Severity nativeLogThreshold) {
         int factories = Math.max(2, Math.min(4, Runtime.getRuntime().availableProcessors() / 2));
-        return WebRtcEngine.builder().factories(factories).build();
+        return WebRtcEngine.builder().factories(factories).nativeLogThreshold(nativeLogThreshold).build();
     }
 
     /**

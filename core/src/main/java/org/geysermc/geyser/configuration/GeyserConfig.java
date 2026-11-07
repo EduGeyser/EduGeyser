@@ -507,6 +507,14 @@ public interface GeyserConfig {
             All Floodgate functionality (including skin uploading and account linking) will also not work when this option is disabled.""")
         @DefaultBoolean(true)
         boolean validateBedrockLogin();
+
+        @Comment("""
+            Whether to log NetherNet's debug messages, from NetherNet itself and from libwebrtc, its WebRTC library,
+            such as what signaling and STUN discovery do. Useful when players cannot connect over NetherNet.
+            Some servers write debug messages only to their log files, not to the console.
+            libwebrtc's own debug messages need a restart to start, a reload is not enough.""")
+        @DefaultBoolean
+        boolean nethernetDebug();
     }
 
     @ConfigSerializable

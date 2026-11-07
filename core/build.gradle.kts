@@ -62,6 +62,8 @@ dependencies {
         exclude("io.netty", "*")
     }
     implementation(libs.webrtc.java)
+    // Sets NetworkM's log levels where the platform logs with Log4j2, which provides it
+    compileOnly(libs.log4j.core)
     // ACME automation for the Nethernet HTTP signaling certificate; acme4j's
     // CSR builder needs BouncyCastle's pkix module at runtime.
     implementation(libs.acme4j)
