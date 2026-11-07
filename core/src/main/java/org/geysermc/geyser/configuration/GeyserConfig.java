@@ -151,7 +151,8 @@ public interface GeyserConfig {
         @Comment("""
             Finds this server's public address by asking public STUN servers from the NetherNet UDP port, when
             "advertise-addresses" is empty. Players on other networks need that address when this server is behind a
-            router, and joins by join code or connection ID do not say which address the player reached.""")
+            router, and joins over Xbox signaling (join codes, connection IDs and friend list joins) do not say which
+            address the player reached.""")
         @DefaultBoolean(true)
         boolean stunDiscovery();
 
@@ -172,7 +173,8 @@ public interface GeyserConfig {
         @Comment("""
             The port that Geyser listens on for Bedrock players, on both TCP and UDP. Open and forward both.
             TCP carries HTTP signaling, which direct connections and joins from the Education server list need.
-            UDP carries every player's NetherNet traffic, join codes and connection IDs included.
+            UDP carries every player's NetherNet traffic, joins over Xbox signaling (join codes, connection IDs and
+            friend list joins) included.
             "webrtc-port" and "port" under "signaling" can move either side to a port of its own.""")
         @Override
         @DefaultNumeric(19132)
@@ -472,7 +474,8 @@ public interface GeyserConfig {
                 with each player's address. Leave this empty unless you run such a relay.
                 While set, players can only reach that port through these relays, and answers no longer name this machine's addresses:
                 players need the relays' public addresses announced to them ("advertise-addresses" under "bedrock.signaling"), or they can only connect
-                through a TURN server, which only join codes and connection IDs hand out.
+                through a TURN server, which only joins over Xbox signaling (join codes, connection IDs and friend list joins)
+                hand out.
                 NetherNet does not start if none of the listed relays can be read, as when a linked list cannot be downloaded.
                 This is separate from the two lists above, which only cover HTTP signaling.
                 IP addresses, subnets, host names (looked up at startup) and https:// links to plain text lists are supported.

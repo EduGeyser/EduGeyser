@@ -42,9 +42,9 @@ import java.util.stream.Stream;
 /**
  * What the NetherNet endpoint tells joining players about its own addresses, read from
  * "advertise-addresses", "stun-discovery" and their system properties. NetworkM applies it to the
- * answers of every join source. That matters most for join codes and connection IDs: their joins
- * come over Xbox signaling with no Host header, so behind a router or in a container only an
- * advertised or a discovered address gives those players a public candidate.
+ * answers of every join source. That matters most for joins over Xbox signaling (join codes,
+ * connection IDs and friend list joins): they come with no Host header, so behind a router or in a
+ * container only an advertised or a discovered address gives those players a public candidate.
  *
  * @param advertised  the advertised addresses, IP literals parsed and names left unresolved for
  *                    NetworkM to look up when the endpoint binds, port 0 standing for the ICE port

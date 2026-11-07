@@ -84,8 +84,8 @@ import java.util.function.Function;
  * Bedrock protocol pipeline. This is EduGeyser's only Bedrock transport.
  *
  * Xbox RPC signaling (Type 7, JSON-RPC: the messaging endpoint with PmsgId,
- * used by Bedrock 26.20+ and Education 26.30+) carries join codes and
- * connection IDs. HTTP signaling, served on TCP at the Bedrock address and
+ * used by Bedrock 26.20+ and Education 26.30+), Xbox signaling for short,
+ * carries join codes, connection IDs and friend list joins. HTTP signaling, served on TCP at the Bedrock address and
  * the signaling port, carries direct connections and joins from the
  * Education server list. Every player's ICE traffic arrives on one UDP port,
  * the NetherNet UDP port, for joins from either source. Both ports are the
@@ -268,8 +268,9 @@ public class NetherNetServer {
         // restarts.
         String pmid = tokenManager.getPmsgId();
         if (mcToken == null) {
-            logger.warning(LOG_PREFIX + "No MCToken from PlayFab yet: join codes and connection IDs wait until"
-                    + " Xbox signaling gets one, which it keeps trying in the background");
+            logger.warning(LOG_PREFIX + "No MCToken from PlayFab yet: joins over Xbox signaling (join codes,"
+                    + " connection IDs and friend list joins) wait until it gets one, which it keeps trying in the"
+                    + " background");
         } else if (pmid != null) {
             logger.info(LOG_PREFIX + "Listening on connection ID: "
                     + connectionId + pmid.replace("-", "").toLowerCase());
@@ -504,8 +505,9 @@ public class NetherNetServer {
                 return false;
             }
             logger.error(LOG_PREFIX + "HTTP signaling unavailable on TCP " + describe(signalingBindAddress()) + " ("
-                    + describe(e) + "): direct and server list joins will not work, only join codes and"
-                    + " connection IDs" + (geyser.config().bedrock().signalingPort() == geyser.config().java().port()
+                    + describe(e) + "): direct and server list joins will not work, only joins over Xbox signaling"
+                    + " (join codes, connection IDs and friend list joins)"
+                    + (geyser.config().bedrock().signalingPort() == geyser.config().java().port()
                     ? ". The signaling port is the Java server's port, which a Java server on this machine may hold" : ""));
         }
         return true;
@@ -648,11 +650,15 @@ public class NetherNetServer {
 
     /**
      * Binds the HTTP signaling front end on the Bedrock address and the
-     * signaling port, TCP, and adds it to the endpoint. Retail clients joining by address and
-     * Education clients joining from the server list signal here; Education
-     * tries HTTPS first and plain HTTP after a refused TLS connection, and
-     * would fall back to RakNet only after both, which EduGeyser does not
-     * serve.
+     * signaling port, TCP, and adds it to the endpoint. Retail clients joining
+     * by address and Education clients joining from the server list signal
+     * here; Education tries HTTPS first and plain HTTP after a refused TLS
+     * connection, and would fall back to RakNet only after both, which
+     * EduGeyser does not serve.
+     *
+     * Plain HTTP stays on next to HTTPS, so a join works whatever happens
+     * with TLS: a TLS problem, a client that rejects the certificate and tries
+     * again over plain HTTP, or a client that goes straight to plain HTTP.
      *
      * @param proxies the proxies in front of HTTP signaling, never the ICE
      *                port's relays
