@@ -311,7 +311,32 @@ class NetherNetPingSnapshotsTest {
     }
 
     @Test
-    void theHostlessFallbackGetsOnlyWhatIsLeftOfTheBudget() throws InterruptedException {
+    void theHostlessFallbackWaitsForWhatIsLeftOfTheBudget() throws InterruptedException {
+        NetherNetPingSnapshots waiting = queued(LONG_WAIT);
+        waiting.prime();
+        runRefresher();
+        advance(NetherNetPingSnapshots.MAX_AGE_NANOS);
+
+        Request request = new Request(waiting, "lobby.example.com");
+        request.awaitWaiting();
+        // Half the budget passes while the request waits for its own ask, which then ends
+        // without an answer
+        advance(LONG_WAIT.toNanos() / 2);
+        failure = new IllegalStateException("no answer for this host");
+        refresher.remove().run();
+        failure = null;
+
+        // The request falls back to the host-less snapshot and waits for its ask with the rest
+        awaitQueued(1);
+        request.awaitWaiting();
+        runRefresher();
+
+        request.join();
+        assertEquals(3, online(request.answer), "the host-less answer of the ask it waited for");
+    }
+
+    @Test
+    void theHostlessFallbackDoesNotWaitOnceTheBudgetIsSpent() throws InterruptedException {
         NetherNetPingSnapshots waiting = queued(LONG_WAIT);
         waiting.prime();
         runRefresher();
