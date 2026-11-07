@@ -67,6 +67,8 @@ import org.shredzone.acme4j.util.CSRBuilder;
 import org.shredzone.acme4j.util.CertificateUtils;
 
 import java.io.IOException;
+import java.nio.channels.FileChannel;
+import java.nio.channels.FileLock;
 import java.io.StringWriter;
 import java.net.InetAddress;
 import java.net.InetSocketAddress;
@@ -77,6 +79,7 @@ import java.net.http.HttpResponse;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.nio.file.StandardOpenOption;
 import javax.net.ssl.TrustManager;
 import javax.net.ssl.TrustManagerFactory;
 import javax.net.ssl.X509TrustManager;
@@ -98,6 +101,7 @@ import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicReference;
+import java.util.concurrent.locks.ReentrantLock;
 
 /**
  * Automatic HTTPS for the NetherNet HTTP signaling listener: obtains and
@@ -450,11 +454,19 @@ public final class NetherNetCertificateManager implements TlsContextSelector, Au
             return;
         }
         Duration nextCheck = CHECK_INTERVAL;
-        try {
+        // The whole pass holds acme/, so recovery, adoption, conversion and
+        // issuance never interleave with another manager's
+        try (DirectoryLock ignored = DirectoryLock.acquire(acmeDir, logger)) {
             ensureCertificate();
             consecutiveFailures = 0;
             failureWarned = false;
         } catch (Exception e) {
+            if (e instanceof InterruptedException) {
+                Thread.currentThread().interrupt();
+            }
+            if (closed) {
+                return; // close() interrupted the pass, waiting included
+            }
             consecutiveFailures++;
             long backoffMinutes = Math.min(RETRY_MAX.toMinutes(),
                     RETRY_BASE.toMinutes() << Math.min(consecutiveFailures - 1, 5));
@@ -485,8 +497,9 @@ public final class NetherNetCertificateManager implements TlsContextSelector, Au
         Path certFile = acmeDir.resolve("cert.pem");
         Path domainKeyFile = acmeDir.resolve("domain-key.pem");
         // Before anything reads the pair: an issuance a crash interrupted is
-        // completed or discarded here
+        // completed or discarded here, and what its writes left behind goes
         recoverPair(certFile, domainKeyFile);
+        deleteTemporaries(acmeDir);
 
         if (Files.exists(certFile) && Files.exists(domainKeyFile)) {
             // Every way the persisted material can be unusable converges on
@@ -848,6 +861,80 @@ public final class NetherNetCertificateManager implements TlsContextSelector, Au
             NetherNetKeyFiles.moveIntoPlace(pendingCert, certFile);
         } else {
             Files.deleteIfExists(pendingKey);
+        }
+    }
+
+    /**
+     * Deletes the temporary files a crash left in acme/. Safe only under the
+     * {@link DirectoryLock}, as every write there happens under it.
+     */
+    static void deleteTemporaries(Path acmeDir) throws IOException {
+        try (var files = Files.list(acmeDir)) {
+            for (Path file : files.filter(NetherNetKeyFiles::isTemporary).toList()) {
+                Files.deleteIfExists(file);
+            }
+        }
+    }
+
+    /**
+     * Holds acme/ for one maintenance pass against every other certificate
+     * manager: in this process through a lock per directory, as a reload
+     * overlaps the old manager with the new one and Java file locks only
+     * work between processes, and in other processes through a file lock on
+     * {@code acme/lock}, as when two servers share one config folder. A
+     * second holder waits: the pass it waits for is bounded by the ACME
+     * timeouts, and afterwards it finds and adopts what that pass wrote.
+     */
+    static final class DirectoryLock implements AutoCloseable {
+        private static final Map<Path, ReentrantLock> IN_PROCESS = new ConcurrentHashMap<>();
+
+        private final ReentrantLock local;
+        private final FileChannel channel;
+        private final FileLock fileLock;
+
+        private DirectoryLock(ReentrantLock local, FileChannel channel, FileLock fileLock) {
+            this.local = local;
+            this.channel = channel;
+            this.fileLock = fileLock;
+        }
+
+        /** Waits until no other manager holds the directory, then holds it. */
+        static DirectoryLock acquire(Path acmeDir, GeyserLogger logger) throws IOException, InterruptedException {
+            Files.createDirectories(acmeDir);
+            Path directory = acmeDir.toRealPath();
+            ReentrantLock local = IN_PROCESS.computeIfAbsent(directory, key -> new ReentrantLock());
+            if (!local.tryLock()) {
+                logger.debug(LOG_PREFIX + "Waiting for the previous certificate manager to finish with " + directory);
+                local.lockInterruptibly();
+            }
+            FileChannel channel = null;
+            try {
+                channel = FileChannel.open(directory.resolve("lock"), StandardOpenOption.CREATE, StandardOpenOption.WRITE);
+                FileLock fileLock = channel.tryLock();
+                if (fileLock == null) {
+                    logger.info(LOG_PREFIX + "Another process that uses this config folder is managing the HTTP"
+                            + " signaling certificate in " + directory + "; waiting for it to finish");
+                    // Interruptible: a close() of this manager ends the wait
+                    fileLock = channel.lock();
+                }
+                return new DirectoryLock(local, channel, fileLock);
+            } catch (IOException | RuntimeException e) {
+                if (channel != null) {
+                    channel.close();
+                }
+                local.unlock();
+                throw e;
+            }
+        }
+
+        @Override
+        public void close() throws IOException {
+            try {
+                fileLock.release();
+                channel.close();
+            } finally {
+                local.unlock();
+            }
         }
     }
 

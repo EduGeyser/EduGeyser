@@ -25,6 +25,7 @@
 
 package org.geysermc.geyser.network.nethernet;
 
+import org.geysermc.geyser.GeyserLogger;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 import org.junit.jupiter.params.ParameterizedTest;
@@ -35,11 +36,18 @@ import java.nio.file.Path;
 import java.security.KeyPair;
 import java.time.Duration;
 import java.time.Instant;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
 
 import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.mockito.Mockito.mock;
 
 class NetherNetCertificateManagerTest {
 
@@ -111,5 +119,46 @@ class NetherNetCertificateManagerTest {
         try (var files = Files.list(dir)) {
             assertEquals(2, files.count(), "nothing pending is left behind");
         }
+    }
+
+    @Test
+    void aSecondManagerWaitsForTheDirectory(@TempDir Path dir) throws Exception {
+        Path cert = dir.resolve("cert.pem");
+        Path key = dir.resolve("domain-key.pem");
+        GeyserLogger logger = mock(GeyserLogger.class);
+        ExecutorService other = Executors.newSingleThreadExecutor();
+        try {
+            Future<?> recovery;
+            try (var held = NetherNetCertificateManager.DirectoryLock.acquire(dir, logger)) {
+                // The holder is between the two writes of a pair
+                Files.writeString(dir.resolve("domain-key.pem.next"), "new key");
+                recovery = other.submit(() -> {
+                    try (var lock = NetherNetCertificateManager.DirectoryLock.acquire(dir, logger)) {
+                        NetherNetCertificateManager.recoverPair(cert, key);
+                    }
+                    return null;
+                });
+                assertThrows(TimeoutException.class, () -> recovery.get(300, TimeUnit.MILLISECONDS));
+                assertTrue(Files.exists(dir.resolve("domain-key.pem.next")), "the waiting recovery discarded nothing");
+
+                Files.writeString(dir.resolve("cert.pem.next"), "new certificate");
+            }
+            recovery.get(10, TimeUnit.SECONDS);
+            assertEquals("new key", Files.readString(key), "the pair finished by the holder was completed");
+            assertEquals("new certificate", Files.readString(cert));
+        } finally {
+            other.shutdownNow();
+        }
+    }
+
+    @Test
+    void deletesWhatACrashedWriteLeftBehind(@TempDir Path dir) throws Exception {
+        Path leftover = NetherNetKeyFiles.writeTemporary(dir.resolve("domain-key.pem"), "half a key");
+        Files.writeString(dir.resolve("cert.pem"), "certificate");
+
+        NetherNetCertificateManager.deleteTemporaries(dir);
+
+        assertFalse(Files.exists(leftover));
+        assertTrue(Files.exists(dir.resolve("cert.pem")));
     }
 }

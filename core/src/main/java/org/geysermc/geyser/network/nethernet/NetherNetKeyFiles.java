@@ -278,6 +278,8 @@ final class NetherNetKeyFiles {
      * Writes the text, synced, to a new file beside the target, named for
      * this write alone: writers that shared one name deleted and replaced
      * each other's file, so one could install another's half written file.
+     * The name starts with a dot and ends in {@code .tmp}, so
+     * {@link #isTemporary} recognizes what a crash left behind.
      * The file is owner-only from the moment it exists (POSIX permissions,
      * or an owner-only ACL on Windows), as NetworkM's identity key writer
      * makes its files: the move keeps its permissions, so a key replaced
@@ -307,6 +309,12 @@ final class NetherNetKeyFiles {
             channel.force(true);
         }
         return temporary;
+    }
+
+    /** Whether the file is one {@link #writeTemporary} creates, for any target. */
+    static boolean isTemporary(Path file) {
+        String name = file.getFileName().toString();
+        return name.startsWith(".") && name.endsWith(".tmp") && name.indexOf('-') > 0;
     }
 
     private static FileAttribute<List<AclEntry>> ownerOnlyAcl(Path directory) throws IOException {
