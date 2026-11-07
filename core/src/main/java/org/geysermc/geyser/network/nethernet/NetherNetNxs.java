@@ -83,6 +83,11 @@ public final class NetherNetNxs implements EventRegistrar {
     private static final String LOG_PREFIX = "[Nethernet] NXS: ";
     /** Holds the service's link for the operator, in the "nethernet" folder. */
     private static final String OPERATOR_LINK_FILE = "operator-link.txt";
+    /**
+     * The software the service shows for this server. Not {@link GeyserImpl#NAME}, which stays "Geyser" for configs and
+     * integrations.
+     */
+    private static final String SOFTWARE_NAME = "EduGeyser";
     /** How long opening NXS on the endpoint may take before the start counts as failed. */
     private static final Duration OPEN_WAIT = Duration.ofSeconds(30);
 
@@ -365,7 +370,7 @@ public final class NetherNetNxs implements EventRegistrar {
     }
 
     private ProviderClient.Health health(int capacity) {
-        return new ProviderClient.Health(true, capacity, new ProviderClient.Software(GeyserImpl.NAME, GeyserImpl.VERSION),
+        return new ProviderClient.Health(true, capacity, new ProviderClient.Software(SOFTWARE_NAME, GeyserImpl.VERSION),
                 new ProviderClient.ConnectedPlayers(geyser.getSessionManager().size(), System.currentTimeMillis()));
     }
 
