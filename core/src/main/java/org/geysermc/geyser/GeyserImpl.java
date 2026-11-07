@@ -401,12 +401,11 @@ public class GeyserImpl implements GeyserApi, EventRegistrar {
         if ("-1".equals(pluginUdpPort)) {
             throw new UnsupportedOperationException("This hosting/service provider does not support applications running on the UDP port");
         }
-        boolean portPropertyApplied = false;
-        boolean udpPortPropertyApplied = false;
         String pluginUdpAddress = System.getProperty("geyserUdpAddress", System.getProperty("pluginUdpAddress", ""));
 
-        if (platformType() != PlatformType.STANDALONE) {
-            int javaPort = bootstrap.getServerPort();
+        boolean pluginPlatform = platformType() != PlatformType.STANDALONE;
+        int javaPort = pluginPlatform ? bootstrap.getServerPort() : -1;
+        if (pluginPlatform) {
             String serverAddress = bootstrap.getServerBindAddress();
             if (!serverAddress.isEmpty() && !"0.0.0.0".equals(serverAddress)) {
                 config.java().address(serverAddress);
@@ -426,20 +425,6 @@ public class GeyserImpl implements GeyserApi, EventRegistrar {
                 config.java().port(javaPort);
             }
 
-            boolean forceMatchServerPort = "server".equals(pluginUdpPort);
-            if ((config.bedrock().cloneRemotePort() || forceMatchServerPort) && javaPort != -1) {
-                config.bedrock().port(javaPort);
-                if (forceMatchServerPort) {
-                    if (geyserUdpPort.isEmpty()) {
-                        logger.info("Port set from system generic property to match Java server.");
-                    } else {
-                        logger.info("Port set from system property to match Java server.");
-                    }
-                    portPropertyApplied = true;
-                    udpPortPropertyApplied = true;
-                }
-            }
-
             if ("server".equals(pluginUdpAddress)) {
                 String address = bootstrap.getServerBindAddress();
                 if (!address.isEmpty()) {
@@ -448,18 +433,6 @@ public class GeyserImpl implements GeyserApi, EventRegistrar {
             } else if (!pluginUdpAddress.isEmpty()) {
                 config.bedrock().address(pluginUdpAddress);
             }
-
-            if (!portPropertyApplied && !pluginUdpPort.isEmpty()) {
-                int port = Integer.parseInt(pluginUdpPort);
-                config.bedrock().port(port);
-                if (geyserUdpPort.isEmpty()) {
-                    logger.info("Port set from generic system property: " + port);
-                } else {
-                    logger.info("Port set from system property: " + port);
-                }
-                udpPortPropertyApplied = true;
-            }
-
 
             if (platformType() != PlatformType.VIAPROXY) {
                 boolean floodgatePresent = bootstrap.testFloodgatePluginPresent();
@@ -475,7 +448,8 @@ public class GeyserImpl implements GeyserApi, EventRegistrar {
             }
         }
 
-        NetherNetPortProperties.apply(config.bedrock(), udpPortPropertyApplied, System::getProperty, logger);
+        // clone-remote-port and the UDP port property, then NetherNet's own port properties
+        NetherNetPortProperties.apply(config.bedrock(), pluginPlatform, javaPort, System::getProperty, logger);
 
         String stunDiscoveryProperty = System.getProperty("geyserStunDiscovery", "");
         if (!stunDiscoveryProperty.isEmpty()) {
