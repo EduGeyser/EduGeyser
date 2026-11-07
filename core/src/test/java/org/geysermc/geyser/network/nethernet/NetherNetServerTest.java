@@ -59,6 +59,7 @@ import java.net.InetAddress;
 import java.net.InetSocketAddress;
 import java.net.ServerSocket;
 import java.nio.file.Path;
+import java.util.List;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
 import java.util.concurrent.TimeUnit;
@@ -139,6 +140,22 @@ class NetherNetServerTest {
         verify(logger).error(contains("Failed to open the ICE port, UDP 127.0.0.1:"));
         verify(logger, never()).info(contains("HTTP signaling on TCP port"));
         assertTrue(engineClosed.get(), "the shutdown waited for the endpoint to close the engine it owns");
+        assertFalse(server.isRunning());
+    }
+
+    @Test
+    void relaysNoneOfWhichCanBeReadStopTheStartNamingTheSetting(@TempDir Path config) throws Exception {
+        GeyserImpl geyser = geyser(config, freeUdpPort());
+        // A range that does not parse. Running without the relays would take players directly and
+        // announce this host's addresses, so NetworkM refuses to bind.
+        when(geyser.config().advanced().bedrock().webrtcProxyProtocolRelays()).thenReturn(List.of("10.0.0.0/99"));
+        NetherNetServer server = new NetherNetServer(geyser, group, "1234567890", "custom", "device",
+                threshold -> fail("the bind is refused before it needs the engine"));
+
+        assertFalse(server.start());
+
+        verify(logger).error(contains(
+                "NetherNet will not start: \"webrtc-proxy-protocol-relays\" under \"advanced.bedrock\" lists relays"));
         assertFalse(server.isRunning());
     }
 

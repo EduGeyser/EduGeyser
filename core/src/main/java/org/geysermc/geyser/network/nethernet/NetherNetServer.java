@@ -28,6 +28,7 @@ package org.geysermc.geyser.network.nethernet;
 import io.github.sendablemetatype.netty.channel.nethernet.NetherNetChannelFactory;
 import io.github.sendablemetatype.netty.channel.nethernet.NetherNetServerChannel;
 import io.github.sendablemetatype.netty.channel.nethernet.NetherNetServerStatus;
+import io.github.sendablemetatype.netty.channel.nethernet.UnreadableRelaysException;
 import io.github.sendablemetatype.netty.channel.nethernet.config.NetherChannelOption;
 import io.github.sendablemetatype.netty.channel.nethernet.engine.NetherNetEngine;
 import io.github.sendablemetatype.netty.channel.nethernet.engine.webrtc.WebRtcEngine;
@@ -416,8 +417,7 @@ public class NetherNetServer {
         try {
             proxies = NetherNetProxies.parse(advanced, logger);
         } catch (IllegalArgumentException e) {
-            // A list refused outright, or relays none of which could be read:
-            // starting without the relays would let players past them
+            // A list refused outright, as one fetched over plain HTTP is
             logger.error(LOG_PREFIX + "NetherNet will not start: " + e.getMessage());
             return false;
         }
@@ -474,6 +474,10 @@ public class NetherNetServer {
             // have created its engine, and shutdown waits for its termination
             this.endpointChannel = (NetherNetServerChannel) bound.channel();
             bound.sync();
+        } catch (UnreadableRelaysException e) {
+            // Starting without the relays would let players past them
+            logger.error(LOG_PREFIX + "NetherNet will not start: " + NetherNetProxies.UNREADABLE_RELAYS);
+            return false;
         } catch (IllegalStateException e) {
             // NetworkM refuses a configuration it cannot serve before it
             // touches a socket, such as STUN discovery behind PROXY protocol
@@ -488,7 +492,7 @@ public class NetherNetServer {
         if (!awaitReady(endpointChannel)) {
             return false;
         }
-        int relays = proxies.relays().proxyProtocol().entries().size();
+        int relays = proxies.relays().proxyProtocol().ranges().entries().size();
         logger.info(LOG_PREFIX + "ICE on UDP port " + iceAddress().getPort() + ", shared by every player"
                 + (relays == 0 ? "" : ", reached through the PROXY protocol relays in " + ranges(relays)));
 
@@ -742,8 +746,8 @@ public class NetherNetServer {
 
     /** Which proxies HTTP signaling trusts, for its startup line; counts only, never addresses. */
     private static String describeProxies(TrustedProxies proxies) {
-        int proxyProtocol = proxies.proxyProtocol().entries().size();
-        int forwardedFor = proxies.forwardedFor().entries().size();
+        int proxyProtocol = proxies.proxyProtocol().ranges().entries().size();
+        int forwardedFor = proxies.forwardedFor().ranges().entries().size();
         return (proxyProtocol == 0 ? "" : "; PROXY protocol from " + ranges(proxyProtocol))
                 + (forwardedFor == 0 ? "" : "; X-Forwarded-For from " + ranges(forwardedFor));
     }

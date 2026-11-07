@@ -88,16 +88,6 @@ class NetherNetProxiesTest {
     }
 
     @Test
-    void relaysNoneOfWhichCanBeReadRefuseToStart() {
-        // Running without them would take players directly and announce this host's addresses
-        IllegalArgumentException refused = assertThrows(IllegalArgumentException.class, () ->
-                NetherNetProxies.parse(config(List.of(), List.of(), UNREADABLE), logger));
-
-        assertTrue(refused.getMessage().startsWith("\"webrtc-proxy-protocol-relays\" under \"advanced.bedrock\" lists relays"),
-                refused.getMessage());
-    }
-
-    @Test
     void signalingListsNoneOfWhichCanBeReadTrustNobodyAndWarn() {
         NetherNetProxies proxies = NetherNetProxies.parse(config(UNREADABLE, UNREADABLE, List.of()), logger);
 
