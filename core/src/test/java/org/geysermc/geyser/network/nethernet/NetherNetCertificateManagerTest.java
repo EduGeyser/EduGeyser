@@ -36,6 +36,7 @@ import java.nio.file.Path;
 import java.security.KeyPair;
 import java.time.Duration;
 import java.time.Instant;
+import java.util.List;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
@@ -45,6 +46,7 @@ import java.util.concurrent.TimeoutException;
 import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.Mockito.mock;
@@ -160,5 +162,25 @@ class NetherNetCertificateManagerTest {
 
         assertFalse(Files.exists(leftover));
         assertTrue(Files.exists(dir.resolve("cert.pem")));
+    }
+
+    @Test
+    void neverTriesTheChallengeWhosePortHttpSignalingHolds() {
+        // Signaling on 443 (the Bedrock port or bedrock.signaling.port) leaves HTTP-01 alone
+        assertEquals(List.of(NetherNetCertificateManager.Challenge.HTTP_01),
+                NetherNetCertificateManager.challenges(true, 443));
+        assertEquals(List.of(NetherNetCertificateManager.Challenge.TLS_ALPN_01),
+                NetherNetCertificateManager.challenges(false, 80));
+        assertEquals(List.of(NetherNetCertificateManager.Challenge.TLS_ALPN_01,
+                NetherNetCertificateManager.Challenge.HTTP_01),
+                NetherNetCertificateManager.challenges(true, 19132), "both, the preferred one first");
+    }
+
+    @Test
+    void saysAtStartupWhichChallengeIsLeft() {
+        String note = NetherNetCertificateManager.signalingPortNote(443);
+        assertTrue(note.contains("holds TCP port 443") && note.contains("over HTTP-01 alone: TCP port 80"), note);
+        assertTrue(NetherNetCertificateManager.signalingPortNote(80).contains("over TLS-ALPN-01 alone: TCP port 443"));
+        assertNull(NetherNetCertificateManager.signalingPortNote(19132));
     }
 }

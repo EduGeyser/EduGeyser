@@ -49,6 +49,7 @@ import io.netty.handler.codec.http.HttpServerCodec;
 import io.netty.handler.codec.http.HttpVersion;
 import io.netty.handler.ssl.SslContext;
 import io.netty.handler.ssl.SslContextBuilder;
+import org.checkerframework.checker.nullness.qual.Nullable;
 import org.geysermc.geyser.GeyserLogger;
 import org.shredzone.acme4j.Account;
 import org.shredzone.acme4j.AccountBuilder;
@@ -118,8 +119,10 @@ import java.util.concurrent.locks.ReentrantLock;
  *
  * Failure semantics are forgiving throughout: issuance needs port 80
  * (HTTP-01) or port 443 (TLS-ALPN-01) reachable from the internet during
- * the challenge. A port that cannot be bound falls through to the other
- * challenge type within the same attempt; a triggered challenge that fails
+ * the challenge. The type whose port HTTP signaling itself holds is never
+ * tried, as its listener could not bind (see {@link #challenges}); a port
+ * that cannot be bound falls through to the other challenge type within the
+ * same attempt; a triggered challenge that fails
  * validation kills its authorization (RFC 8555), so the preferred type also
  * alternates across retries for redundancy against one blocked port. Any
  * failure (ports busy, NAT, rate limits, no public IPv4) logs a warning,
@@ -229,6 +232,8 @@ public final class NetherNetCertificateManager implements TlsContextSelector, Au
         return thread;
     });
     private int consecutiveFailures;
+    /** The TCP port HTTP signaling holds, set by {@link #start} before the first pass. */
+    private volatile int signalingPort;
     // Environments where issuance can never succeed (LAN only, no public
     // reachability) should not warn every backoff period forever: the first
     // failure warns, repeats log at debug until something changes.
@@ -444,9 +449,58 @@ public final class NetherNetCertificateManager implements TlsContextSelector, Au
      * Starts the maintenance loop: adopt a persisted certificate immediately
      * if still fresh, otherwise issue, then keep renewing at two thirds of
      * each certificate's lifetime.
+     *
+     * @param signalingPort the TCP port HTTP signaling is bound to; the
+     *                      challenge type that needs the same port is skipped
      */
-    public void start() {
+    public void start(int signalingPort) {
+        this.signalingPort = signalingPort;
+        String note = signalingPortNote(signalingPort);
+        if (note != null) {
+            logger.info(LOG_PREFIX + note);
+        }
         scheduler.execute(this::runMaintenance);
+    }
+
+    /** The two ACME challenge types, each answered on its own fixed TCP port. */
+    enum Challenge {
+        HTTP_01("HTTP-01", 80),
+        TLS_ALPN_01("TLS-ALPN-01", 443);
+
+        private final String label;
+        private final int port;
+
+        Challenge(String label, int port) {
+            this.label = label;
+            this.port = port;
+        }
+    }
+
+    /**
+     * The challenge types to try, the preferred one first, without the one
+     * whose port HTTP signaling holds: its listener would fail to bind on
+     * every attempt, and with signaling on 443 that left only HTTP-01 to
+     * fail over to without anyone saying why.
+     */
+    static List<Challenge> challenges(boolean preferTlsAlpn, int signalingPort) {
+        List<Challenge> preferred = preferTlsAlpn
+                ? List.of(Challenge.TLS_ALPN_01, Challenge.HTTP_01)
+                : List.of(Challenge.HTTP_01, Challenge.TLS_ALPN_01);
+        return preferred.stream().filter(challenge -> challenge.port != signalingPort).toList();
+    }
+
+    /** What the startup log says when HTTP signaling holds a challenge port, else null. */
+    static @Nullable String signalingPortNote(int signalingPort) {
+        for (Challenge held : Challenge.values()) {
+            if (held.port == signalingPort) {
+                Challenge left = challenges(false, signalingPort).getFirst();
+                return "HTTP signaling holds TCP port " + held.port + ", which " + held.label + " validation needs,"
+                        + " so Let's Encrypt validates this server over " + left.label + " alone: TCP port "
+                        + left.port + " must be free here and reachable from the internet whenever the certificate"
+                        + " is issued or renewed, about every 4.5 days";
+            }
+        }
+        return null;
     }
 
     private void runMaintenance() {
@@ -669,21 +723,30 @@ public final class NetherNetCertificateManager implements TlsContextSelector, Au
      * Completes one authorization via HTTP-01 (port 80) or TLS-ALPN-01
      * (port 443). Ports are bound on demand and released right after the
      * validation; below 1024 they need privileges on Linux (setcap,
-     * authbind, or net.ipv4.ip_unprivileged_port_start). A port that cannot
-     * be bound falls through to the other challenge type; a triggered
+     * authbind, or net.ipv4.ip_unprivileged_port_start). The type whose port
+     * HTTP signaling holds is skipped, and a port that cannot be bound falls
+     * through to the other challenge type; a triggered
      * challenge that fails validation invalidates the whole authorization,
      * so no second type is attempted then (the retry alternates instead).
      */
     private void completeChallenge(Authorization auth, boolean preferTlsAlpn) throws Exception {
         StringBuilder bindFailures = new StringBuilder();
-        boolean[] tryAlpnFirst = preferTlsAlpn ? new boolean[]{true, false} : new boolean[]{false, true};
-        for (boolean alpn : tryAlpnFirst) {
-            if (alpn ? tryTlsAlpnChallenge(auth, bindFailures) : tryHttpChallenge(auth, bindFailures)) {
+        for (Challenge held : Challenge.values()) {
+            if (held.port == signalingPort) {
+                appendFailure(bindFailures, held.label + " skipped, as HTTP signaling holds port " + held.port);
+            }
+        }
+        for (Challenge challenge : challenges(preferTlsAlpn, signalingPort)) {
+            boolean validated = switch (challenge) {
+                case HTTP_01 -> tryHttpChallenge(auth, bindFailures);
+                case TLS_ALPN_01 -> tryTlsAlpnChallenge(auth, bindFailures);
+            };
+            if (validated) {
                 return;
             }
         }
-        throw new IllegalStateException("no usable ACME challenge (" + bindFailures
-                + "); grant the process port 80 or 443, or provide a manual certificate");
+        throw new IllegalStateException("no usable ACME challenge (" + bindFailures + "); let this process bind TCP"
+                + " port 80 or 443, whichever HTTP signaling does not hold, or provide a certificate");
     }
 
     /** @return true when validated; false when the challenge could not even start. */

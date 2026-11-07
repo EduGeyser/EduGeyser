@@ -685,7 +685,7 @@ public class NetherNetServer {
         logger.info(LOG_PREFIX + "HTTP signaling on TCP port " + http.boundAddress().getPort() + " (" + tls.mode()
                 + describeProxies(proxies) + ")");
         if (certificateManager != null) {
-            certificateManager.start();
+            certificateManager.start(http.boundAddress().getPort());
         }
     }
 
