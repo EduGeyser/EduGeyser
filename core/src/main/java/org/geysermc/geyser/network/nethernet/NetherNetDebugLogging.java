@@ -26,6 +26,7 @@
 package org.geysermc.geyser.network.nethernet;
 
 import io.github.sendablemetatype.netty.channel.nethernet.NetherNetServerChannel;
+import io.github.sendablemetatype.netty.channel.nethernet.engine.webrtc.WebRtcEngine;
 import io.github.sendablemetatype.webrtc.logging.Logging.Severity;
 import io.netty.util.internal.logging.InternalLogger;
 import io.netty.util.internal.logging.InternalLoggerFactory;
@@ -66,14 +67,11 @@ final class NetherNetDebugLogging {
      * webrtc-java reads its native threshold from this property once, when it loads its library, and
      * formats every message at or above it, wanted or not.
      */
-    private static final String NATIVE_SEVERITY_PROPERTY = "io.github.sendablemetatype.webrtc.logging.severity";
+    private static final String NATIVE_SEVERITY_PROPERTY = WebRtcEngine.nativeSeverityProperty();
     /** The start of every NetworkM logger name, relocated where a platform shades NetworkM. */
     static final String NETWORKM_LOGGERS = root(NetherNetServerChannel.class.getPackageName());
-    /**
-     * The SLF4J logger NetworkM's WebRTC engine writes libwebrtc's native log to. NetworkM keeps the
-     * name to itself (NativeLogBridge.LOGGER_NAME), so this repeats it.
-     */
-    private static final String NATIVE_LOGGER = NETWORKM_LOGGERS + ".nethernet.webrtc.native";
+    /** The SLF4J logger NetworkM's WebRTC engine writes libwebrtc's native log to. */
+    private static final String NATIVE_LOGGER = WebRtcEngine.nativeLoggerName();
     /** The threshold NetworkM's WebRTC engine passes libwebrtc's messages on from by default. */
     private static final Severity DEFAULT_NATIVE_THRESHOLD = Severity.WARNING;
 
