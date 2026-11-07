@@ -23,7 +23,7 @@ Website and documentation: [edugeyser.org](https://edugeyser.org)
 
 NetherNet is Microsoft's successor to RakNet. It is the main transport of Education Edition, and Bedrock Edition has started using it for standard connections as well, so it is not an Education-only feature. EduGeyser serves Bedrock players over NetherNet only, on every platform; it does not serve RakNet.
 
-EduGeyser listens on the Bedrock port (19132 by default) on both TCP and UDP, so open and forward both. TCP carries HTTP signaling, which direct connections and joins from the Education server list need. UDP carries every player's NetherNet traffic, join codes and connection IDs included.
+EduGeyser listens on the Bedrock port (19132 by default) on both TCP and UDP, so open and forward both. TCP carries HTTP signaling, which direct connections and joins from the Education server list need. UDP carries every player's NetherNet traffic, join codes and connection IDs included. To put either side on a port of its own, set `webrtc-port` (UDP) or `port` under `signaling` (TCP) in the `bedrock` section of the config.
 
 Connection ID, join code, and Xbox friends list joins run over Microsoft's signaling service and therefore always use NetherNet.
 

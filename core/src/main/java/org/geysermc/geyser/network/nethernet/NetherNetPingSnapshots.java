@@ -97,7 +97,7 @@ final class NetherNetPingSnapshots {
      * @param passthrough asks the Java server for its answer to the given virtual host, or to none
      *                    for null; may block
      * @param refresher   runs the asks one at a time, off the I/O threads
-     * @param defaultPort the port of a host that names none, the Bedrock port
+     * @param defaultPort the port of a host that names none, the HTTP signaling port
      * @param clock       {@link System#nanoTime()}
      * @param logger      where failed asks are reported, at debug
      */

@@ -180,7 +180,7 @@ public class DumpInfo {
         );
 
         this.netherNetInfo = geyser.nethernetManager() instanceof NethernetManagerImpl manager
-            ? NetherNetInfo.of(manager.announced()) : null;
+            ? NetherNetInfo.of(manager.announced(), manager.httpSignalingAddress()) : null;
     }
 
     private JsonElement toGson(ConfigurationNode node) {
@@ -423,17 +423,22 @@ public class DumpInfo {
     }
 
     /**
-     * What NetherNet answers announce about this server, see {@link NetherNetServer#announced()}.
-     * Addresses are censored like the configured ones unless the dump is full.
+     * The ports NetherNet listens on and what its answers announce about this server, see
+     * {@link NetherNetServer#announced()}. Addresses are censored like the configured ones unless the dump is full.
      *
+     * @param icePort       the UDP port NetherNet takes every player's traffic on
+     * @param signalingPort the TCP port HTTP signaling listens on, or null when it is not running
      * @param advertised    the advertised addresses. When empty, answers carry this machine's own
      *                      addresses, the address an HTTP join's Host header names, and {@code discovered}
      * @param stunDiscovery whether STUN discovery runs
      * @param discovered    the public addresses STUN discovery currently finds
      */
-    public record NetherNetInfo(List<String> advertised, boolean stunDiscovery, List<String> discovered) {
-        static @Nullable NetherNetInfo of(NetherNetServer.@Nullable Announced announced) {
-            return announced == null ? null : new NetherNetInfo(censor(announced.advertised()),
+    public record NetherNetInfo(int icePort, @Nullable Integer signalingPort, List<String> advertised,
+                                boolean stunDiscovery, List<String> discovered) {
+        static @Nullable NetherNetInfo of(NetherNetServer.@Nullable Announced announced,
+                                          @Nullable InetSocketAddress httpSignaling) {
+            return announced == null ? null : new NetherNetInfo(announced.icePort(),
+                httpSignaling == null ? null : httpSignaling.getPort(), censor(announced.advertised()),
                 announced.stunDiscovery(), censor(announced.discovered()));
         }
 

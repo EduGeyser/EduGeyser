@@ -1859,9 +1859,10 @@ public class GeyserSession implements GeyserConnection, GeyserCommandSource, Jav
     }
 
     private JoinAddress parsedJoinAddress() {
-        // NetherNet clients send the signaling URL they used, e.g. http://example.com:19132:19132
+        // NetherNet clients send the signaling URL they used, e.g. http://example.com:19132:19132, so a missing
+        // port is the one players add this server with
         String combined = Optional.ofNullable(clientData).orElseThrow().getServerAddress();
-        return JoinAddress.parse(combined, geyser.config().bedrock().port());
+        return JoinAddress.parse(combined, geyser.config().bedrock().signalingPort());
     }
 
     @Override

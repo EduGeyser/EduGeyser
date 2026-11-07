@@ -389,6 +389,9 @@ public class ConfigLoaderTest {
 
         assertEquals(List.of("play.example.com"), config.bedrock().signaling().advertiseAddresses());
         assertFalse(config.bedrock().signaling().stunDiscovery());
+        // The same key, so NetherNet keeps its UDP port
+        assertEquals(19133, config.bedrock().icePort());
+        assertEquals(19132, config.bedrock().signalingPort());
         assertEquals(Constants.CONFIG_VERSION, config.configVersion());
     }
 

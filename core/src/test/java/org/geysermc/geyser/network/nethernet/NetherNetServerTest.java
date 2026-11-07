@@ -175,6 +175,8 @@ class NetherNetServerTest {
         when(bootstrap.getConfigFolder()).thenReturn(configFolder);
         when(config.bedrock().address()).thenReturn("127.0.0.1");
         when(config.bedrock().port()).thenReturn(port);
+        when(config.bedrock().icePort()).thenReturn(port);
+        when(config.bedrock().signalingPort()).thenReturn(port);
         return geyser;
     }
 

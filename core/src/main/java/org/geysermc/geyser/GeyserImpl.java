@@ -82,6 +82,7 @@ import org.geysermc.geyser.impl.MinecraftVersionImpl;
 import org.geysermc.geyser.level.BedrockDimension;
 import org.geysermc.geyser.level.WorldManager;
 import org.geysermc.geyser.network.bedrock.GameProtocol;
+import org.geysermc.geyser.network.nethernet.NetherNetPortProperties;
 import org.geysermc.geyser.network.nethernet.NethernetManagerImpl;
 import org.geysermc.geyser.ping.GeyserLegacyPingPassthrough;
 import org.geysermc.geyser.registry.Registries;
@@ -392,12 +393,15 @@ public class GeyserImpl implements GeyserApi, EventRegistrar {
             return;
         }
 
+        // -DgeyserUdpPort and -DpluginUdpPort keep the names hosting panels set. They take a port, or "server" for the
+        // Java server's, and set the Bedrock port, which HTTP signaling uses on TCP and NetherNet on UDP
         String geyserUdpPort = System.getProperty("geyserUdpPort", "");
         String pluginUdpPort = geyserUdpPort.isEmpty() ? System.getProperty("pluginUdpPort", "") : geyserUdpPort;
         if ("-1".equals(pluginUdpPort)) {
             throw new UnsupportedOperationException("This hosting/service provider does not support applications running on the UDP port");
         }
         boolean portPropertyApplied = false;
+        boolean udpPortPropertyApplied = false;
         String pluginUdpAddress = System.getProperty("geyserUdpAddress", System.getProperty("pluginUdpAddress", ""));
 
         if (platformType() != PlatformType.STANDALONE) {
@@ -431,6 +435,7 @@ public class GeyserImpl implements GeyserApi, EventRegistrar {
                         logger.info("Port set from system property to match Java server.");
                     }
                     portPropertyApplied = true;
+                    udpPortPropertyApplied = true;
                 }
             }
 
@@ -451,6 +456,7 @@ public class GeyserImpl implements GeyserApi, EventRegistrar {
                 } else {
                     logger.info("Port set from system property: " + port);
                 }
+                udpPortPropertyApplied = true;
             }
 
 
@@ -467,6 +473,8 @@ public class GeyserImpl implements GeyserApi, EventRegistrar {
                 }
             }
         }
+
+        NetherNetPortProperties.apply(config.bedrock(), udpPortPropertyApplied, System::getProperty, logger);
 
         String stunDiscoveryProperty = System.getProperty("geyserStunDiscovery", "");
         if (!stunDiscoveryProperty.isEmpty()) {
@@ -598,13 +606,17 @@ public class GeyserImpl implements GeyserApi, EventRegistrar {
 
     /**
      * Creates the NetherNet manager and starts its server, which takes the
-     * Bedrock address and port: ICE on UDP, HTTP signaling on TCP. Any
-     * failure here leaves Bedrock players no way in.
+     * Bedrock address with ICE on the NetherNet UDP port and HTTP signaling
+     * on its TCP port. Any failure here leaves Bedrock players no way in.
      */
     private void startNethernet() {
         GeyserLogger log = getLogger();
         String address = config().bedrock().address();
-        String port = String.valueOf(config().bedrock().port()); // otherwise we get commas
+        int icePort = config().bedrock().icePort();
+        int signalingPort = config().bedrock().signalingPort();
+        // String.valueOf, otherwise we get commas
+        String port = icePort == signalingPort ? String.valueOf(icePort)
+                : icePort + " (UDP), " + signalingPort + " (TCP)";
         try {
             NethernetIds ids = loadOrGenerateNethernetIds(log);
             if (ids != null) {
@@ -631,7 +643,7 @@ public class GeyserImpl implements GeyserApi, EventRegistrar {
         // The address stays out of the line for 0.0.0.0, as before: people
         // seeing it tend to change it
         String where = "0.0.0.0".equals(address) ? "" : address + ", ";
-        String ports = "UDP port " + (ice != null ? ice.getPort() : port) + " (ICE)"
+        String ports = "UDP port " + (ice != null ? ice.getPort() : icePort) + " (ICE)"
                 + (http != null ? " and TCP port " + http.getPort() + " (HTTP signaling)" : ", without HTTP signaling");
         log.info(brand("Started Geyser on " + where + ports));
     }

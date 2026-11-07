@@ -175,7 +175,8 @@ public class GeyserBungeePlugin extends Plugin implements GeyserBootstrap {
 
         // Force-disable query if enabled, or else Geyser won't enable
         for (ListenerInfo info : getProxy().getConfig().getListeners()) {
-            if (info.isQueryEnabled() && info.getQueryPort() == geyserConfig.bedrock().port()) {
+            // Query is UDP, as is NetherNet's port
+            if (info.isQueryEnabled() && info.getQueryPort() == geyserConfig.bedrock().icePort()) {
                 try {
                     Field queryField = ListenerInfo.class.getDeclaredField("queryEnabled");
                     queryField.setAccessible(true);

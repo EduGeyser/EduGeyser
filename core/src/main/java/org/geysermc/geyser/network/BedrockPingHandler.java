@@ -96,7 +96,7 @@ public final class BedrockPingHandler {
             return null;
         }
         InetSocketAddress virtualHost = hostname == null || hostname.isBlank() ? null
-            : JoinAddress.parse(hostname, config.bedrock().port()).toUnresolved();
+            : JoinAddress.parse(hostname, config.bedrock().signalingPort()).toUnresolved();
         return pingPassthrough.getPingInformation(inetSocketAddress, virtualHost);
     }
 
