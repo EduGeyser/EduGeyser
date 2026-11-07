@@ -25,6 +25,8 @@
 
 package org.geysermc.geyser.util;
 
+import io.github.sendablemetatype.netty.channel.nethernet.nxs.admission.AdmissionPrincipal;
+import io.github.sendablemetatype.netty.channel.nethernet.nxs.admission.TicketId;
 import io.github.sendablemetatype.netty.util.nethernet.TransportIdentityBinding;
 import io.netty.channel.Channel;
 import io.netty.channel.embedded.EmbeddedChannel;
@@ -36,6 +38,7 @@ import org.cloudburstmc.protocol.bedrock.packet.ServerToClientHandshakePacket;
 import org.cloudburstmc.protocol.bedrock.util.EducationTokenValidationResult;
 import org.cloudburstmc.protocol.bedrock.util.EncryptionUtils;
 import org.geysermc.geyser.session.GeyserSession;
+import org.geysermc.geyser.session.auth.AuthData;
 import org.jose4j.json.JsonUtil;
 import org.jose4j.jws.AlgorithmIdentifiers;
 import org.jose4j.jws.JsonWebSignature;
@@ -45,6 +48,7 @@ import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
 import org.mockito.MockedStatic;
 
+import java.net.InetSocketAddress;
 import java.security.KeyPair;
 import java.security.KeyPairGenerator;
 import java.security.PublicKey;
@@ -184,6 +188,72 @@ class LoginEncryptionUtilsTest {
 
         assertFalse(LoginEncryptionUtils.transportAcceptsForwardedLogin(session));
         verify(session).disconnect(anyString());
+    }
+
+    @Test
+    void anNxsJoinBehindWaterdogPEMustStillBeSignedWithTheAdmittedKey() throws Exception {
+        // The service admitted key A; a login under key B with forwarded fields would claim anyone
+        KeyPair admitted = p384KeyPair();
+        Channel channel = nxsChannel(admitted.getPublic());
+        GeyserSession session = forwardingSessionOn(channel);
+
+        LoginEncryptionUtils.validateLogin(session, login(p384KeyPair(), withForwardedFields()));
+
+        verify(session).disconnect(anyString());
+        verify(session, never()).setAuthData(any());
+        assertEquals(TransportIdentityBinding.State.REJECTED, TransportIdentityBinding.state(channel));
+    }
+
+    @Test
+    void anNxsJoinBehindWaterdogPEIsDirectAndItsForwardedFieldsAreIgnored() throws Exception {
+        KeyPair admitted = p384KeyPair();
+        Channel channel = nxsChannel(admitted.getPublic());
+        GeyserSession session = forwardingSessionOn(channel);
+
+        LoginEncryptionUtils.validateLogin(session, login(admitted, withForwardedFields()));
+
+        ArgumentCaptor<AuthData> auth = ArgumentCaptor.forClass(AuthData.class);
+        verify(session).setAuthData(auth.capture());
+        assertEquals("", auth.getValue().xuid(), "the chain's XUID, not the forwarded one");
+        verify(session.getUpstream(), never()).setInetAddress(any());
+        verify(session, never()).disconnect(anyString());
+        assertEquals(TransportIdentityBinding.State.ACCEPTED, TransportIdentityBinding.state(channel));
+    }
+
+    @Test
+    void aLoginWaterdogPEForwardsOverItsOwnConnectionTakesTheForwardedFields() throws Exception {
+        // The ruled WaterdogPE path, unchanged: the proxy's connection proved the proxy's key
+        Channel channel = boundChannel(p384KeyPair().getPublic());
+        GeyserSession session = forwardingSessionOn(channel);
+
+        LoginEncryptionUtils.validateLogin(session, login(p384KeyPair(), withForwardedFields()));
+
+        ArgumentCaptor<AuthData> auth = ArgumentCaptor.forClass(AuthData.class);
+        verify(session).setAuthData(auth.capture());
+        assertEquals(FORWARDED_XUID, auth.getValue().xuid());
+        verify(session.getUpstream()).setInetAddress(new InetSocketAddress(FORWARDED_IP, 0));
+        assertEquals(TransportIdentityBinding.State.ACCEPTED, TransportIdentityBinding.state(channel));
+    }
+
+    private static final String FORWARDED_IP = "203.0.113.9";
+    private static final String FORWARDED_XUID = "2535412345678901";
+
+    private static Map<String, ?> withForwardedFields() {
+        return Map.of("GameVersion", "1.26.62", "Waterdog_IP", FORWARDED_IP, "Waterdog_XUID", FORWARDED_XUID);
+    }
+
+    /** A connection NXS admitted for the key, marked as NetworkM marks it before the endpoint exposes it. */
+    private static Channel nxsChannel(PublicKey admitted) {
+        Channel channel = boundChannel(admitted);
+        channel.attr(AdmissionPrincipal.KEY).set(
+                new AdmissionPrincipal(new TicketId("0123456789abcdef0123456789abcdef"), "12345", "K001"));
+        return channel;
+    }
+
+    private static GeyserSession forwardingSessionOn(Channel channel) {
+        GeyserSession session = sessionOn(channel);
+        when(session.getGeyser().config().advanced().bedrock().useWaterdogpeForwarding()).thenReturn(true);
+        return session;
     }
 
     private static Channel boundChannel(PublicKey proven) {

@@ -560,6 +560,11 @@ public class NetherNetServer {
                     + " server through");
             return null;
         }
+        if (geyser.config().advanced().bedrock().useWaterdogpeForwarding()) {
+            logger.warning(LOG_PREFIX + "\"use-waterdogpe-forwarding\" is on, but players who join through the"
+                    + " signaling service (NXS) do not come through WaterdogPE: their logins count as direct ones,"
+                    + " signed with the key the service admitted, and their forwarded address and XUID are ignored");
+        }
         return new NetherNetNxs(geyser, geyser.getBootstrap().getConfigFolder().resolve("nethernet"), this::nxsPong);
     }
 

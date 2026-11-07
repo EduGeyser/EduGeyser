@@ -25,6 +25,7 @@
 
 package org.geysermc.geyser.util;
 
+import io.github.sendablemetatype.netty.channel.nethernet.nxs.admission.AdmissionPrincipal;
 import io.github.sendablemetatype.netty.util.nethernet.TransportIdentityBinding;
 import io.netty.channel.Channel;
 import net.raphimc.minecraftauth.msa.model.MsaDeviceCode;
@@ -111,7 +112,7 @@ public class LoginEncryptionUtils {
 
             // A proxy re-signs the login with its own key, so the key only lines up for a direct client;
             // a forwarded login spends the binding below, once its forwarded fields are accepted
-            boolean forwarded = geyser.config().advanced().bedrock().useWaterdogpeForwarding();
+            boolean forwarded = forwardedThroughProxy(session);
             if (!forwarded && !transportAcceptsLoginKey(session, identityPublicKey)) {
                 return;
             }
@@ -183,7 +184,7 @@ public class LoginEncryptionUtils {
             String xuid = isEducationClient && session.getEducationServerToken() != null
                     ? session.getEducationServerToken().split("\\|")[1]
                     : extraData.xuid;
-            if (geyser.config().advanced().bedrock().useWaterdogpeForwarding()) {
+            if (forwarded) {
                 String waterdogIp = data.getWaterdogIp();
                 String waterdogXuid = data.getWaterdogXuid();
                 if (waterdogXuid != null && !waterdogXuid.isBlank() && waterdogIp != null && !waterdogIp.isBlank()) {
@@ -234,12 +235,26 @@ public class LoginEncryptionUtils {
     }
 
     /**
+     * Whether the login comes through WaterdogPE ("use-waterdogpe-forwarding"), so the proxy's address
+     * and XUID fields apply and the proxy's own key stands in for the player's. Never on a connection
+     * NXS admitted: the signaling service hands its tokens to players, never to the proxy, so a login
+     * there is the player's own and has to be signed with the key the service admitted, whatever the
+     * setting. Taking forwarded fields there would let anyone holding a token claim another player's
+     * XUID. Upstream Geyser spends an NXS binding on the forwarded path too (5f32ee9b8).
+     */
+    static boolean forwardedThroughProxy(GeyserSession session) {
+        Channel channel = session.getUpstream().getSession().getPeer().getChannel();
+        return session.getGeyser().config().advanced().bedrock().useWaterdogpeForwarding()
+                && channel.attr(AdmissionPrincipal.KEY).get() == null;
+    }
+
+    /**
      * Checks the login's identity key against the key the NetherNet offer proved. Bedrock encryption,
      * whose key exchange would bind the login to its key, never runs (DTLS secures NetherNet), so
      * without this a Login captured from another player could be replayed over a new connection.
      * Real clients sign the Login with the offer's key on every path, Education included (captured
      * 2026-11-05). A connection whose offer proved no key passes; one that is not NetherNet is
-     * refused. Not used behind WaterdogPE, see {@link #transportAcceptsForwardedLogin}.
+     * refused. Not used for a login WaterdogPE forwarded, see {@link #forwardedThroughProxy}.
      *
      * @return whether the login may go on; if not, the session is being disconnected
      */
