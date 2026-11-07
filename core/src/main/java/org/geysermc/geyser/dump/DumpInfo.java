@@ -182,9 +182,14 @@ public class DumpInfo {
             Registries.BEDROCK_ENTITY_DEFINITIONS.get().values().stream().filter(def -> def instanceof CustomEntityDefinition).toArray().length
         );
 
-        this.netherNetInfo = geyser.nethernetManager() instanceof NethernetManagerImpl manager
-            ? NetherNetInfo.of(manager.announced(), manager.httpSignalingAddress(),
-                manager.nxs() == null ? null : manager.nxs().published()) : null;
+        if (geyser.nethernetManager() instanceof NethernetManagerImpl manager) {
+            // Read once: a shutdown can clear it in between
+            NetherNetNxs nxs = manager.nxs();
+            this.netherNetInfo = NetherNetInfo.of(manager.announced(), manager.httpSignalingAddress(),
+                nxs == null ? null : nxs.published());
+        } else {
+            this.netherNetInfo = null;
+        }
     }
 
     private JsonElement toGson(ConfigurationNode node) {

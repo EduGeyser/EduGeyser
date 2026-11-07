@@ -159,8 +159,9 @@ public class NetherNetCommand extends GeyserCommand {
             return;
         }
 
-        if (geyser.nethernetManager() instanceof NethernetManagerImpl manager && manager.iceAddress() != null) {
-            source.sendMessage("NXS players connect to UDP " + NetUtil.toSocketAddressString(manager.iceAddress()) + ".");
+        InetSocketAddress ice = geyser.nethernetManager() instanceof NethernetManagerImpl manager ? manager.iceAddress() : null;
+        if (ice != null) {
+            source.sendMessage("NXS players connect to UDP " + NetUtil.toSocketAddressString(ice) + ".");
         }
         source.sendMessage("Game outcomes the signaling service did not take: " + nxs.gameOutcomes().droppedEvents() + ".");
         source.sendMessage(connectivityChecks(nxs.pollDiagnosticResults()));
