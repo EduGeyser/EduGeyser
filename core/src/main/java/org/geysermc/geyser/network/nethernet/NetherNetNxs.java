@@ -64,6 +64,7 @@ import java.util.concurrent.CompletionException;
 import java.util.concurrent.CompletionStage;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
 import java.util.function.Supplier;
 
 /**
@@ -157,13 +158,12 @@ public final class NetherNetNxs implements EventRegistrar {
             Path state = runtime.stateDirectory();
             DtlsCertificate certificate = DtlsCertificate.loadOrCreate(state.resolve("host-cert.pem"),
                     state.resolve("host-key.pem"));
-            NxsHost.Host host = NxsHost.open(endpoint, runtime, certificate).toCompletableFuture()
-                    .get(OPEN_WAIT.toMillis(), TimeUnit.MILLISECONDS);
+            NxsHost.Host host = awaitHost(NxsHost.open(endpoint, runtime, certificate).toCompletableFuture());
             opened = host.transport();
             host.warnings().forEach(warning -> logger.warning(LOG_PREFIX + warning));
             ProviderClient created = new ProviderClient(runtime.clientConfiguration(), store, opened,
                     () -> statusSupplier.get(), () -> health(runtime.capacity()), this::log);
-            // The client owns both from here on
+            // The client owns both from here on: stopping it closes the transport and releases the store
             store = null;
             HostTransport owned = opened;
             opened = null;
@@ -172,10 +172,16 @@ public final class NetherNetNxs implements EventRegistrar {
                     stopped = created.stop();
                     return;
                 }
-                shutdown = new ProviderShutdown(created::stop, () -> { },
-                        message -> logger.warning(LOG_PREFIX + message));
                 client = created;
                 transport = owned;
+                try {
+                    shutdown = new ProviderShutdown(created::stop, () -> { },
+                            message -> logger.warning(LOG_PREFIX + message));
+                } catch (RuntimeException e) {
+                    // The JVM is already shutting down and takes no hook, so nothing else would stop the client
+                    stopClient();
+                    throw e;
+                }
             }
             created.start().whenComplete((registration, failure) -> registered(created, registration, failure));
         } catch (Throwable e) {
@@ -185,7 +191,12 @@ public final class NetherNetNxs implements EventRegistrar {
                     stopped = closing;
                 }
             }
-            logFailure("NXS did not start", e);
+            if (stopping()) {
+                // A stop that closed the endpoint ends the start this way; nothing went wrong
+                logger.debug(LOG_PREFIX + "The start ended with the stop: " + failure(e));
+            } else {
+                logFailure("NXS did not start", e);
+            }
         } finally {
             if (store != null) {
                 try {
@@ -193,6 +204,33 @@ public final class NetherNetNxs implements EventRegistrar {
                 } catch (IOException ignored) {
                 }
             }
+        }
+    }
+
+    /**
+     * Waits for NXS to start on the endpoint. NetworkM attached its source to the endpoint before this, and a start
+     * that fails closes it by itself; one that finishes after the wait is left to this, and stop waits for it.
+     */
+    private NxsHost.Host awaitHost(CompletableFuture<NxsHost.Host> hosting) throws Exception {
+        try {
+            return hosting.get(OPEN_WAIT.toMillis(), TimeUnit.MILLISECONDS);
+        } catch (TimeoutException | InterruptedException e) {
+            CompletionStage<Void> late = hosting.handle((host, failure) -> host)
+                    .thenCompose(host -> host == null ? CompletableFuture.<Void>completedFuture(null)
+                            : host.transport().close());
+            synchronized (lifecycle) {
+                stopped = late;
+            }
+            if (e instanceof InterruptedException) {
+                Thread.currentThread().interrupt();
+            }
+            throw e;
+        }
+    }
+
+    private boolean stopping() {
+        synchronized (lifecycle) {
+            return stopping;
         }
     }
 
