@@ -125,6 +125,18 @@ class NetherNetSecretTest {
     }
 
     @Test
+    void namesItsFileOnlyByTheSameRule(@TempDir Path dir) throws Exception {
+        NetherNetSecret bare = new NetherNetSecret("./secret-password", dir);
+        assertEquals("the password file", bare.describeFile());
+        assertFalse(bare.missingFile().contains("secret-password"), bare.missingFile());
+
+        write(dir, "secret-password", "hunter2");
+        assertEquals("the password file " + dir.resolve("secret-password"), bare.describeFile(), "something is there");
+        assertEquals("the password file " + dir.resolve("missing") + " does not exist",
+                new NetherNetSecret("file:missing", dir).missingFile());
+    }
+
+    @Test
     void neverShowsTheValue(@TempDir Path dir) {
         assertFalse(new NetherNetSecret("hunter2", dir).toString().contains("hunter2"));
     }

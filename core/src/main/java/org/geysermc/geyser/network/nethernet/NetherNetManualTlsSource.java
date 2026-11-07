@@ -30,7 +30,9 @@ import io.netty.handler.ssl.SslContext;
 import io.netty.handler.ssl.SslContextBuilder;
 import org.geysermc.geyser.GeyserLogger;
 
+import java.io.IOException;
 import java.nio.file.Files;
+import java.nio.file.NoSuchFileException;
 import java.nio.file.Path;
 import java.nio.file.attribute.FileTime;
 import java.security.cert.CertificateParsingException;
@@ -192,27 +194,35 @@ final class NetherNetManualTlsSource implements TlsContextSelector {
     }
 
     private void checkFiles() {
-        try {
-            List<FileState> states = new ArrayList<>();
-            for (Path file : files.files()) {
-                if (!Files.exists(file)) {
-                    withdrawForMissing(file);
-                    return;
-                }
+        List<FileState> states = new ArrayList<>();
+        for (Path file : files.files()) {
+            try {
                 states.add(new FileState(file, Files.getLastModifiedTime(file), Files.size(file)));
+            } catch (NoSuchFileException e) {
+                withdrawForMissing(file);
+                return;
+            } catch (IOException | RuntimeException e) {
+                // Without the exception's message, which repeats the path,
+                // and the path itself only where it cannot be the password
+                logger.debug(LOG_PREFIX + "HTTPS certificate check failed for " + files.describe(file) + " ("
+                        + e.getClass().getSimpleName() + ")");
+                return;
             }
-            missingWarned = false;
-            if (!states.equals(fileStates)) {
-                fileStates = states;
-                reload();
-            }
-        } catch (Exception e) {
-            logger.debug(LOG_PREFIX + "HTTPS certificate check failed: " + e.getMessage());
+        }
+        missingWarned = false;
+        if (!states.equals(fileStates)) {
+            fileStates = states;
+            reload();
         }
     }
 
+    /**
+     * Withdraws TLS while a file is missing. The file is named only as
+     * {@link NetherNetTlsFiles#missing} allows: this problem also reaches the
+     * HTTP signaling startup line.
+     */
     private void withdrawForMissing(Path file) {
-        problem = file + " does not exist";
+        problem = files.missing(file);
         if (!missingWarned) {
             missingWarned = true;
             logger.warning(LOG_PREFIX + "The HTTPS certificate from " + files.origin().description()

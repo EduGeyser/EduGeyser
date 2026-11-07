@@ -101,8 +101,22 @@ sealed interface NetherNetTlsFiles {
 
     Origin origin();
 
-    /** Every file the material is read from; a change to any of them reloads it. */
+    /**
+     * Every file the material is read from; a change to any of them reloads
+     * it. A password file is among them, so messages name these files only
+     * through {@link #describe} and {@link #missing}.
+     */
     List<Path> files();
+
+    /**
+     * How a message may name one of {@link #files}: a password file follows
+     * the rule of {@link NetherNetSecret#describeFile}, as a password that
+     * only looks like a path may be the password itself.
+     */
+    String describe(Path file);
+
+    /** Why the material cannot be read while one of {@link #files} is missing, naming it as {@link #describe} does. */
+    String missing(Path file);
 
     /**
      * Reads the material from the files.
@@ -147,6 +161,16 @@ sealed interface NetherNetTlsFiles {
         @Override
         public List<Path> files() {
             return withPasswordFile(password, certificate, privateKey);
+        }
+
+        @Override
+        public String describe(Path file) {
+            return describeWatched(password, file);
+        }
+
+        @Override
+        public String missing(Path file) {
+            return missingWatched(password, file);
         }
 
         @Override
@@ -250,6 +274,16 @@ sealed interface NetherNetTlsFiles {
         }
 
         @Override
+        public String describe(Path file) {
+            return describeWatched(password, file);
+        }
+
+        @Override
+        public String missing(Path file) {
+            return missingWatched(password, file);
+        }
+
+        @Override
         public Material read() throws IOException, GeneralSecurityException {
             char[] secret = password.resolve().toCharArray();
             try {
@@ -293,6 +327,14 @@ sealed interface NetherNetTlsFiles {
     private static List<Path> withPasswordFile(NetherNetSecret password, Path... files) {
         Path passwordFile = password.file();
         return passwordFile == null ? List.of(files) : Stream.concat(Stream.of(files), Stream.of(passwordFile)).toList();
+    }
+
+    private static String describeWatched(NetherNetSecret password, Path file) {
+        return file.equals(password.file()) ? password.describeFile() : file.toString();
+    }
+
+    private static String missingWatched(NetherNetSecret password, Path file) {
+        return file.equals(password.file()) ? password.missingFile() : file + " does not exist";
     }
 
     /** Reads a file whole, with an error that names the file and says why it cannot be read. */

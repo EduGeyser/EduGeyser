@@ -107,6 +107,7 @@ class DumpCensorTest {
 
         assertEquals("***", dumpedHttps("hunter2").node("password").getString());
         assertEquals("***", dumpedHttps("file:secrets/tls").node("password").getString());
+        assertEquals("***", dumpedHttps("./secret-password").node("password").getString(), "a bare path may be the password");
         assertEquals("tls.p12", dumpedHttps("hunter2").node("certificate").getString());
         assertEquals("", dumpedHttps("").node("password").getString(), "an unset password stays visible as unset");
     }

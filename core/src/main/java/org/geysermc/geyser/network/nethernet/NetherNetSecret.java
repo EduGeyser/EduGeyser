@@ -52,6 +52,8 @@ record NetherNetSecret(String value, Path directory) {
     /** Above this a file is something other than a secret, and reading it is a waste. */
     private static final long MAX_BYTES = 16384;
     private static final String FILE = "file:";
+    private static final String NOT_SHOWN = "the password looks like a file path, but no file is there. It is not"
+            + " shown, since it may be the password itself; to name a file, write file:<path>";
 
     /** An unset secret. */
     static NetherNetSecret none() {
@@ -107,11 +109,27 @@ record NetherNetSecret(String value, Path directory) {
         } catch (IOException | RuntimeException e) {
             if (!trimmed.startsWith(FILE) && !exists(source)) {
                 // A literal secret that only looks like a path must not reach the log, nor its cause's message
-                throw new IOException("the password looks like a file path, but no file is there. It is not shown,"
-                        + " since it may be the password itself; to name a file, write file:<path>");
+                throw new IOException(NOT_SHOWN);
             }
             throw new IOException("the password file " + source + " cannot be read (" + e.getMessage() + ")", e);
         }
+    }
+
+    /**
+     * How a message may name the file the secret is read from, by the rule
+     * {@link #resolve} follows: with its path for a {@code file:} reference
+     * or when something is there, else without it.
+     */
+    String describeFile() {
+        Path file = file();
+        return file != null && (value.trim().startsWith(FILE) || exists(file))
+                ? "the password file " + file : "the password file";
+    }
+
+    /** Why the secret cannot be read while its file is missing, by the same rule. */
+    String missingFile() {
+        Path file = file();
+        return file != null && value.trim().startsWith(FILE) ? "the password file " + file + " does not exist" : NOT_SHOWN;
     }
 
     private static boolean exists(Path path) {

@@ -30,6 +30,9 @@ import org.geysermc.geyser.GeyserLogger;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
+import org.mockito.Mockito;
+import org.mockito.invocation.Invocation;
+
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.security.KeyPair;
@@ -103,5 +106,34 @@ class NetherNetManualTlsSourceTest {
         KeyPair key = NetherNetKeyFiles.generateP256();
         Files.writeString(dir.resolve("chain.pem"), NetherNetTlsFilesTest.pem(NetherNetTlsFilesTest.selfSigned(key)));
         Files.writeString(dir.resolve("key.pem"), NetherNetTlsFilesTest.pem(new JcaPKCS8Generator(key.getPrivate(), null)));
+    }
+
+    @Test
+    void neverNamesAPasswordThatOnlyLooksLikeAPath(@TempDir Path dir) throws Exception {
+        // A value that only looks like a path, with nothing there, may be the password itself
+        Files.writeString(dir.resolve("tls.p12"), "never read while the password file is missing");
+        NetherNetManualTlsSource source = new NetherNetManualTlsSource(
+                NetherNetTlsFilesTest.configured(dir, "tls.p12", "", "./secret-password"), logger, () -> now);
+
+        // The startup line repeats this problem
+        String problem = source.currentProblem();
+        assertFalse(problem.contains("secret-password"), problem);
+        assertTrue(problem.contains("file:<path>"), problem);
+        assertNull(source.select(null));
+        verify(logger).warning(contains("cannot be used"));
+        for (Invocation call : Mockito.mockingDetails(logger).getInvocations()) {
+            for (Object argument : call.getArguments()) {
+                assertFalse(String.valueOf(argument).contains("secret-password"), call::toString);
+            }
+        }
+    }
+
+    @Test
+    void namesAMissingPasswordFileThatTheConfigNamesAsOne(@TempDir Path dir) throws Exception {
+        Files.writeString(dir.resolve("tls.p12"), "never read while the password file is missing");
+        NetherNetManualTlsSource source = new NetherNetManualTlsSource(
+                NetherNetTlsFilesTest.configured(dir, "tls.p12", "", "file:secret-password"), logger, () -> now);
+
+        assertEquals("the password file " + dir.resolve("secret-password") + " does not exist", source.currentProblem());
     }
 }
