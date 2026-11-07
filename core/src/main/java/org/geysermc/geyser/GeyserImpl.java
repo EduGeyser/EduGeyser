@@ -82,6 +82,7 @@ import org.geysermc.geyser.impl.MinecraftVersionImpl;
 import org.geysermc.geyser.level.BedrockDimension;
 import org.geysermc.geyser.level.WorldManager;
 import org.geysermc.geyser.network.bedrock.GameProtocol;
+import org.geysermc.geyser.network.nethernet.NetherNetPortProperties;
 import org.geysermc.geyser.network.nethernet.NethernetManagerImpl;
 import org.geysermc.geyser.ping.GeyserLegacyPingPassthrough;
 import org.geysermc.geyser.registry.Registries;
@@ -392,16 +393,19 @@ public class GeyserImpl implements GeyserApi, EventRegistrar {
             return;
         }
 
+        // -DgeyserUdpPort and -DpluginUdpPort keep the names hosting panels set. They take a port, or "server" for the
+        // Java server's, and set the Bedrock port for TCP and UDP: NetherNet's UDP port follows it even over
+        // "webrtc-port", HTTP signaling's TCP port unless "port" under "signaling" is set (see NetherNetPortProperties)
         String geyserUdpPort = System.getProperty("geyserUdpPort", "");
         String pluginUdpPort = geyserUdpPort.isEmpty() ? System.getProperty("pluginUdpPort", "") : geyserUdpPort;
         if ("-1".equals(pluginUdpPort)) {
             throw new UnsupportedOperationException("This hosting/service provider does not support applications running on the UDP port");
         }
-        boolean portPropertyApplied = false;
         String pluginUdpAddress = System.getProperty("geyserUdpAddress", System.getProperty("pluginUdpAddress", ""));
 
-        if (platformType() != PlatformType.STANDALONE) {
-            int javaPort = bootstrap.getServerPort();
+        boolean pluginPlatform = platformType() != PlatformType.STANDALONE;
+        int javaPort = pluginPlatform ? bootstrap.getServerPort() : -1;
+        if (pluginPlatform) {
             String serverAddress = bootstrap.getServerBindAddress();
             if (!serverAddress.isEmpty() && !"0.0.0.0".equals(serverAddress)) {
                 config.java().address(serverAddress);
@@ -421,19 +425,6 @@ public class GeyserImpl implements GeyserApi, EventRegistrar {
                 config.java().port(javaPort);
             }
 
-            boolean forceMatchServerPort = "server".equals(pluginUdpPort);
-            if ((config.bedrock().cloneRemotePort() || forceMatchServerPort) && javaPort != -1) {
-                config.bedrock().port(javaPort);
-                if (forceMatchServerPort) {
-                    if (geyserUdpPort.isEmpty()) {
-                        logger.info("Port set from system generic property to match Java server.");
-                    } else {
-                        logger.info("Port set from system property to match Java server.");
-                    }
-                    portPropertyApplied = true;
-                }
-            }
-
             if ("server".equals(pluginUdpAddress)) {
                 String address = bootstrap.getServerBindAddress();
                 if (!address.isEmpty()) {
@@ -442,17 +433,6 @@ public class GeyserImpl implements GeyserApi, EventRegistrar {
             } else if (!pluginUdpAddress.isEmpty()) {
                 config.bedrock().address(pluginUdpAddress);
             }
-
-            if (!portPropertyApplied && !pluginUdpPort.isEmpty()) {
-                int port = Integer.parseInt(pluginUdpPort);
-                config.bedrock().port(port);
-                if (geyserUdpPort.isEmpty()) {
-                    logger.info("Port set from generic system property: " + port);
-                } else {
-                    logger.info("Port set from system property: " + port);
-                }
-            }
-
 
             if (platformType() != PlatformType.VIAPROXY) {
                 boolean floodgatePresent = bootstrap.testFloodgatePluginPresent();
@@ -467,6 +447,9 @@ public class GeyserImpl implements GeyserApi, EventRegistrar {
                 }
             }
         }
+
+        // clone-remote-port and the UDP port property, then NetherNet's own port properties
+        NetherNetPortProperties.apply(config.bedrock(), pluginPlatform, javaPort, System::getProperty, logger);
 
         String stunDiscoveryProperty = System.getProperty("geyserStunDiscovery", "");
         if (!stunDiscoveryProperty.isEmpty()) {
@@ -598,13 +581,17 @@ public class GeyserImpl implements GeyserApi, EventRegistrar {
 
     /**
      * Creates the NetherNet manager and starts its server, which takes the
-     * Bedrock address and port: ICE on UDP, HTTP signaling on TCP. Any
-     * failure here leaves Bedrock players no way in.
+     * Bedrock address with ICE on the NetherNet UDP port and HTTP signaling
+     * on its TCP port. Any failure here leaves Bedrock players no way in.
      */
     private void startNethernet() {
         GeyserLogger log = getLogger();
         String address = config().bedrock().address();
-        String port = String.valueOf(config().bedrock().port()); // otherwise we get commas
+        int icePort = config().bedrock().icePort();
+        int signalingPort = config().bedrock().signalingPort();
+        // A string, as the locale message would group the digits of a number with commas
+        String port = icePort == signalingPort ? String.valueOf(icePort)
+                : icePort + " (UDP), " + signalingPort + " (TCP)";
         try {
             NethernetIds ids = loadOrGenerateNethernetIds(log);
             if (ids != null) {
@@ -631,7 +618,7 @@ public class GeyserImpl implements GeyserApi, EventRegistrar {
         // The address stays out of the line for 0.0.0.0, as before: people
         // seeing it tend to change it
         String where = "0.0.0.0".equals(address) ? "" : address + ", ";
-        String ports = "UDP port " + (ice != null ? ice.getPort() : port) + " (ICE)"
+        String ports = "UDP port " + (ice != null ? ice.getPort() : icePort) + " (ICE)"
                 + (http != null ? " and TCP port " + http.getPort() + " (HTTP signaling)" : ", without HTTP signaling");
         log.info(brand("Started Geyser on " + where + ports));
     }

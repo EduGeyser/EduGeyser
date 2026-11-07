@@ -42,9 +42,9 @@ import java.util.stream.Stream;
 /**
  * What the NetherNet endpoint tells joining players about its own addresses, read from
  * "advertise-addresses", "stun-discovery" and their system properties. NetworkM applies it to the
- * answers of every join source. That matters most for join codes and connection IDs: their joins
- * come over Xbox signaling with no Host header, so behind a router or in a container only an
- * advertised or a discovered address gives those players a public candidate.
+ * answers of every join source. That matters most for joins over Xbox signaling (join codes,
+ * connection IDs and friend list joins): they come with no Host header, so behind a router or in a
+ * container only an advertised or a discovered address gives those players a public candidate.
  *
  * @param advertised  the advertised addresses, IP literals parsed and names left unresolved for
  *                    NetworkM to look up when the endpoint binds, port 0 standing for the ICE port
@@ -53,11 +53,12 @@ import java.util.stream.Stream;
 record NetherNetAddressing(List<InetSocketAddress> advertised, List<InetSocketAddress> stunServers) {
 
     /**
-     * Asked unless -DgeyserStunServers says otherwise, as upstream Geyser does. Two operators, as
-     * either may be blocked where a server runs.
+     * Asked unless -DgeyserStunServers says otherwise: upstream Geyser's two, plus Nextcloud's, an
+     * operator outside the US. Three operators, as any of them may be blocked where a server runs.
+     * All three answered a binding request on 2026-11-07.
      */
-    static final List<String> DEFAULT_STUN_SERVERS =
-            List.of("stun:stun.cloudflare.com:3478", "stun:stun.l.google.com:19302");
+    static final List<String> DEFAULT_STUN_SERVERS = List.of("stun:stun.cloudflare.com:3478",
+            "stun:stun.l.google.com:19302", "stun:stun.nextcloud.com:443");
 
     private static final String LOG_PREFIX = "[Nethernet] ";
     private static final String ADVERTISE_PROPERTY = "geyserAdvertiseAddresses";

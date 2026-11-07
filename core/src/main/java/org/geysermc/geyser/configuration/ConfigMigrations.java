@@ -36,8 +36,10 @@ import org.spongepowered.configurate.transformation.ConfigurationTransformation;
 import org.spongepowered.configurate.transformation.TransformAction;
 
 import java.util.Arrays;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Objects;
+import java.util.Set;
 import java.util.UUID;
 import java.util.function.BiFunction;
 
@@ -53,11 +55,11 @@ public class ConfigMigrations {
         should really only be used when you are not able to use a proper firewall (usually true with shared hosting providers etc.).
         Keeping this list empty means there is no IP address whitelist.
         IP addresses, subnets, and links to plain text files are supported.""";
-    /** The default up to config version 7, from when the Bedrock port was RakNet's, UDP only. */
+    /** The default up to EduGeyser's config version 7, from when the Bedrock port was RakNet's, UDP only. */
     private static final String OLD_PORT_COMMENT = """
         The port that Geyser will listen on for incoming Bedrock connections.
         Since Minecraft: Bedrock Edition uses UDP, this port must allow UDP traffic.""";
-    /** The default up to config version 7, which had operators firewall the Bedrock port on UDP only. */
+    /** Upstream Geyser's default, and EduGeyser's up to config version 7: it has operators firewall the Bedrock port on UDP only. */
     private static final String OLD_VALIDATE_LOGIN_COMMENT = """
         This option disables the auth step Geyser performs for connecting Bedrock players.
         It can be used to allow connections from ProxyPass and WaterdogPE. In these cases, make sure that users
@@ -211,10 +213,37 @@ public class ConfigMigrations {
             .addVersion(7, ConfigurationTransformation.builder()
                 .addAction(path("gameplay", "show-cooldown"), rename(new Object[] { "gameplay", "cooldown-type" }))
                 .build())
+            // From here on each version number means what it means in upstream Geyser, so a config moves between
+            // Geyser and EduGeyser in both directions. Keys only EduGeyser has take no version number.
+            // Upstream's NetherNet options (8), advertise-addresses (9) and NXS options (10) are new keys only
+            .addVersion(8, ConfigurationTransformation.empty())
+            .addVersion(9, ConfigurationTransformation.empty())
+            .addVersion(10, ConfigurationTransformation.empty())
+            // Upstream's one advertise-addresses list and stun-discovery switch for every signaling mode
+            .addVersion(11, ConfigurationTransformation.builder()
+                .addAction(path("bedrock", "signaling"), (path, value) -> {
+                    Set<String> addresses = new LinkedHashSet<>();
+                    for (String mode : List.of("builtin", "nxs")) {
+                        ConfigurationNode side = value.node(mode);
+                        side.node("advertise-addresses").getList(String.class, List.of()).stream()
+                            .map(String::trim)
+                            .filter(address -> !address.isEmpty())
+                            .forEach(addresses::add);
+                        side.removeChild("advertise-addresses");
+                    }
+                    if (!addresses.isEmpty()) {
+                        value.node("advertise-addresses").setList(String.class, List.copyOf(addresses));
+                    }
+                    return null;
+                })
+                .addAction(path("advanced", "nxs", "stun-discovery"), (path, value) ->
+                    new Object[]{ "bedrock", "signaling", "stun-discovery" })
+                .build())
             // RakNet is gone: listing HAProxy proxies turns the protocol on for HTTP signaling, and the keys only
-            // RakNet read ("mtu", "broadcast-port") are not written back
-            // Version 8 also adds bedrock.signaling (advertise-addresses, stun-discovery), which needs no action
-            .addVersion(8, ConfigurationTransformation.builder()
+            // RakNet read ("mtu", "broadcast-port") are not written back. Unlike upstream's, the fold treats a
+            // missing switch as off, and "prefer-signaling-proxy-address" keeps its default: upstream sets it for
+            // configs with proxies, to keep a behavior of its own built-in signaling that EduGeyser never had
+            .addVersion(12, ConfigurationTransformation.builder()
                 .addAction(path("advanced", "bedrock"), (path, value) -> {
                     foldHaproxySwitch(value, bootstrap == null ? null : bootstrap.getGeyserLogger());
                     // 0, the default, broadcast the Bedrock port

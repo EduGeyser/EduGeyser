@@ -43,6 +43,8 @@ import org.geysermc.geyser.GeyserBootstrap;
 import org.geysermc.geyser.GeyserImpl;
 import org.geysermc.geyser.GeyserLogger;
 import org.geysermc.geyser.configuration.GeyserConfig;
+import org.geysermc.geyser.configuration.GeyserPluginConfig;
+import org.geysermc.geyser.configuration.GeyserRemoteConfig;
 import org.geysermc.geyser.event.type.GeyserBedrockPingEventImpl;
 import org.geysermc.geyser.network.BedrockPingHandler;
 import org.junit.jupiter.api.AfterEach;
@@ -130,7 +132,7 @@ class NetherNetServerTest {
             }
         };
         NetherNetServer server = new NetherNetServer(geyser(config, freeUdpPort()), group, "1234567890", "custom",
-                "device", () -> engine);
+                "device", threshold -> engine);
 
         assertFalse(server.start());
 
@@ -158,6 +160,23 @@ class NetherNetServerTest {
         verify(logger, times(1)).warning(anyString());
     }
 
+    @Test
+    void httpSignalingStaysOffTheJavaServersPortOnAPluginPlatform() {
+        GeyserPluginConfig plugin = mock(GeyserPluginConfig.class, RETURNS_DEEP_STUBS);
+        when(plugin.java().port()).thenReturn(25565);
+        when(plugin.bedrock().signalingPort()).thenReturn(25565);
+        assertTrue(NetherNetServer.signalingPortIsTheJavaServers(plugin));
+
+        when(plugin.bedrock().signalingPort()).thenReturn(25566);
+        assertFalse(NetherNetServer.signalingPortIsTheJavaServers(plugin), "a second TCP port brings it back");
+
+        // Standalone connects to a Java server that may run anywhere, so only the bind can tell
+        GeyserRemoteConfig remote = mock(GeyserRemoteConfig.class, RETURNS_DEEP_STUBS);
+        when(remote.java().port()).thenReturn(25565);
+        when(remote.bedrock().signalingPort()).thenReturn(25565);
+        assertFalse(NetherNetServer.signalingPortIsTheJavaServers(remote));
+    }
+
     /** An endpoint that never binds, so it needs no engine. */
     private NetherNetServerChannel registeredEndpoint() throws InterruptedException {
         NetherNetServerChannel endpoint = NetherNetChannelFactory.server(() -> fail("no engine needed")).newChannel();
@@ -175,6 +194,8 @@ class NetherNetServerTest {
         when(bootstrap.getConfigFolder()).thenReturn(configFolder);
         when(config.bedrock().address()).thenReturn("127.0.0.1");
         when(config.bedrock().port()).thenReturn(port);
+        when(config.bedrock().icePort()).thenReturn(port);
+        when(config.bedrock().signalingPort()).thenReturn(port);
         return geyser;
     }
 

@@ -44,6 +44,7 @@ import org.geysermc.geyser.command.GeyserCommandSource;
 import org.geysermc.geyser.configuration.GeyserPluginConfig;
 import org.geysermc.geyser.dump.BootstrapDumpInfo;
 import org.geysermc.geyser.network.bedrock.GameProtocol;
+import org.geysermc.geyser.network.nethernet.NetherNetPortProperties;
 import org.geysermc.geyser.ping.GeyserLegacyPingPassthrough;
 import org.geysermc.geyser.ping.IGeyserPingPassthrough;
 import org.geysermc.geyser.platform.bungeecord.command.BungeeCommandSource;
@@ -173,9 +174,11 @@ public class GeyserBungeePlugin extends Plugin implements GeyserBootstrap {
             }
         }
 
-        // Force-disable query if enabled, or else Geyser won't enable
+        // Force-disable query if enabled, or else Geyser won't enable. Query is UDP, as is NetherNet's port, which
+        // GeyserImpl only resolves when it starts, so it is resolved the same way here
+        int icePort = NetherNetPortProperties.icePort(geyserConfig.bedrock(), true, getServerPort(), System::getProperty);
         for (ListenerInfo info : getProxy().getConfig().getListeners()) {
-            if (info.isQueryEnabled() && info.getQueryPort() == geyserConfig.bedrock().port()) {
+            if (info.isQueryEnabled() && info.getQueryPort() == icePort) {
                 try {
                     Field queryField = ListenerInfo.class.getDeclaredField("queryEnabled");
                     queryField.setAccessible(true);

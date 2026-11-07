@@ -102,16 +102,16 @@ class DumpCensorTest {
 
     @Test
     void censorsTheAnnouncedNetherNetAddresses() throws Exception {
-        NetherNetServer.Announced announced = new NetherNetServer.Announced(
+        NetherNetServer.Announced announced = new NetherNetServer.Announced(19132,
             List.of(endpoint("1.2.3.4", 19132), endpoint("192.168.1.5", 19132)), true,
             List.of(endpoint("2606:4700::1", 19132)));
 
-        DumpInfo.NetherNetInfo info = DumpInfo.NetherNetInfo.of(announced);
+        DumpInfo.NetherNetInfo info = DumpInfo.NetherNetInfo.of(announced, null);
         assertEquals(List.of("***:19132", "192.168.1.5:19132"), info.advertised());
         assertEquals(List.of("[***]:19132"), info.discovered());
 
         AsteriskSerializer.showSensitive = true;
-        assertEquals(List.of("[2606:4700::1]:19132"), DumpInfo.NetherNetInfo.of(announced).discovered());
+        assertEquals(List.of("[2606:4700::1]:19132"), DumpInfo.NetherNetInfo.of(announced, null).discovered());
     }
 
     @Test

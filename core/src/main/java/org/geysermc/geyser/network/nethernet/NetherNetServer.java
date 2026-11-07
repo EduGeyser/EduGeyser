@@ -40,6 +40,7 @@ import io.github.sendablemetatype.netty.channel.nethernet.signaling.http.StatusR
 import io.github.sendablemetatype.netty.channel.nethernet.signaling.http.TlsContextSelector;
 import io.github.sendablemetatype.netty.util.address.TrustedProxies;
 import io.github.sendablemetatype.netty.util.nethernet.ServerIdentity;
+import io.github.sendablemetatype.webrtc.logging.Logging.Severity;
 import io.netty.bootstrap.ServerBootstrap;
 import io.netty.channel.Channel;
 import io.netty.channel.ChannelFuture;
@@ -54,6 +55,7 @@ import org.cloudburstmc.protocol.bedrock.BedrockPong;
 import org.geysermc.geyser.GeyserImpl;
 import org.geysermc.geyser.GeyserLogger;
 import org.geysermc.geyser.configuration.GeyserConfig;
+import org.geysermc.geyser.configuration.GeyserPluginConfig;
 import org.geysermc.geyser.network.BedrockPingHandler;
 import org.geysermc.geyser.ping.GeyserPingInfo;
 
@@ -74,7 +76,7 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.function.BooleanSupplier;
-import java.util.function.Supplier;
+import java.util.function.Function;
 
 /**
  * Nethernet (WebRTC) server: one NetherNet endpoint that takes joins from two
@@ -82,11 +84,13 @@ import java.util.function.Supplier;
  * Bedrock protocol pipeline. This is EduGeyser's only Bedrock transport.
  *
  * Xbox RPC signaling (Type 7, JSON-RPC: the messaging endpoint with PmsgId,
- * used by Bedrock 26.20+ and Education 26.30+) carries join codes and
- * connection IDs. HTTP signaling, served on TCP at the Bedrock address and
- * port, carries direct connections and joins from the Education server list.
- * Every player's ICE traffic arrives on one UDP port, the Bedrock port, for
- * joins from either source. LAN discovery stays off.
+ * used by Bedrock 26.20+ and Education 26.30+), Xbox signaling for short,
+ * carries join codes, connection IDs and friend list joins. HTTP signaling,
+ * served on TCP at the Bedrock address and the signaling port, carries
+ * direct connections and joins from the Education server list. Every
+ * player's ICE traffic arrives on one UDP port, the NetherNet UDP port, for
+ * joins from either source. Both ports are the Bedrock port unless
+ * configured apart. LAN discovery stays off.
  *
  * The endpoint admits an offer only when it proves the client's key, attested
  * by Minecraft's issuer or not (Education's self signed tokens prove theirs
@@ -142,8 +146,11 @@ public class NetherNetServer {
     private final PlayFabTokenManager tokenManager;
     private final String connectionId;
     private final BedrockPingHandler pingResponder;
-    /** Creates the WebRTC engine each endpoint owns and closes with itself. */
-    private final Supplier<? extends NetherNetEngine> engines;
+    /**
+     * Creates the WebRTC engine each endpoint owns and closes with itself,
+     * passing on libwebrtc's messages from the given severity up.
+     */
+    private final Function<Severity, ? extends NetherNetEngine> engines;
 
     // Tracks live player connections so a real teardown (shutdown or an
     // API-initiated stop with players online) can cleanly disconnect them
@@ -175,6 +182,7 @@ public class NetherNetServer {
     private volatile NetherNetPingSnapshots pingSnapshots;
     private volatile boolean running;
     private volatile InetSocketAddress statusPingAddress;
+    private volatile Severity nativeLogThreshold = Severity.WARNING;
 
     public NetherNetServer(GeyserImpl geyser, EventLoopGroup playerEventLoopGroup,
                            String connectionId, String playfabCustomId, String playfabDeviceId) {
@@ -183,7 +191,7 @@ public class NetherNetServer {
     }
 
     NetherNetServer(GeyserImpl geyser, EventLoopGroup playerEventLoopGroup, String connectionId,
-                    String playfabCustomId, String playfabDeviceId, Supplier<? extends NetherNetEngine> engines) {
+                    String playfabCustomId, String playfabDeviceId, Function<Severity, ? extends NetherNetEngine> engines) {
         this.engines = engines;
         this.geyser = geyser;
         this.logger = geyser.getLogger();
@@ -210,6 +218,11 @@ public class NetherNetServer {
             return true;
         }
 
+        // Before anything logs, so every NetherNet line follows it from the first
+        NetherNetDebugLogging.Settings logging = NetherNetDebugLogging.read(
+                geyser.config().advanced().bedrock().nethernetDebug(), System::getProperty, logger);
+        nativeLogThreshold = NetherNetDebugLogging.apply(logging, logger);
+
         passthroughExecutor = Executors.newSingleThreadExecutor(runnable -> {
             Thread thread = new Thread(runnable, "Nethernet Status");
             thread.setDaemon(true);
@@ -220,7 +233,7 @@ public class NetherNetServer {
         // again, so each start gets snapshots of its own.
         NetherNetPingSnapshots snapshots = new NetherNetPingSnapshots(
                 host -> pingResponder.passthrough(statusPingAddress(), host), passthroughExecutor,
-                geyser.config().bedrock().port(), System::nanoTime, logger);
+                geyser.config().bedrock().signalingPort(), System::nanoTime, logger);
         // Before HTTP signaling listens, so early probes find an answer
         snapshots.prime();
         pingSnapshots = snapshots;
@@ -255,8 +268,9 @@ public class NetherNetServer {
         // restarts.
         String pmid = tokenManager.getPmsgId();
         if (mcToken == null) {
-            logger.warning(LOG_PREFIX + "No MCToken from PlayFab yet: join codes and connection IDs wait until"
-                    + " Xbox signaling gets one, which it keeps trying in the background");
+            logger.warning(LOG_PREFIX + "No MCToken from PlayFab yet: joins over Xbox signaling (join codes,"
+                    + " connection IDs and friend list joins) wait until it gets one, which it keeps trying in the"
+                    + " background");
         } else if (pmid != null) {
             logger.info(LOG_PREFIX + "Listening on connection ID: "
                     + connectionId + pmid.replace("-", "").toLowerCase());
@@ -338,7 +352,7 @@ public class NetherNetServer {
         return tokenManager.getPmsgId();
     }
 
-    /** Where the endpoint takes ICE traffic: the Bedrock address and port, UDP; null when not bound. */
+    /** Where the endpoint takes ICE traffic: the Bedrock address and the NetherNet UDP port; null when not bound. */
     public @Nullable InetSocketAddress iceAddress() {
         Channel endpoint = endpointChannel;
         return endpoint != null ? (InetSocketAddress) endpoint.localAddress() : null;
@@ -365,7 +379,7 @@ public class NetherNetServer {
                 // Port 0 stands for the ICE port
                 .map(address -> address.getPort() == 0 ? new InetSocketAddress(address.getAddress(), icePort) : address)
                 .toList();
-        return new Announced(advertised, addressing.stunDiscovery(), endpoint.discoveredAddresses());
+        return new Announced(icePort, advertised, addressing.stunDiscovery(), endpoint.discoveredAddresses());
     }
 
     /**
@@ -373,11 +387,13 @@ public class NetherNetServer {
      * addresses ICE gathers on this machine, the address an HTTP join's Host header names, and the
      * discovered ones.
      *
+     * @param icePort       the UDP port the endpoint takes ICE traffic on, which candidates name unless an
+     *                      advertised address gives another
      * @param advertised    the advertised addresses, names resolved once their lookup finished
      * @param stunDiscovery whether STUN discovery runs
      * @param discovered    the public addresses STUN discovery currently finds
      */
-    public record Announced(List<InetSocketAddress> advertised, boolean stunDiscovery,
+    public record Announced(int icePort, List<InetSocketAddress> advertised, boolean stunDiscovery,
                             List<InetSocketAddress> discovered) {
     }
 
@@ -419,6 +435,10 @@ public class NetherNetServer {
         }
         this.addressing = addressing;
         warnIfLoopback();
+        boolean httpSignaling = !signalingPortIsTheJavaServers(geyser.config());
+        if (!httpSignaling) {
+            logSignalingPortIsTheJavaServers();
+        }
 
         this.bossGroup = new MultiThreadIoEventLoopGroup(1, NioIoHandler.newFactory());
         this.workerGroup = new MultiThreadIoEventLoopGroup(workerThreads(), NioIoHandler.newFactory());
@@ -428,16 +448,17 @@ public class NetherNetServer {
                 playerChannels, joinLog);
 
         try {
-            // Bound at the Bedrock address and port: with the shared ICE port
-            // every peer gathers its host candidates there, UDP, next to HTTP
-            // signaling on TCP. The bind fails at once when the UDP port is
+            // Bound at the Bedrock address and the NetherNet UDP port: with the
+            // shared ICE port every peer gathers its host candidates there, and
+            // answers announce that port whichever port signaling took the
+            // join on. The bind fails at once when the UDP port is
             // taken; the engine sets it up afterwards on its own threads. The
             // endpoint owns its engine and closes it with itself. The
             // advertised addresses and STUN mappings go into the answers of
             // both sources alike.
             ServerBootstrap bootstrap = new ServerBootstrap();
             bootstrap.group(bossGroup, workerGroup)
-                    .channelFactory(NetherNetChannelFactory.server(engines))
+                    .channelFactory(NetherNetChannelFactory.server(() -> engines.apply(nativeLogThreshold)))
                     .option(NetherChannelOption.NETHER_SERVER_IDENTITY, identity)
                     .option(NetherChannelOption.NETHER_SERVER_SHARED_ICE_PORT, true)
                     // The relays only: a proxy trusted on HTTP signaling gains
@@ -447,7 +468,7 @@ public class NetherNetServer {
                             advanced.preferSignalingProxyAddress())
                     .childHandler(childHandler);
             addressing.applyTo(bootstrap);
-            ChannelFuture bound = bootstrap.bind(bedrockAddress());
+            ChannelFuture bound = bootstrap.bind(iceBindAddress());
             // Kept before the bind completes: a channel whose bind failed may
             // have created its engine, and shutdown waits for its termination
             this.endpointChannel = (NetherNetServerChannel) bound.channel();
@@ -460,7 +481,7 @@ public class NetherNetServer {
             return false;
         } catch (Exception e) {
             // The caller's shutdown releases what was created
-            logger.error(LOG_PREFIX + "Failed to bind UDP " + describe(bedrockAddress()) + ": " + describe(e));
+            logger.error(LOG_PREFIX + "Failed to bind UDP " + describe(iceBindAddress()) + ": " + describe(e));
             return false;
         }
         if (!awaitReady(endpointChannel)) {
@@ -473,6 +494,9 @@ public class NetherNetServer {
         // HTTP signaling: the only way into this server for direct connections
         // and Education server list joins. A failure leaves the endpoint
         // running for Xbox signaling.
+        if (!httpSignaling) {
+            return true;
+        }
         try {
             bindHttpSignaling(endpointChannel, proxies.signaling());
         } catch (Exception e) {
@@ -480,11 +504,11 @@ public class NetherNetServer {
                 logEndpointClosed();
                 return false;
             }
-            logger.error(LOG_PREFIX + "HTTP signaling unavailable on TCP " + describe(bedrockAddress()) + " ("
-                    + describe(e) + "): direct and server list joins will not work, only join codes and"
-                    + " connection IDs" + (geyser.config().bedrock().port() == geyser.config().java().port()
-                    ? ". The Bedrock port is the Java server's port, whose TCP side a Java server on this machine"
-                    + " holds (clone-remote-port does this)" : ""));
+            logger.error(LOG_PREFIX + "HTTP signaling unavailable on TCP " + describe(signalingBindAddress()) + " ("
+                    + describe(e) + "): direct and server list joins will not work, only joins over Xbox signaling"
+                    + " (join codes, connection IDs and friend list joins)"
+                    + (geyser.config().bedrock().signalingPort() == geyser.config().java().port()
+                    ? ". The signaling port is the Java server's port, which a Java server on this machine may hold" : ""));
         }
         return true;
     }
@@ -506,17 +530,44 @@ public class NetherNetServer {
             if (e.getCause() instanceof ClosedChannelException) {
                 logEndpointClosed();
             } else {
-                logger.error(LOG_PREFIX + "Failed to open the ICE port, UDP " + describe(bedrockAddress()) + ": "
+                logger.error(LOG_PREFIX + "Failed to open the ICE port, UDP " + describe(iceBindAddress()) + ": "
                         + describe(e.getCause()));
             }
         } catch (TimeoutException e) {
-            logger.error(LOG_PREFIX + "The ICE port, UDP " + describe(bedrockAddress()) + ", did not open within "
+            logger.error(LOG_PREFIX + "The ICE port, UDP " + describe(iceBindAddress()) + ", did not open within "
                     + READY_WAIT.toSeconds() + " s");
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
             logger.error(LOG_PREFIX + "Interrupted while the ICE port opened");
         }
         return false;
+    }
+
+    /**
+     * Whether HTTP signaling would listen on the Java server's own port. On a
+     * plugin platform the Java server holds that port's TCP side, as it does
+     * when clone-remote-port makes the Bedrock port the Java port, so the bind
+     * could only fail, or worse, take the port from a Java server that binds
+     * after Geyser. Upstream Geyser checks the same before it starts.
+     */
+    static boolean signalingPortIsTheJavaServers(GeyserConfig config) {
+        int javaPort = config.java().port();
+        return config instanceof GeyserPluginConfig && javaPort > 0 && config.bedrock().signalingPort() == javaPort;
+    }
+
+    private void logSignalingPortIsTheJavaServers() {
+        GeyserConfig.BedrockConfig bedrock = geyser.config().bedrock();
+        logger.error(LOG_PREFIX + "------------------------------------------------------------------------");
+        logger.error(LOG_PREFIX + "HTTP signaling does not start: its TCP port, " + bedrock.signalingPort()
+                + ", is the Java server's port" + (bedrock.cloneRemotePort() ? ", as \"clone-remote-port\" makes it" : "")
+                + ".");
+        logger.error(LOG_PREFIX + "Joins from the server list will not work: retail players who add this server by"
+                + " address, and Education players who join from the Education server list.");
+        logger.error(LOG_PREFIX + "Joins over Xbox signaling (join codes, connection IDs and friend list joins) still"
+                + " work.");
+        logger.error(LOG_PREFIX + "To bring server list joins back, get a second TCP port from your host and set it as"
+                + " \"port\" under \"bedrock.signaling\" in the config, or with -DgeyserSignalingPort.");
+        logger.error(LOG_PREFIX + "------------------------------------------------------------------------");
     }
 
     private void logEndpointClosed() {
@@ -575,7 +626,7 @@ public class NetherNetServer {
      * so answers name no address a client could check.
      */
     private void warnIfLoopback() {
-        InetAddress address = bedrockAddress().getAddress();
+        InetAddress address = iceBindAddress().getAddress();
         if (address != null && address.isLoopbackAddress()) {
             logger.warning(LOG_PREFIX + "The Bedrock \"address\" " + geyser.config().bedrock().address()
                     + " is a loopback address. WebRTC gathers no connection candidates there, so NetherNet answers"
@@ -585,8 +636,12 @@ public class NetherNetServer {
         }
     }
 
-    private InetSocketAddress bedrockAddress() {
-        return new InetSocketAddress(geyser.config().bedrock().address(), geyser.config().bedrock().port());
+    private InetSocketAddress iceBindAddress() {
+        return new InetSocketAddress(geyser.config().bedrock().address(), geyser.config().bedrock().icePort());
+    }
+
+    private InetSocketAddress signalingBindAddress() {
+        return new InetSocketAddress(geyser.config().bedrock().address(), geyser.config().bedrock().signalingPort());
     }
 
     private static String describe(InetSocketAddress address) {
@@ -594,12 +649,16 @@ public class NetherNetServer {
     }
 
     /**
-     * Binds the HTTP signaling front end on the Bedrock address and port,
-     * TCP, and adds it to the endpoint. Retail clients joining by address and
-     * Education clients joining from the server list signal here; Education
-     * tries HTTPS first and plain HTTP after a refused TLS connection, and
-     * would fall back to RakNet only after both, which EduGeyser does not
-     * serve.
+     * Binds the HTTP signaling front end on the Bedrock address and the
+     * signaling port, TCP, and adds it to the endpoint. Retail clients joining
+     * by address and Education clients joining from the server list signal
+     * here; Education tries HTTPS first and plain HTTP after a refused TLS
+     * connection, and would fall back to RakNet only after both, which
+     * EduGeyser does not serve.
+     *
+     * Plain HTTP stays on next to HTTPS, so a join works whatever happens
+     * with TLS: a TLS problem, a client that rejects the certificate and tries
+     * again over plain HTTP, or a client that goes straight to plain HTTP.
      *
      * @param proxies the proxies in front of HTTP signaling, never the ICE
      *                port's relays
@@ -636,7 +695,7 @@ public class NetherNetServer {
                 .trustedProxies(proxies)
                 .build();
         try {
-            listen(endpoint, http, bedrockAddress());
+            listen(endpoint, http, signalingBindAddress());
         } catch (ConnectException | RuntimeException e) {
             if (certificateManager != null) {
                 certificateManager.close();
@@ -796,7 +855,8 @@ public class NetherNetServer {
         if (address != null) {
             return address;
         }
-        int port = geyser.config().bedrock().port();
+        // Status requests come over HTTP signaling
+        int port = geyser.config().bedrock().signalingPort();
         try {
             InetSocketAddress resolved = new InetSocketAddress(geyser.config().bedrock().address(), port);
             if (resolved.getAddress() != null) {
@@ -827,9 +887,9 @@ public class NetherNetServer {
      * can spread players across. Each factory spawns three native threads
      * once used, so the pool stays small on small hosts and caps at four.
      */
-    private static NetherNetEngine createEngine() {
+    private static NetherNetEngine createEngine(Severity nativeLogThreshold) {
         int factories = Math.max(2, Math.min(4, Runtime.getRuntime().availableProcessors() / 2));
-        return WebRtcEngine.builder().factories(factories).build();
+        return WebRtcEngine.builder().factories(factories).nativeLogThreshold(nativeLogThreshold).build();
     }
 
     /**
