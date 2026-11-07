@@ -80,9 +80,9 @@ import java.util.function.BooleanSupplier;
 import java.util.function.Function;
 
 /**
- * Nethernet (WebRTC) server: one NetherNet endpoint that takes joins from two
- * sources. Connections pipe directly into Geyser's session handling via the
- * Bedrock protocol pipeline. This is EduGeyser's only Bedrock transport.
+ * Nethernet (WebRTC) server: one NetherNet endpoint that takes joins from up to
+ * three sources. Connections pipe directly into Geyser's session handling via
+ * the Bedrock protocol pipeline. This is EduGeyser's only Bedrock transport.
  *
  * Xbox RPC signaling (Type 7, JSON-RPC: the messaging endpoint with PmsgId,
  * used by Bedrock 26.20+ and Education 26.30+), Xbox signaling for short,
@@ -91,7 +91,12 @@ import java.util.function.Function;
  * direct connections and joins from the Education server list. Every
  * player's ICE traffic arrives on one UDP port, the NetherNet UDP port, for
  * joins from either source. Both ports are the Bedrock port unless
- * configured apart. LAN discovery stays off.
+ * configured apart. LAN discovery stays off. The signaling mode decides
+ * whether HTTP signaling runs ("builtin", "hybrid") and whether this server
+ * registers with an NXS signaling service ("nxs", "hybrid"), whose players
+ * arrive on the same UDP port; Xbox signaling runs in every mode. A mode is
+ * never switched for another: HTTP signaling that cannot run on the Java
+ * server's port is an error, not a reason to register with a service.
  *
  * The endpoint admits an offer only when it proves the client's key, attested
  * by Minecraft's issuer or not (Education's self signed tokens prove theirs
@@ -140,6 +145,11 @@ public class NetherNetServer {
      * again.
      */
     private static final Duration TERMINATION_WAIT = Duration.ofSeconds(10);
+    /**
+     * How long shutdown waits for NXS to tell the service this server stopped and to release its registration, the
+     * window upstream Geyser keeps for the same stop.
+     */
+    private static final Duration NXS_STOP_WAIT = Duration.ofSeconds(20);
 
     private final GeyserImpl geyser;
     private final GeyserLogger logger;
@@ -168,6 +178,7 @@ public class NetherNetServer {
     private volatile NetherNetAddressing addressing;
     private volatile NetherNetXboxRpcSignaling xboxSignaling;
     private volatile NetherNetHttpSignaling httpSignaling;
+    private volatile @Nullable NetherNetNxs nxs;
     private NetherNetCertificateManager certificateManager;
     private NetherNetJoinLog joinLog;
 
@@ -205,7 +216,9 @@ public class NetherNetServer {
     /**
      * Starts the Nethernet server: binds the endpoint and waits for its ICE
      * port, serves HTTP signaling, acquires an MCToken via PlayFab, and adds
-     * Xbox signaling, whose socket connects in the background.
+     * Xbox signaling, whose socket connects in the background. In the "nxs"
+     * and "hybrid" signaling modes it also opens NXS, which registers with
+     * the signaling service in the background.
      *
      * Without a token Xbox signaling keeps retrying in the background, so
      * this still returns true. A server identity that cannot be loaded, an
@@ -322,6 +335,8 @@ public class NetherNetServer {
 
     public synchronized void shutdown() {
         running = false;
+        // First, while the endpoint still takes its players: the service learns this server stopped accepting them
+        stopNxs();
         if (passthroughExecutor != null) {
             // shutdownNow: an ask can sit blocked on the Java server's ping
             // event chain and deserves the interrupt
@@ -363,6 +378,11 @@ public class NetherNetServer {
     public @Nullable InetSocketAddress httpSignalingAddress() {
         NetherNetHttpSignaling http = httpSignaling;
         return http != null ? http.boundAddress() : null;
+    }
+
+    /** NXS, in the "nxs" and "hybrid" signaling modes; null in "builtin" and when it could not be set up. */
+    public @Nullable NetherNetNxs nxs() {
+        return nxs;
     }
 
     /**
@@ -421,7 +441,12 @@ public class NetherNetServer {
             logger.error(LOG_PREFIX + "NetherNet will not start: " + e.getMessage());
             return false;
         }
-        if (advanced.preferSignalingProxyAddress() && !proxies.signalingProxied()) {
+        Sources sources = Sources.of(geyser.config());
+        boolean httpSignaling = sources.http();
+        if (advanced.preferSignalingProxyAddress() && !httpSignaling) {
+            logger.warning(LOG_PREFIX + "\"prefer-signaling-proxy-address\" does nothing, as HTTP signaling is not"
+                    + " running");
+        } else if (advanced.preferSignalingProxyAddress() && !proxies.signalingProxied()) {
             logger.warning(LOG_PREFIX + "\"prefer-signaling-proxy-address\" does nothing, as neither"
                     + " \"haproxy-protocol-whitelisted-ips\" nor \"signaling-trusted-proxies\" names a proxy"
                     + " in front of HTTP signaling");
@@ -436,17 +461,18 @@ public class NetherNetServer {
         }
         this.addressing = addressing;
         warnIfLoopback();
-        boolean httpSignaling = !signalingPortIsTheJavaServers(geyser.config());
-        if (!httpSignaling) {
-            logSignalingPortIsTheJavaServers();
+        if (sources.portTaken()) {
+            logSignalingPortIsTheJavaServers(sources.nxs());
         }
+        NetherNetNxs nxs = sources.nxs() ? nxsFor(proxies.relayed(), addressing) : null;
+        this.nxs = nxs;
 
         this.bossGroup = new MultiThreadIoEventLoopGroup(1, NioIoHandler.newFactory());
         this.workerGroup = new MultiThreadIoEventLoopGroup(workerThreads(), NioIoHandler.newFactory());
         this.joinLog = new NetherNetJoinLog(logger, geyser.config().logPlayerIpAddresses());
 
         NetherNetServerInitializer childHandler = new NetherNetServerInitializer(geyser, playerEventLoopGroup,
-                playerChannels, joinLog);
+                playerChannels, joinLog, nxs == null ? null : nxs.gameOutcomes());
 
         try {
             // Bound at the Bedrock address and the NetherNet UDP port: with the
@@ -498,24 +524,78 @@ public class NetherNetServer {
 
         // HTTP signaling: the only way into this server for direct connections
         // and Education server list joins. A failure leaves the endpoint
-        // running for Xbox signaling.
-        if (!httpSignaling) {
-            return true;
-        }
-        try {
-            bindHttpSignaling(endpointChannel, proxies.signaling());
-        } catch (Exception e) {
-            if (!endpointChannel.isOpen()) {
-                logEndpointClosed();
-                return false;
+        // running for Xbox signaling and NXS.
+        if (httpSignaling) {
+            try {
+                bindHttpSignaling(endpointChannel, proxies.signaling());
+            } catch (Exception e) {
+                if (!endpointChannel.isOpen()) {
+                    logEndpointClosed();
+                    return false;
+                }
+                logger.error(LOG_PREFIX + "HTTP signaling unavailable on TCP " + describe(signalingBindAddress()) + " ("
+                        + describe(e) + "): direct and server list joins will not work, only joins over Xbox signaling"
+                        + " (join codes, connection IDs and friend list joins)" + (nxs == null ? "" : " and through NXS")
+                        + (geyser.config().bedrock().signalingPort() == geyser.config().java().port()
+                        ? ". The signaling port is the Java server's port, which a Java server on this machine may hold" : ""));
             }
-            logger.error(LOG_PREFIX + "HTTP signaling unavailable on TCP " + describe(signalingBindAddress()) + " ("
-                    + describe(e) + "): direct and server list joins will not work, only joins over Xbox signaling"
-                    + " (join codes, connection IDs and friend list joins)"
-                    + (geyser.config().bedrock().signalingPort() == geyser.config().java().port()
-                    ? ". The signaling port is the Java server's port, which a Java server on this machine may hold" : ""));
+        }
+        if (nxs != null) {
+            nxs.start(endpointChannel, addressing.advertised(), proxies.relayed());
         }
         return true;
+    }
+
+    /**
+     * NXS for the "nxs" and "hybrid" modes, not started yet. Behind PROXY protocol relays the service can only hand
+     * players the relays, which "advertise-addresses" has to name: nothing in front of this server can rewrite what
+     * the service hands out, as a front can for HTTP signaling's answers. Upstream Geyser refuses the same.
+     *
+     * @return null when NXS cannot run with these settings, which this logs
+     */
+    private @Nullable NetherNetNxs nxsFor(boolean relayed, NetherNetAddressing addressing) {
+        if (relayed && addressing.advertised().isEmpty()) {
+            logger.error(LOG_PREFIX + "NXS does not start: \"webrtc-proxy-protocol-relays\" is set, so"
+                    + " \"advertise-addresses\" under \"bedrock.signaling\" has to name the relays players reach this"
+                    + " server through");
+            return null;
+        }
+        return new NetherNetNxs(geyser, geyser.getBootstrap().getConfigFolder().resolve("nethernet"), this::nxsPong);
+    }
+
+    /**
+     * Stops NXS and waits until its registration's directory is free, so that a start right after this, as a reload
+     * does, can register again. The service's drain, and its deregistration when configured, run within that wait.
+     */
+    private void stopNxs() {
+        NetherNetNxs current = nxs;
+        if (current == null) {
+            return;
+        }
+        nxs = null;
+        try {
+            current.stop().toCompletableFuture().get(NXS_STOP_WAIT.toMillis(), TimeUnit.MILLISECONDS);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+        } catch (ExecutionException e) {
+            // A stop that failed is still over
+        } catch (TimeoutException e) {
+            logger.warning(LOG_PREFIX + "NXS has not stopped after " + NXS_STOP_WAIT.toSeconds() + " s, so it may not"
+                    + " start again right away");
+        }
+    }
+
+    /**
+     * The status this server answers queries with, for the listing NXS sends the service. Asked on the service
+     * client's thread, so the Java ping passthrough's answer comes from the snapshots and is never waited for.
+     */
+    private BedrockPong nxsPong() {
+        GeyserPingInfo passthrough = null;
+        NetherNetPingSnapshots snapshots = pingSnapshots;
+        if (pingResponder.asksPassthrough() && snapshots != null) {
+            passthrough = snapshots.latest(null);
+        }
+        return pingResponder.pong(new InetSocketAddress(InetAddress.getLoopbackAddress(), 0), passthrough).pong();
     }
 
     /**
@@ -560,7 +640,30 @@ public class NetherNetServer {
         return config instanceof GeyserPluginConfig && javaPort > 0 && config.bedrock().signalingPort() == javaPort;
     }
 
-    private void logSignalingPortIsTheJavaServers() {
+    /**
+     * The join sources the signaling mode starts next to Xbox signaling, which runs in every mode. Only the mode
+     * starts NXS: unlike upstream Geyser, the "builtin" mode with HTTP signaling on the Java server's port does
+     * not register with a signaling service instead.
+     *
+     * @param http      whether HTTP signaling starts
+     * @param nxs       whether this server registers with the signaling service
+     * @param portTaken whether the mode asks for HTTP signaling, but its port is the Java server's
+     */
+    record Sources(boolean http, boolean nxs, boolean portTaken) {
+        static Sources of(GeyserConfig config) {
+            GeyserConfig.SignalingConfig.Mode mode = config.bedrock().signaling().mode();
+            boolean portTaken = mode.builtin() && signalingPortIsTheJavaServers(config);
+            return new Sources(mode.builtin() && !portTaken, mode.nxs(), portTaken);
+        }
+    }
+
+    /**
+     * Upstream Geyser registers with its default signaling service by itself in this case. EduGeyser does not:
+     * players would join through a service the operator never chose, so the log says how to choose one.
+     *
+     * @param nxs whether NXS runs, as in the "hybrid" mode
+     */
+    private void logSignalingPortIsTheJavaServers(boolean nxs) {
         GeyserConfig.BedrockConfig bedrock = geyser.config().bedrock();
         logger.error(LOG_PREFIX + "------------------------------------------------------------------------");
         logger.error(LOG_PREFIX + "HTTP signaling does not start: its TCP port, " + bedrock.signalingPort()
@@ -569,9 +672,13 @@ public class NetherNetServer {
         logger.error(LOG_PREFIX + "Joins from the server list will not work: retail players who add this server by"
                 + " address, and Education players who join from the Education server list.");
         logger.error(LOG_PREFIX + "Joins over Xbox signaling (join codes, connection IDs and friend list joins) still"
-                + " work.");
+                + " work" + (nxs ? ", and so do joins through the signaling service (NXS)." : "."));
         logger.error(LOG_PREFIX + "To bring server list joins back, get a second TCP port from your host and set it as"
                 + " \"port\" under \"bedrock.signaling\" in the config, or with -DgeyserSignalingPort.");
+        if (!nxs) {
+            logger.error(LOG_PREFIX + "To let players join through a signaling service instead, set \"mode\" under"
+                    + " \"bedrock.signaling\" to \"nxs\" (or \"hybrid\") and choose the service in \"nxs.endpoint\".");
+        }
         logger.error(LOG_PREFIX + "------------------------------------------------------------------------");
     }
 
@@ -865,8 +972,8 @@ public class NetherNetServer {
                 .build();
     }
 
-    /** The pong carries the game type as a display string; ServerData wants the numeric GameType. */
-    private static int gameTypeId(String gameType) {
+    /** The pong carries the game type as a display string; ServerData and NXS want the numeric GameType. */
+    static int gameTypeId(String gameType) {
         if ("Creative".equalsIgnoreCase(gameType)) {
             return NetherNetServerStatus.GAME_TYPE_CREATIVE;
         }

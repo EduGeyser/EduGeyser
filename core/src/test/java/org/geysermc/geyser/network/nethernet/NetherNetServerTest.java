@@ -43,6 +43,7 @@ import org.geysermc.geyser.GeyserBootstrap;
 import org.geysermc.geyser.GeyserImpl;
 import org.geysermc.geyser.GeyserLogger;
 import org.geysermc.geyser.configuration.GeyserConfig;
+import org.geysermc.geyser.configuration.GeyserConfig.SignalingConfig.Mode;
 import org.geysermc.geyser.configuration.GeyserPluginConfig;
 import org.geysermc.geyser.configuration.GeyserRemoteConfig;
 import org.geysermc.geyser.event.type.GeyserBedrockPingEventImpl;
@@ -50,8 +51,12 @@ import org.geysermc.geyser.network.BedrockPingHandler;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
+import org.spongepowered.configurate.interfaces.InterfaceDefaultOptions;
+import org.spongepowered.configurate.yaml.YamlConfigurationLoader;
 
+import java.io.BufferedReader;
 import java.io.IOException;
+import java.io.StringReader;
 import java.io.UncheckedIOException;
 import java.net.BindException;
 import java.net.DatagramSocket;
@@ -65,8 +70,10 @@ import java.util.concurrent.CompletionStage;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 
+import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertInstanceOf;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.junit.jupiter.api.Assertions.fail;
@@ -105,6 +112,100 @@ class NetherNetServerTest {
         try (ServerSocket next = new ServerSocket()) {
             next.bind(address);
         }
+    }
+
+    @Test
+    void onlyTheNxsAndHybridModesRegisterWithASignalingService() throws Exception {
+        for (Mode mode : Mode.values()) {
+            NetherNetServer.Sources sources = NetherNetServer.Sources.of(loaded(mode, 25565, 19132, 0));
+            assertEquals(mode == Mode.NXS || mode == Mode.HYBRID, sources.nxs(), mode.name());
+            assertEquals(mode != Mode.NXS, sources.http(), mode.name());
+            assertFalse(sources.portTaken(), mode.name());
+        }
+    }
+
+    @Test
+    void builtinSignalingOnTheJavaServersPortStaysBuiltinWithoutHttpSignaling() throws Exception {
+        // As clone-remote-port leaves it: the Bedrock port is the Java port and "port" under "signaling" is 0
+        assertEquals(new NetherNetServer.Sources(false, false, true),
+                NetherNetServer.Sources.of(loaded(Mode.BUILTIN, 25565, 25565, 0)), "no switch to a signaling service");
+        assertEquals(new NetherNetServer.Sources(false, true, true),
+                NetherNetServer.Sources.of(loaded(Mode.HYBRID, 25565, 25565, 0)));
+        // "nxs" asks for no HTTP signaling, so nothing clashes
+        assertEquals(new NetherNetServer.Sources(false, true, false),
+                NetherNetServer.Sources.of(loaded(Mode.NXS, 25565, 25565, 0)));
+        // The effective TCP port decides: "port" under "signaling" moves HTTP signaling off the Java port, and
+        // onto it from another Bedrock port
+        assertEquals(new NetherNetServer.Sources(true, false, false),
+                NetherNetServer.Sources.of(loaded(Mode.BUILTIN, 25565, 25565, 25566)));
+        assertEquals(new NetherNetServer.Sources(false, false, true),
+                NetherNetServer.Sources.of(loaded(Mode.BUILTIN, 25565, 19132, 25565)));
+    }
+
+    @Test
+    void theJavaPortErrorSaysThatOnlyTheModeLetsPlayersJoinThroughASignalingService(@TempDir Path config)
+            throws Exception {
+        int port = freeUdpPort();
+        GeyserImpl geyser = geyser(config, port, GeyserPluginConfig.class);
+        when(geyser.config().java().port()).thenReturn(port);
+        NetherNetServer server = new NetherNetServer(geyser, group, "1234567890", "custom", "device",
+                threshold -> failingEngine());
+
+        assertFalse(server.start());
+
+        verify(logger).error(contains("HTTP signaling does not start: its TCP port, " + port + ", is the Java server's port"));
+        verify(logger).error(contains("Joins over Xbox signaling (join codes, connection IDs and friend list joins) still work."));
+        verify(logger).error(contains("set \"mode\" under \"bedrock.signaling\" to \"nxs\" (or \"hybrid\")"));
+        verify(logger, never()).info(contains("HTTP signaling on TCP port"));
+        assertNull(server.nxs());
+    }
+
+    @Test
+    void nxsDoesNotStartBehindRelaysWithoutTheirAddresses(@TempDir Path config) throws Exception {
+        GeyserImpl geyser = geyser(config, freeUdpPort(), GeyserConfig.class);
+        when(geyser.config().bedrock().signaling().mode()).thenReturn(Mode.NXS);
+        when(geyser.config().advanced().bedrock().webrtcProxyProtocolRelays()).thenReturn(List.of("10.0.0.0/8"));
+        NetherNetServer server = new NetherNetServer(geyser, group, "1234567890", "custom", "device",
+                threshold -> failingEngine());
+
+        assertFalse(server.start());
+
+        verify(logger).error(contains("NXS does not start: \"webrtc-proxy-protocol-relays\" is set, so"
+                + " \"advertise-addresses\" under \"bedrock.signaling\" has to name the relays"));
+    }
+
+    /** An engine whose ICE port fails to open, as when another process took it after the bind probed it. */
+    private static NetherNetEngine failingEngine() {
+        return new NetherNetEngine() {
+            @Override
+            public Peer createPeer(PeerConfig peerConfig, PeerListener listener) {
+                throw new IllegalStateException("no peers in this test");
+            }
+
+            @Override
+            public CompletionStage<IceEndpoint> openEndpoint(EndpointConfig endpointConfig) {
+                return CompletableFuture.failedFuture(new UncheckedIOException(new BindException("taken")));
+            }
+
+            @Override
+            public CompletionStage<Void> close() {
+                return CompletableFuture.completedFuture(null);
+            }
+        };
+    }
+
+    /** A config as the loader builds it, so the effective ports come from its own defaults. */
+    private static GeyserPluginConfig loaded(Mode mode, int javaPort, int bedrockPort, int signalingPort)
+            throws Exception {
+        GeyserPluginConfig config = YamlConfigurationLoader.builder()
+                .source(() -> new BufferedReader(new StringReader("{}")))
+                .defaultOptions(InterfaceDefaultOptions::addTo)
+                .build().load().get(GeyserPluginConfig.class);
+        config.java().port(javaPort);
+        config.bedrock().port(bedrockPort);
+        config.bedrock().signaling().port(signalingPort);
+        config.bedrock().signaling().mode(mode);
+        return config;
     }
 
     @Test
@@ -202,8 +303,12 @@ class NetherNetServerTest {
     }
 
     private GeyserImpl geyser(Path configFolder, int port) {
+        return geyser(configFolder, port, GeyserConfig.class);
+    }
+
+    private GeyserImpl geyser(Path configFolder, int port, Class<? extends GeyserConfig> configType) {
         GeyserImpl geyser = mock(GeyserImpl.class);
-        GeyserConfig config = mock(GeyserConfig.class, RETURNS_DEEP_STUBS);
+        GeyserConfig config = mock(configType, RETURNS_DEEP_STUBS);
         GeyserBootstrap bootstrap = mock(GeyserBootstrap.class);
         when(geyser.getLogger()).thenReturn(logger);
         when(geyser.config()).thenReturn(config);
@@ -213,6 +318,9 @@ class NetherNetServerTest {
         when(config.bedrock().port()).thenReturn(port);
         when(config.bedrock().icePort()).thenReturn(port);
         when(config.bedrock().signalingPort()).thenReturn(port);
+        when(config.bedrock().signaling().mode()).thenReturn(Mode.BUILTIN);
+        // Deep stubs would answer with a mock list, which is never empty
+        when(config.bedrock().signaling().advertiseAddresses()).thenReturn(List.of());
         return geyser;
     }
 
