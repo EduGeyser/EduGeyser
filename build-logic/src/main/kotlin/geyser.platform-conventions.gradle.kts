@@ -12,22 +12,26 @@ val minecraftNext = "$minecraftMajor.${minecraftMinor.toInt() + 1}"
 
 tasks {
     processResources {
+        // Built while configuring: the filesMatching action runs during the copy, where Task.project is deprecated
+        val properties = mapOf(
+            "id" to "geyser",
+            "name" to "Geyser",
+            "version" to project.version,
+            // Must be this for gradle :neoforge:runServer task to work
+            "file" to mapOf(
+                "jarVersion" to project.version
+            ),
+            "description" to project.description as String,
+            "url" to "https://geysermc.org",
+            "author" to "GeyserMC",
+            "minecraft" to minecraftLine,
+            "minecraftNext" to minecraftNext
+        )
+        // expand() does not track its values, so a new version alone would leave stale metadata
+        inputs.properties(properties)
         // Spigot, BungeeCord, Velocity, Fabric, ViaProxy, NeoForge
         filesMatching(listOf("plugin.yml", "bungee.yml", "velocity-plugin.json", "fabric.mod.json", "viaproxy.yml", "META-INF/neoforge.mods.toml")) {
-            expand(
-                "id" to "geyser",
-                "name" to "Geyser",
-                "version" to project.version,
-                // Must be this for gradle :neoforge:runServer task to work
-                "file" to mapOf(
-                    "jarVersion" to project.version
-                ),
-                "description" to project.description as String,
-                "url" to "https://geysermc.org",
-                "author" to "GeyserMC",
-                "minecraft" to minecraftLine,
-                "minecraftNext" to minecraftNext
-            )
+            expand(properties)
         }
     }
 }
