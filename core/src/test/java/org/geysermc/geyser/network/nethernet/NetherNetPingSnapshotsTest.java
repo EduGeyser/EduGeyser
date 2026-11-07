@@ -348,6 +348,19 @@ class NetherNetPingSnapshotsTest {
         }
     }
 
+    @Test
+    void afterCloseNoRequestWaitsEvenWhileTheRefresherTakesAsks() {
+        NetherNetPingSnapshots waiting = queued(LONG_WAIT);
+        waiting.prime();
+        runRefresher();
+        waiting.close();
+        advance(NetherNetPingSnapshots.MAX_AGE_NANOS);
+
+        assertEquals("-", motd(assertTimeoutPreemptively(WATCHDOG, () -> waiting.latest(null))));
+        assertEquals("-", motd(assertTimeoutPreemptively(WATCHDOG, () -> waiting.latest("lobby.example.com"))));
+        assertTrue(refresher.isEmpty(), "nothing is asked after close");
+    }
+
     /** Returns once the given number of asks is queued, as requests on other threads queue them. */
     private void awaitQueued(int asks) throws InterruptedException {
         long deadline = System.nanoTime() + WATCHDOG.toNanos();

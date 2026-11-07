@@ -31,6 +31,7 @@ import org.geysermc.geyser.GeyserLogger;
 import org.geysermc.geyser.ping.GeyserPingInfo;
 
 import java.time.Duration;
+import java.util.HashSet;
 import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
@@ -101,10 +102,14 @@ final class NetherNetPingSnapshots {
     private final Map<JoinAddress, Snapshot> byHost = new ConcurrentHashMap<>();
     private final Semaphore outstanding = new Semaphore(MAX_OUTSTANDING_ASKS);
     /**
-     * The asks queued or running, so {@link #close} can wake their requests; {@link #outstanding}
-     * bounds them.
+     * The asks whose claim is published, until they finish or are given back, so {@link #close}
+     * can wake their requests. Guarded by itself, as is {@link #closed}: a claim is published and
+     * added here in one step that close cannot come between, so close reaches every ask a request
+     * can find. Each one holds an outstanding permit or is about to be given back.
      */
-    private final Set<CountDownLatch> inFlight = ConcurrentHashMap.newKeySet();
+    private final Set<CountDownLatch> inFlight = new HashSet<>();
+    /** Set once by {@link #close}; no ask is claimed after it. */
+    private boolean closed;
 
     /**
      * @param passthrough asks the Java server for its answer to the given virtual host, or to none
@@ -133,12 +138,16 @@ final class NetherNetPingSnapshots {
     }
 
     /**
-     * Wakes every request waiting for an ask, for when the refresher stopped: it discards the asks
-     * it had queued, which would otherwise leave their requests to wait out their budget. Later
-     * requests find the refresher rejecting their asks and do not wait.
+     * Wakes every request waiting for an ask and claims no ask after, for when the refresher
+     * stopped: it discards the asks it had queued, which would otherwise leave their requests to
+     * wait out their budget. No request waits after this.
      */
     void close() {
-        inFlight.forEach(CountDownLatch::countDown);
+        synchronized (inFlight) {
+            closed = true;
+            inFlight.forEach(CountDownLatch::countDown);
+            inFlight.clear();
+        }
     }
 
     /**
@@ -221,27 +230,32 @@ final class NetherNetPingSnapshots {
         return switch (state) {
             case Asking(CountDownLatch done) -> new Pending(done);
             case Idle(long finished) when clock.getAsLong() - finished < MAX_AGE_NANOS -> NoAsk.FRESH;
-            case Idle idle -> {
-                // Claimed against the very state judged stale (compareAndSet compares references,
-                // not record values), so a request that saw it stale while another ask finished
-                // does not ask again right after
-                Asking claim = new Asking(new CountDownLatch(1));
-                if (snapshot.state.compareAndSet(idle, claim)) {
-                    yield ask(snapshot, host, idle, claim.done());
-                }
-                yield snapshot.state.get() instanceof Asking(CountDownLatch other)
-                        ? new Pending(other) : NoAsk.FRESH;
-            }
+            case Idle idle -> claim(snapshot, host, idle);
         };
     }
 
-    private Refresh ask(Snapshot snapshot, @Nullable String host, Idle before, CountDownLatch done) {
+    /**
+     * Claims a stale snapshot for an ask and schedules it. The claim is made against the very
+     * state judged stale (compareAndSet compares references, not record values), so a request
+     * that saw it stale while another ask finished does not ask again right after.
+     */
+    private Refresh claim(Snapshot snapshot, @Nullable String host, Idle stale) {
+        CountDownLatch done = new CountDownLatch(1);
+        synchronized (inFlight) {
+            if (closed) {
+                return NoAsk.DENIED;
+            }
+            if (!snapshot.state.compareAndSet(stale, new Asking(done))) {
+                return snapshot.state.get() instanceof Asking(CountDownLatch other)
+                        ? new Pending(other) : NoAsk.FRESH;
+            }
+            inFlight.add(done);
+        }
         if (!outstanding.tryAcquire()) {
             // Asks pile up behind one that hangs; the answer the snapshot has serves meanwhile
-            abandon(snapshot, before, done);
+            abandon(snapshot, stale, done);
             return NoAsk.DENIED;
         }
-        inFlight.add(done);
         try {
             refresher.execute(() -> {
                 try {
@@ -253,16 +267,14 @@ final class NetherNetPingSnapshots {
                     // rather than as fast as requests arrive
                     snapshot.state.set(new Idle(clock.getAsLong()));
                     outstanding.release();
-                    inFlight.remove(done);
-                    done.countDown();
+                    release(done);
                 }
             });
             return new Pending(done);
         } catch (RejectedExecutionException e) {
             // Shutdown raced the request; the answer the snapshot has serves fine
             outstanding.release();
-            inFlight.remove(done);
-            abandon(snapshot, before, done);
+            abandon(snapshot, stale, done);
             return NoAsk.DENIED;
         }
     }
@@ -271,9 +283,20 @@ final class NetherNetPingSnapshots {
      * Gives back the claim of an ask that never got scheduled, and wakes the requests that found
      * the claim meanwhile and wait on it.
      */
-    private static void abandon(Snapshot snapshot, Idle before, CountDownLatch done) {
-        snapshot.state.set(before);
+    private void abandon(Snapshot snapshot, Idle stale, CountDownLatch done) {
+        snapshot.state.set(stale);
+        release(done);
+    }
+
+    /**
+     * Wakes the requests waiting for an ask, then forgets it. In that order, so that close never
+     * misses an ask a request still waits for.
+     */
+    private void release(CountDownLatch done) {
         done.countDown();
+        synchronized (inFlight) {
+            inFlight.remove(done);
+        }
     }
 
     /** One ask's result; null info when the Java server gave no answer. */
