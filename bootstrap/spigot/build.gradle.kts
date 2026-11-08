@@ -94,7 +94,8 @@ tasks {
         jvmArgs("-Dcom.mojang.eula.agree=true")
     }
 
-    test {
+    // Every test task: CI's strict multi-release build also runs the tests as testJava25
+    withType<Test>().configureEach {
         useJUnitPlatform()
         inputs.files(runServerPaperApi)
         // Resolved when the test runs, not while configuring
