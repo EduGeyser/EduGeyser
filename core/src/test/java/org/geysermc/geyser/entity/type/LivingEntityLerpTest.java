@@ -271,37 +271,66 @@ class LivingEntityLerpTest {
     }
 
     /**
-     * A sleeping villager is sent in its bed pose. A relative update that bypasses a running lerp
-     * must keep that pose, here for a bed facing east.
+     * An absolute update for a sleeping villager, here out of the interpolation radius, keeps its
+     * bed pose.
      */
     @Test
-    void aSleepingVillagerKeepsItsBedPoseWhenAnUpdateBypassesTheLerp() {
+    void aSleepingVillagerKeepsItsBedPoseOnAnAbsoluteUpdate() {
         mockContext(context -> {
             Fixture fixture = Fixture.create(context);
-            BlockState bed = mock(BlockState.class);
-            when(bed.block()).thenReturn(mock(BedBlock.class));
-            when(bed.getValue(Properties.HORIZONTAL_FACING)).thenReturn(Direction.EAST);
-            WorldManager worldManager = mock(WorldManager.class);
-            when(worldManager.blockAt(any(GeyserSession.class), any(Vector3i.class))).thenReturn(bed);
-            when(context.mockOrSpy(GeyserImpl.class).getWorldManager()).thenReturn(worldManager);
-
-            VillagerEntity villager = new VillagerEntity(Fixture.spawnContext(fixture.session(), VanillaEntities.VILLAGER, 3));
-            villager.setValid(true);
-            villager.setFlag(EntityFlag.SLEEPING, true);
-            // Puts the villager on the bed at x = 2.5
-            villager.setBedPosition(new ObjectEntityMetadata<>(0, MetadataTypes.OPTIONAL_BLOCK_POS, Optional.of(Vector3i.from(2, 0, 0))));
-            villager.moveRelative(0.5, 0, 0, 20, 10, 30, false);
+            VillagerEntity villager = sleepingVillager(context, fixture);
 
             when(fixture.player().position()).thenReturn(Vector3f.from(200, 0, 0));
+            villager.moveAbsolute(Vector3f.from(3, 0.6875f, 0.5f), 20, 10, 30, false, false);
+
+            assertBedPose(fixture, villager, 3);
+        });
+    }
+
+    /**
+     * A small move of a sleeping villager inside the interpolation radius is applied at once in
+     * its bed pose instead of being interpolated.
+     */
+    @Test
+    void aSleepingVillagerIsNotInterpolated() {
+        mockContext(context -> {
+            Fixture fixture = Fixture.create(context);
+            VillagerEntity villager = sleepingVillager(context, fixture);
+
             villager.moveRelative(0.5, 0, 0, 20, 10, 30, false);
 
-            // The lerp target was x = 3, so the villager is at 3.5. The east facing bed pose turns
-            // it along the bed and shifts the packet half a block back
-            assertEquals(3.5f, villager.position().getX());
-            MoveEntityAbsolutePacket packet = assertInstanceOf(MoveEntityAbsolutePacket.class, fixture.sent().getLast());
-            assertEquals(Vector3f.from(0, 0, 90), packet.getRotation());
-            assertEquals(3f, packet.getPosition().getX());
+            assertBedPose(fixture, villager, 3);
+            assertTrue(fixture.scheduled().isEmpty());
         });
+    }
+
+    /**
+     * A villager asleep in a bed facing east, which puts it at x = 2.5.
+     */
+    private static VillagerEntity sleepingVillager(GeyserMockContext context, Fixture fixture) {
+        BlockState bed = mock(BlockState.class);
+        when(bed.block()).thenReturn(mock(BedBlock.class));
+        when(bed.getValue(Properties.HORIZONTAL_FACING)).thenReturn(Direction.EAST);
+        WorldManager worldManager = mock(WorldManager.class);
+        when(worldManager.blockAt(any(GeyserSession.class), any(Vector3i.class))).thenReturn(bed);
+        when(context.mockOrSpy(GeyserImpl.class).getWorldManager()).thenReturn(worldManager);
+
+        VillagerEntity villager = new VillagerEntity(Fixture.spawnContext(fixture.session(), VanillaEntities.VILLAGER, 3));
+        villager.setValid(true);
+        villager.setFlag(EntityFlag.SLEEPING, true);
+        villager.setBedPosition(new ObjectEntityMetadata<>(0, MetadataTypes.OPTIONAL_BLOCK_POS, Optional.of(Vector3i.from(2, 0, 0))));
+        return villager;
+    }
+
+    /**
+     * The last packet sent the villager at {@code x} in the bed pose of an east facing bed: turned
+     * along the bed and shifted half a block back onto it. The cached position stays unshifted.
+     */
+    private static void assertBedPose(Fixture fixture, VillagerEntity villager, float x) {
+        assertEquals(x, villager.position().getX());
+        MoveEntityAbsolutePacket packet = assertInstanceOf(MoveEntityAbsolutePacket.class, fixture.sent().getLast());
+        assertEquals(Vector3f.from(0, 0, 90), packet.getRotation());
+        assertEquals(x - 0.5f, packet.getPosition().getX());
     }
 
     /**

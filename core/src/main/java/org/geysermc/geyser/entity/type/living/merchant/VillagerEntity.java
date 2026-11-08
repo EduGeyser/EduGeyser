@@ -172,6 +172,16 @@ public class VillagerEntity extends AbstractMerchantEntity {
         session.sendUpstreamPacket(moveEntityPacket);
     }
 
+    /**
+     * A sleeping villager lies still, so a server move is applied at once instead of interpolated,
+     * which keeps it on the raw paths that send the bed pose. A lerp that is still running when it
+     * falls asleep ends, because getting into bed moves the villager.
+     */
+    @Override
+    public boolean shouldLerp() {
+        return !isSleepingInBed() && super.shouldLerp();
+    }
+
     private boolean isSleepingInBed() {
         return getFlag(EntityFlag.SLEEPING) && bedPosition != null;
     }
