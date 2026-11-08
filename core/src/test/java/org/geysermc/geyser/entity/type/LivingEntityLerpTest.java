@@ -26,23 +26,34 @@
 package org.geysermc.geyser.entity.type;
 
 import org.cloudburstmc.math.vector.Vector3f;
+import org.cloudburstmc.math.vector.Vector3i;
 import org.cloudburstmc.protocol.bedrock.data.entity.EntityFlag;
 import org.cloudburstmc.protocol.bedrock.packet.BedrockPacket;
 import org.cloudburstmc.protocol.bedrock.packet.MoveEntityAbsolutePacket;
 import org.cloudburstmc.protocol.bedrock.packet.MoveEntityDeltaPacket;
 import org.geysermc.geyser.GeyserImpl;
+import org.geysermc.geyser.entity.EntityTypeDefinition;
 import org.geysermc.geyser.entity.VanillaEntities;
 import org.geysermc.geyser.entity.spawn.EntitySpawnContext;
 import org.geysermc.geyser.entity.type.living.animal.StriderEntity;
+import org.geysermc.geyser.entity.type.living.merchant.VillagerEntity;
 import org.geysermc.geyser.entity.type.player.SessionPlayerEntity;
 import org.geysermc.geyser.inventory.PlayerInventory;
+import org.geysermc.geyser.level.WorldManager;
+import org.geysermc.geyser.level.block.property.Properties;
+import org.geysermc.geyser.level.block.type.BedBlock;
+import org.geysermc.geyser.level.block.type.BlockState;
+import org.geysermc.geyser.level.physics.Direction;
 import org.geysermc.geyser.scoreboard.network.util.GeyserMockContext;
 import org.geysermc.geyser.session.GeyserSession;
 import org.geysermc.geyser.session.cache.WorldCache;
+import org.geysermc.mcprotocollib.protocol.data.game.entity.metadata.MetadataTypes;
+import org.geysermc.mcprotocollib.protocol.data.game.entity.metadata.type.ObjectEntityMetadata;
 import org.junit.jupiter.api.Test;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Optional;
 import java.util.UUID;
 import java.util.concurrent.ScheduledFuture;
 import java.util.concurrent.TimeUnit;
@@ -260,12 +271,46 @@ class LivingEntityLerpTest {
     }
 
     /**
+     * A sleeping villager is sent in its bed pose. A relative update that bypasses a running lerp
+     * must keep that pose, here for a bed facing east.
+     */
+    @Test
+    void aSleepingVillagerKeepsItsBedPoseWhenAnUpdateBypassesTheLerp() {
+        mockContext(context -> {
+            Fixture fixture = Fixture.create(context);
+            BlockState bed = mock(BlockState.class);
+            when(bed.block()).thenReturn(mock(BedBlock.class));
+            when(bed.getValue(Properties.HORIZONTAL_FACING)).thenReturn(Direction.EAST);
+            WorldManager worldManager = mock(WorldManager.class);
+            when(worldManager.blockAt(any(GeyserSession.class), any(Vector3i.class))).thenReturn(bed);
+            when(context.mockOrSpy(GeyserImpl.class).getWorldManager()).thenReturn(worldManager);
+
+            VillagerEntity villager = new VillagerEntity(Fixture.spawnContext(fixture.session(), VanillaEntities.VILLAGER, 3));
+            villager.setValid(true);
+            villager.setFlag(EntityFlag.SLEEPING, true);
+            // Puts the villager on the bed at x = 2.5
+            villager.setBedPosition(new ObjectEntityMetadata<>(0, MetadataTypes.OPTIONAL_BLOCK_POS, Optional.of(Vector3i.from(2, 0, 0))));
+            villager.moveRelative(0.5, 0, 0, 20, 10, 30, false);
+
+            when(fixture.player().position()).thenReturn(Vector3f.from(200, 0, 0));
+            villager.moveRelative(0.5, 0, 0, 20, 10, 30, false);
+
+            // The lerp target was x = 3, so the villager is at 3.5. The east facing bed pose turns
+            // it along the bed and shifts the packet half a block back
+            assertEquals(3.5f, villager.position().getX());
+            MoveEntityAbsolutePacket packet = assertInstanceOf(MoveEntityAbsolutePacket.class, fixture.sent().getLast());
+            assertEquals(Vector3f.from(0, 0, 90), packet.getRotation());
+            assertEquals(3f, packet.getPosition().getX());
+        });
+    }
+
+    /**
      * A saddled strider at the origin on a mocked session that records the packets sent to the
      * client and the scheduled lerp steps, which the tests run by hand. The player holds the
      * fungus on a stick while {@code holding} is set.
      */
-    private record Fixture(StriderEntity strider, SessionPlayerEntity player, List<BedrockPacket> sent,
-                           List<Runnable> scheduled, AtomicBoolean holding) {
+    private record Fixture(GeyserSession session, StriderEntity strider, SessionPlayerEntity player,
+                           List<BedrockPacket> sent, List<Runnable> scheduled, AtomicBoolean holding) {
 
         static Fixture create(GeyserMockContext context) {
             GeyserSession session = context.mock(GeyserSession.class);
@@ -291,13 +336,17 @@ class LivingEntityLerpTest {
             when(inventory.isHolding(any())).thenAnswer(invocation -> holding.get());
             when(session.getPlayerInventory()).thenReturn(inventory);
 
-            EntitySpawnContext spawnContext = EntitySpawnContext.DUMMY_CONTEXT.apply(session, UUID.randomUUID(), VanillaEntities.STRIDER);
-            spawnContext.geyserId(2L);
-            spawnContext.javaId(2);
-            StriderEntity strider = new StriderEntity(spawnContext);
+            StriderEntity strider = new StriderEntity(spawnContext(session, VanillaEntities.STRIDER, 2));
             strider.setValid(true);
             strider.setFlag(EntityFlag.SADDLED, true);
-            return new Fixture(strider, player, sent, scheduled, holding);
+            return new Fixture(session, strider, player, sent, scheduled, holding);
+        }
+
+        static EntitySpawnContext spawnContext(GeyserSession session, EntityTypeDefinition<?> type, int id) {
+            EntitySpawnContext spawnContext = EntitySpawnContext.DUMMY_CONTEXT.apply(session, UUID.randomUUID(), type);
+            spawnContext.geyserId((long) id);
+            spawnContext.javaId(id);
+            return spawnContext;
         }
 
         /**

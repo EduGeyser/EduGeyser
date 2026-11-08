@@ -110,13 +110,25 @@ public class VillagerEntity extends AbstractMerchantEntity {
 
     @Override
     public void moveRelativeRaw(double relX, double relY, double relZ, float yaw, float pitch, float headYaw, boolean isOnGround) {
-        // The bed block position, if it exists
-        if (!getFlag(EntityFlag.SLEEPING) || bedPosition == null) {
-            // No need to worry about extra processing to compensate for sleeping
+        if (isSleepingInBed()) {
+            // The bed pose is sent as an absolute move
+            moveAbsoluteRaw(position.add(relX, relY, relZ), yaw, pitch, headYaw, isOnGround, false);
+        } else {
             super.moveRelativeRaw(relX, relY, relZ, yaw, pitch, headYaw, isOnGround);
+        }
+    }
+
+    /**
+     * Sends a sleeping villager in its bed pose, whichever path moved it. The cached position stays
+     * the Java one; only the packet is shifted onto the bed and turned to face along it.
+     */
+    @Override
+    public void moveAbsoluteRaw(Vector3f position, float yaw, float pitch, float headYaw, boolean isOnGround, boolean teleported) {
+        if (!isSleepingInBed()) {
+            super.moveAbsoluteRaw(position, yaw, pitch, headYaw, isOnGround, teleported);
             return;
         }
-        
+
         // The bed block
         BlockState state = session.getGeyser().getWorldManager().blockAt(session, bedPosition);
 
@@ -149,15 +161,19 @@ public class VillagerEntity extends AbstractMerchantEntity {
         setPitch(pitch);
         setHeadYaw(headYaw);
         setOnGround(isOnGround);
-        this.position = position.add(relX, relY, relZ);
+        setPosition(position);
 
         MoveEntityAbsolutePacket moveEntityPacket = new MoveEntityAbsolutePacket();
         moveEntityPacket.setRuntimeEntityId(geyserId);
         moveEntityPacket.setRotation(Vector3f.from(0, 0, bedRotation));
         moveEntityPacket.setPosition(Vector3f.from(position.getX() + xOffset, position.getY() + getOffset(), position.getZ() + zOffset));
         moveEntityPacket.setOnGround(isOnGround);
-        moveEntityPacket.setTeleported(false);
+        moveEntityPacket.setTeleported(teleported);
         session.sendUpstreamPacket(moveEntityPacket);
+    }
+
+    private boolean isSleepingInBed() {
+        return getFlag(EntityFlag.SLEEPING) && bedPosition != null;
     }
 
     public static int getBedrockProfession(int javaProfession) {
