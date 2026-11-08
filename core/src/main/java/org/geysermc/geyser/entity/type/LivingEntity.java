@@ -457,8 +457,19 @@ public class LivingEntity extends Entity implements Tickable {
             clientVehicle.getVehicleComponent().moveRelative(relX, relY, relZ);
         }
 
-        if (shouldLerp() && (relX != 0 || relY != 0 || relZ != 0) && position.distanceSquared(session.getPlayerEntity().position()) < 4096) {
+        boolean moves = relX != 0 || relY != 0 || relZ != 0;
+        if (shouldLerp() && moves && position.distanceSquared(session.getPlayerEntity().position()) < 4096) {
             lerpRelative(relX, relY, relZ, yaw, pitch, headYaw, isOnGround);
+            return;
+        }
+
+        Vector3f lerpTarget = moves ? endLerp() : null;
+        if (lerpTarget != null) {
+            // The server's delta is relative to the lerp target, which the entity has not reached
+            // yet. Move there in one absolute step: a relative one from here would leave the entity
+            // short by the unfinished part, and the raw relative path would also move the vehicle
+            // component, which already took this delta above, a second time.
+            moveAbsoluteRaw(lerpTarget.add(relX, relY, relZ), yaw, pitch, headYaw, isOnGround, false);
         } else {
             super.moveRelative(relX, relY, relZ, yaw, pitch, headYaw, isOnGround);
         }
@@ -471,6 +482,8 @@ public class LivingEntity extends Entity implements Tickable {
         if (shouldLerp() && position.distanceSquared(this.position) < 4096 && position.distanceSquared(session.getPlayerEntity().position()) < 4096) {
             lerpAbsolute(position, yaw, pitch, headYaw, isOnGround);
         } else {
+            // This position replaces any lerp target, even when it equals where the lerp is now
+            cancelLerp();
             super.moveAbsolute(position, yaw, pitch, headYaw, isOnGround, teleported);
         }
     }
@@ -534,7 +547,22 @@ public class LivingEntity extends Entity implements Tickable {
      * the lerp last did. Caller holds the entity monitor.
      */
     private boolean isLerping() {
-        return lerpSteps > 0 && position.equals(lerpLastPosition);
+        // == rather than Vector3f#equals, which tells -0.0 from 0.0: a rotation update adds a zero
+        // delta and can flip the sign of a zero coordinate without moving the entity
+        return lerpSteps > 0 && position.getX() == lerpLastPosition.getX()
+            && position.getY() == lerpLastPosition.getY() && position.getZ() == lerpLastPosition.getZ();
+    }
+
+    /**
+     * Ends a running lerp and returns its target, or null if no lerp is running.
+     */
+    private synchronized @Nullable Vector3f endLerp() {
+        if (!isLerping()) {
+            return null;
+        }
+        Vector3f target = lerpPosition;
+        cancelLerp();
+        return target;
     }
 
     /**
@@ -590,6 +618,10 @@ public class LivingEntity extends Entity implements Tickable {
             // Something else moved the entity since the last step, or this session moves it now,
             // for example after the player took out the item that steers it. The remaining steps
             // toward the old server target would pull it back and force move the client.
+            // Known limit: if control returns to the server before the session moved the entity,
+            // the lerp is dropped all the same, and the entity stays short of the server target
+            // until the next absolute position update. Telling that apart needs tracking of
+            // control transitions.
             cancelLerp();
             return;
         }

@@ -28,6 +28,7 @@ package org.geysermc.geyser.entity.type;
 import org.cloudburstmc.math.vector.Vector3f;
 import org.cloudburstmc.protocol.bedrock.data.entity.EntityFlag;
 import org.cloudburstmc.protocol.bedrock.packet.BedrockPacket;
+import org.cloudburstmc.protocol.bedrock.packet.MoveEntityAbsolutePacket;
 import org.cloudburstmc.protocol.bedrock.packet.MoveEntityDeltaPacket;
 import org.geysermc.geyser.GeyserImpl;
 import org.geysermc.geyser.entity.VanillaEntities;
@@ -50,6 +51,7 @@ import java.util.concurrent.atomic.AtomicBoolean;
 import static org.geysermc.geyser.scoreboard.network.util.GeyserMockContext.mockContext;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertInstanceOf;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyLong;
@@ -193,6 +195,67 @@ class LivingEntityLerpTest {
             fixture.strider().moveRelative(3, 0, 0, 0, 0, 0, false);
 
             assertEquals(Vector3f.from(101, 0, 0), fixture.strider().position());
+        });
+    }
+
+    /**
+     * Out of the interpolation radius, an absolute update puts the strider exactly where the lerp
+     * has it now. That is the newer target, so the pending step toward the old one must not run.
+     */
+    @Test
+    void aDirectServerMoveEndsTheLerpEvenWithoutMovingTheEntity() {
+        mockContext(context -> {
+            Fixture fixture = Fixture.create(context);
+            fixture.startLerp();
+
+            when(fixture.player().position()).thenReturn(Vector3f.from(200, 0, 0));
+            fixture.strider().moveAbsolute(Vector3f.from(1, 0, 0), 0, 0, 0, false, false);
+            fixture.runScheduledStep();
+
+            assertEquals(Vector3f.from(1, 0, 0), fixture.strider().position());
+            assertEquals(1, fixture.moves());
+        });
+    }
+
+    /**
+     * Out of the interpolation radius, a relative update arrives mid-lerp. The server applied it
+     * to the lerp target, so the strider must end at that target plus the delta, and the client
+     * must get the whole position.
+     */
+    @Test
+    void aRelativeUpdateOutsideTheRadiusFinishesTheLerp() {
+        mockContext(context -> {
+            Fixture fixture = Fixture.create(context);
+            fixture.startLerp();
+
+            when(fixture.player().position()).thenReturn(Vector3f.from(200, 0, 0));
+            fixture.strider().moveRelative(3, 0, 0, 0, 0, 0, false);
+
+            assertEquals(Vector3f.from(6, 0, 0), fixture.strider().position());
+            MoveEntityAbsolutePacket packet = assertInstanceOf(MoveEntityAbsolutePacket.class, fixture.sent().getLast());
+            assertEquals(6, packet.getPosition().getX());
+            fixture.runScheduledStep();
+            assertEquals(Vector3f.from(6, 0, 0), fixture.strider().position());
+        });
+    }
+
+    /**
+     * A head rotation update mid-lerp adds a zero delta, which turns a -0.0 coordinate into 0.0
+     * without moving the entity, so the lerp goes on.
+     */
+    @Test
+    void aRotationUpdateThatFlipsTheSignOfZeroKeepsTheLerp() {
+        mockContext(context -> {
+            Fixture fixture = Fixture.create(context);
+            fixture.strider().setPosition(Vector3f.from(0, 0, -0.0f));
+            fixture.strider().moveAbsolute(Vector3f.from(3, 0, -0.0f), 0, 0, 0, false, false);
+            assertEquals(-0.0f, fixture.strider().position().getZ());
+
+            fixture.strider().updateHeadLookRotation(10);
+            assertEquals(0.0f, fixture.strider().position().getZ());
+            fixture.runScheduledStep();
+
+            assertEquals(2, fixture.strider().position().getX());
         });
     }
 
