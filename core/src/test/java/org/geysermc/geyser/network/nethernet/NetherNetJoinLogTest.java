@@ -68,8 +68,8 @@ class NetherNetJoinLogTest {
         new NetherNetJoinLog(logger, true).joined("1", addressed(true), SIGNALED);
         new NetherNetJoinLog(logger, false).joined("2", addressed(false), SIGNALED);
 
-        verify(logger).info("[Nethernet] Join 1 signaled over HTTPS from 198.51.100.9:50000");
-        verify(logger).info("[Nethernet] Join 2 signaled over plain HTTP from <IP address withheld>");
+        verify(logger).debug("[Nethernet] Join 1 signaled over HTTPS from 198.51.100.9:50000");
+        verify(logger).debug("[Nethernet] Join 2 signaled over plain HTTP from <IP address withheld>");
     }
 
     @Test
@@ -80,9 +80,9 @@ class NetherNetJoinLogTest {
         new NetherNetJoinLog(logger, false).joined("2", addressed(false),
                 new SourcedAddress(CLIENT, AddressSource.SIGNALING_FORWARDED_FOR, proxy));
 
-        verify(logger).info("[Nethernet] Join 1 signaled over HTTPS from 198.51.100.9:50000"
+        verify(logger).debug("[Nethernet] Join 1 signaled over HTTPS from 198.51.100.9:50000"
                 + " through a proxy at 192.0.2.4:40000 (PROXY protocol)");
-        verify(logger).info("[Nethernet] Join 2 signaled over plain HTTP from <IP address withheld>"
+        verify(logger).debug("[Nethernet] Join 2 signaled over plain HTTP from <IP address withheld>"
                 + " through a proxy at <Proxy IP address withheld> (X-Forwarded-For)");
     }
 

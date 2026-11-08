@@ -37,11 +37,12 @@ import javax.net.ssl.SSLException;
 import java.net.InetSocketAddress;
 
 /**
- * Logs each NetherNet join with the signaling it came over (Xbox RPC, plain
- * HTTP or HTTPS) and the proxy it came through, and failed TLS handshakes on
- * HTTP signaling. Both honor log-player-ip-addresses. HTTPS is the state of
- * the TCP connection the offer came over: behind a proxy that reads HTTP
- * itself (X-Forwarded-For), that is the proxy's connection, not the player's.
+ * Logs each NetherNet join at debug with the signaling it came over (Xbox RPC,
+ * plain HTTP or HTTPS) and the proxy it came through, and failed TLS
+ * handshakes on HTTP signaling at info. Both honor log-player-ip-addresses.
+ * HTTPS is the state of the TCP connection the offer came over: behind a
+ * proxy that reads HTTP itself (X-Forwarded-For), that is the proxy's
+ * connection, not the player's.
  */
 final class NetherNetJoinLog {
 
@@ -86,7 +87,7 @@ final class NetherNetJoinLog {
             case SIGNALING_FORWARDED_FOR -> " through a proxy at " + describeProxy(signaled) + " (X-Forwarded-For)";
             default -> "";
         };
-        logger.info(LOG_PREFIX + "Join " + connectionId + " signaled over " + signaling.label + from + via);
+        logger.debug(LOG_PREFIX + "Join " + connectionId + " signaled over " + signaling.label + from + via);
     }
 
     /**
