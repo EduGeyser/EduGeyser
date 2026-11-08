@@ -25,6 +25,7 @@
 
 package org.geysermc.geyser.network.nethernet;
 
+import io.github.sendablemetatype.netty.channel.nethernet.engine.IceEndpoint;
 import io.netty.channel.EventLoopGroup;
 import io.netty.channel.MultiThreadIoEventLoopGroup;
 import io.netty.channel.local.LocalIoHandler;
@@ -35,7 +36,10 @@ import org.geysermc.geyser.GeyserImpl;
 import org.geysermc.geyser.api.network.NethernetManager;
 
 import java.net.InetSocketAddress;
+import java.time.Duration;
+import java.util.concurrent.ExecutionException;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
 
 /**
  * Implementation of {@link NethernetManager} that wraps {@link NetherNetServer}.
@@ -45,6 +49,8 @@ import java.util.concurrent.TimeUnit;
  * stop and start through the API; Geyser's shutdown releases them.
  */
 public class NethernetManagerImpl implements NethernetManager {
+    /** How long {@link #iceSockets()} waits for the engine's answer. */
+    private static final Duration ICE_SOCKETS_WAIT = Duration.ofSeconds(2);
 
     private final GeyserImpl geyser;
     private final EventLoopGroup playerEventLoopGroup;
@@ -148,6 +154,24 @@ public class NethernetManagerImpl implements NethernetManager {
     public @Nullable NetherNetNxs nxs() {
         NetherNetServer s = server;
         return s != null ? s.nxs() : null;
+    }
+
+    /**
+     * What the running server's shared ICE port holds now: the local addresses it is open on and those it could not
+     * be opened on, see {@link NetherNetServer#iceSockets()}. Waits for the engine, which answers on its own thread,
+     * for at most {@link #ICE_SOCKETS_WAIT}, so the dump and the diagnostics command can print the answer in place.
+     *
+     * @return the sockets; none when the server is not running
+     * @throws ExecutionException with the reason, if the engine could not answer
+     * @throws TimeoutException if the engine did not answer in time
+     * @throws InterruptedException if the wait was interrupted
+     */
+    public IceEndpoint.Sockets iceSockets() throws ExecutionException, TimeoutException, InterruptedException {
+        NetherNetServer s = server;
+        if (s == null) {
+            return IceEndpoint.Sockets.NONE;
+        }
+        return s.iceSockets().toCompletableFuture().get(ICE_SOCKETS_WAIT.toMillis(), TimeUnit.MILLISECONDS);
     }
 
     /**
