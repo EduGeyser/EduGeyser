@@ -225,6 +225,15 @@ public class LivingEntity extends Entity implements Tickable {
     public void setPassengers(List<Entity> passengers) {
         super.setPassengers(passengers);
         updateNametag(session.getWorldCache().getScoreboard().getTeamFor(teamIdentifier()));
+        // The player mounting may hand this vehicle to the session
+        cancelLerpIfMovedBySession();
+    }
+
+    @Override
+    public void stopRiding(Entity previousVehicle) {
+        super.stopRiding(previousVehicle);
+        // Leaving the vehicle this one rode may hand it to the session, which resyncs its position
+        cancelLerpIfMovedBySession();
     }
 
     @Override
@@ -501,15 +510,30 @@ public class LivingEntity extends Entity implements Tickable {
 
     @Override
     public void despawnEntity() {
-        synchronized (this) {
-            lerpGeneration++;
-            if (lerpFuture != null) {
-                lerpFuture.cancel(false);
-                lerpFuture = null;
-            }
-            lerpSteps = 0;
-        }
+        cancelLerp();
         super.despawnEntity();
+    }
+
+    /**
+     * Drops the pending lerp steps, including one that is already scheduled.
+     */
+    private synchronized void cancelLerp() {
+        lerpGeneration++;
+        if (lerpFuture != null) {
+            lerpFuture.cancel(false);
+            lerpFuture = null;
+        }
+        lerpSteps = 0;
+    }
+
+    /**
+     * Drops the pending lerp steps once this session moves the entity itself: they would pull it
+     * back toward an old server target, even if control returns to the server before they run.
+     */
+    private synchronized void cancelLerpIfMovedBySession() {
+        if (isMovedBySession()) {
+            cancelLerp();
+        }
     }
 
     /**
@@ -550,10 +574,10 @@ public class LivingEntity extends Entity implements Tickable {
             return;
         }
         if (isMovedBySession()) {
-            // Control passed to this session after the lerp started (mounting, or leaving the
-            // vehicle this one rode). The remaining steps toward the old server target would
-            // overwrite the session's position and force move the client, so drop them.
-            this.lerpSteps = 0;
+            // Control passed to this session without a passenger change, for example the player
+            // taking out the item that steers it. The remaining steps toward the old server target
+            // would overwrite the session's position and force move the client.
+            cancelLerp();
             return;
         }
         float time = 1.0f / this.lerpSteps;

@@ -35,6 +35,7 @@ import org.geysermc.geyser.entity.spawn.EntitySpawnContext;
 import org.geysermc.geyser.entity.type.living.animal.StriderEntity;
 import org.geysermc.geyser.entity.type.player.SessionPlayerEntity;
 import org.geysermc.geyser.inventory.PlayerInventory;
+import org.geysermc.geyser.scoreboard.network.util.GeyserMockContext;
 import org.geysermc.geyser.session.GeyserSession;
 import org.geysermc.geyser.session.cache.WorldCache;
 import org.junit.jupiter.api.Test;
@@ -44,6 +45,7 @@ import java.util.List;
 import java.util.UUID;
 import java.util.concurrent.ScheduledFuture;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 import static org.geysermc.geyser.scoreboard.network.util.GeyserMockContext.mockContext;
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -55,16 +57,93 @@ import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
 
+/**
+ * Lerp steps toward a server position must stop once the session moves the vehicle itself, or
+ * they pull it back toward that old target.
+ */
 class LivingEntityLerpTest {
 
     /**
-     * A strider the player steers is a passenger of a minecart, so the server moves it and a
-     * position sync starts an interpolation. When the strider leaves the minecart, Geyser simulates
-     * it from the minecart's position; the remaining steps must not pull it back toward the sync.
+     * A steered strider in a minecart is moved by the server. When it leaves the minecart, Geyser
+     * simulates it from the minecart's position. The pending steps are dropped then, so they stay
+     * dropped when the player puts the fungus on a stick away before the next step.
      */
     @Test
-    void pendingStepsStopOnceTheSessionSimulatesTheVehicle() {
+    void leavingAVehicleDropsTheStepsEvenIfControlEndsBeforeTheNextOne() {
         mockContext(context -> {
+            Fixture fixture = Fixture.create(context);
+            fixture.holding().set(true);
+            fixture.strider().setPassengers(new ArrayList<>(List.of(fixture.player())));
+            Entity minecart = context.mock(Entity.class);
+            when(minecart.position()).thenReturn(Vector3f.ZERO);
+            fixture.strider().setVehicle(minecart);
+            assertFalse(fixture.strider().shouldSimulateMovement());
+            fixture.startLerp();
+
+            fixture.strider().stopRiding(minecart);
+            assertTrue(fixture.strider().shouldSimulateMovement());
+            assertEquals(Vector3f.ZERO, fixture.strider().position());
+            fixture.holding().set(false);
+            fixture.runScheduledStep();
+
+            assertEquals(Vector3f.ZERO, fixture.strider().position());
+            assertEquals(1, fixture.moves());
+            assertTrue(fixture.scheduled().isEmpty());
+        });
+    }
+
+    /**
+     * The player mounts a strider that the server is moving, holding the fungus on a stick, and
+     * puts it away before the next step.
+     */
+    @Test
+    void mountingDropsTheStepsEvenIfControlEndsBeforeTheNextOne() {
+        mockContext(context -> {
+            Fixture fixture = Fixture.create(context);
+            fixture.holding().set(true);
+            fixture.startLerp();
+
+            fixture.strider().setPassengers(new ArrayList<>(List.of(fixture.player())));
+            assertTrue(fixture.strider().shouldSimulateMovement());
+            fixture.holding().set(false);
+            fixture.runScheduledStep();
+
+            assertEquals(Vector3f.from(1, 0, 0), fixture.strider().position());
+            assertEquals(1, fixture.moves());
+            assertTrue(fixture.scheduled().isEmpty());
+        });
+    }
+
+    /**
+     * The player rides a strider the server is moving and takes out the fungus on a stick between
+     * two steps, so no passenger change announces the new control.
+     */
+    @Test
+    void stepsStopOnceThePlayerTakesControl() {
+        mockContext(context -> {
+            Fixture fixture = Fixture.create(context);
+            fixture.strider().setPassengers(new ArrayList<>(List.of(fixture.player())));
+            assertFalse(fixture.strider().shouldSimulateMovement());
+            fixture.startLerp();
+
+            fixture.holding().set(true);
+            fixture.runScheduledStep();
+
+            assertEquals(Vector3f.from(1, 0, 0), fixture.strider().position());
+            assertEquals(1, fixture.moves());
+            assertTrue(fixture.scheduled().isEmpty());
+        });
+    }
+
+    /**
+     * A saddled strider at the origin on a mocked session that records the packets sent to the
+     * client and the scheduled lerp steps, which the tests run by hand. The player holds the
+     * fungus on a stick while {@code holding} is set.
+     */
+    private record Fixture(StriderEntity strider, SessionPlayerEntity player, List<BedrockPacket> sent,
+                           List<Runnable> scheduled, AtomicBoolean holding) {
+
+        static Fixture create(GeyserMockContext context) {
             GeyserSession session = context.mock(GeyserSession.class);
             when(session.getGeyser()).thenReturn(context.mockOrSpy(GeyserImpl.class));
             when(session.getMillisecondsPerTick()).thenReturn(50f);
@@ -83,8 +162,9 @@ class LivingEntityLerpTest {
             SessionPlayerEntity player = context.mock(SessionPlayerEntity.class);
             when(player.position()).thenReturn(Vector3f.ZERO);
             when(session.getPlayerEntity()).thenReturn(player);
+            AtomicBoolean holding = new AtomicBoolean();
             PlayerInventory inventory = context.mock(PlayerInventory.class);
-            when(inventory.isHolding(any())).thenReturn(true);
+            when(inventory.isHolding(any())).thenAnswer(invocation -> holding.get());
             when(session.getPlayerInventory()).thenReturn(inventory);
 
             EntitySpawnContext spawnContext = EntitySpawnContext.DUMMY_CONTEXT.apply(session, UUID.randomUUID(), VanillaEntities.STRIDER);
@@ -93,30 +173,26 @@ class LivingEntityLerpTest {
             StriderEntity strider = new StriderEntity(spawnContext);
             strider.setValid(true);
             strider.setFlag(EntityFlag.SADDLED, true);
-            strider.setPassengers(new ArrayList<>(List.of(player)));
-            Entity minecart = context.mock(Entity.class);
-            when(minecart.position()).thenReturn(Vector3f.ZERO);
-            strider.setVehicle(minecart);
-            assertFalse(strider.shouldSimulateMovement());
+            return new Fixture(strider, player, sent, scheduled, holding);
+        }
 
-            // The first of three steps goes out at once, the next one is scheduled
+        /**
+         * Starts a lerp toward x = 3 in three steps: the first goes out at once and moves the
+         * strider to x = 1, the next one is scheduled.
+         */
+        void startLerp() {
             strider.moveAbsolute(Vector3f.from(3, 0, 0), 0, 0, 0, false, false);
             assertEquals(Vector3f.from(1, 0, 0), strider.position());
-            assertEquals(1, moves(sent));
+            assertEquals(1, moves());
             assertEquals(1, scheduled.size());
+        }
 
-            strider.stopRiding(minecart);
-            assertTrue(strider.shouldSimulateMovement());
-            assertEquals(Vector3f.ZERO, strider.position());
-
+        void runScheduledStep() {
             scheduled.removeFirst().run();
-            assertEquals(Vector3f.ZERO, strider.position());
-            assertEquals(1, moves(sent));
-            assertTrue(scheduled.isEmpty());
-        });
-    }
+        }
 
-    private static long moves(List<BedrockPacket> sent) {
-        return sent.stream().filter(MoveEntityDeltaPacket.class::isInstance).count();
+        long moves() {
+            return sent.stream().filter(MoveEntityDeltaPacket.class::isInstance).count();
+        }
     }
 }
