@@ -118,6 +118,9 @@ public class LivingEntity extends Entity implements Tickable {
     private static final int MAX_LERP_STEPS = 3;
     private int lerpGeneration;
     private ScheduledFuture<?> lerpFuture;
+    // Where the lerp last put the entity. Any other move (a direct server move, Geyser's vehicle
+    // simulation, a client predicted position) leaves the position elsewhere and ends the lerp.
+    private Vector3f lerpLastPosition;
     private long lastMoveNanos;
     private float measuredIntervalMs;
     private float stepIntervalMs;
@@ -225,6 +228,15 @@ public class LivingEntity extends Entity implements Tickable {
     public void setPassengers(List<Entity> passengers) {
         super.setPassengers(passengers);
         updateNametag(session.getWorldCache().getScoreboard().getTeamFor(teamIdentifier()));
+        // The player mounting may hand this vehicle to the session
+        cancelLerpIfMovedBySession();
+    }
+
+    @Override
+    public void stopRiding(Entity previousVehicle) {
+        super.stopRiding(previousVehicle);
+        // Leaving the vehicle this one rode may hand it to the session, which resyncs its position
+        cancelLerpIfMovedBySession();
     }
 
     @Override
@@ -438,17 +450,37 @@ public class LivingEntity extends Entity implements Tickable {
 
     @Override
     public void moveRelative(double relX, double relY, double relZ, float yaw, float pitch, float headYaw, boolean isOnGround) {
-        if (this instanceof ClientVehicle clientVehicle) {
-            if (clientVehicle.shouldSimulateMovement()) {
-                return;
-            }
-            clientVehicle.getVehicleComponent().moveRelative(relX, relY, relZ);
+        if (this instanceof ClientVehicle clientVehicle && clientVehicle.shouldSimulateMovement()) {
+            return;
         }
 
-        if (shouldLerp() && (relX != 0 || relY != 0 || relZ != 0) && position.distanceSquared(session.getPlayerEntity().position()) < 4096) {
+        boolean moves = relX != 0 || relY != 0 || relZ != 0;
+        if (shouldLerp() && moves && position.distanceSquared(session.getPlayerEntity().position()) < 4096) {
+            moveVehicleComponent(relX, relY, relZ);
             lerpRelative(relX, relY, relZ, yaw, pitch, headYaw, isOnGround);
+            return;
+        }
+
+        Vector3f lerpTarget = moves ? endLerp() : null;
+        if (lerpTarget != null) {
+            // The server's delta is relative to the lerp target, which the entity has not reached
+            // yet. Move there in one absolute step: a relative one from here would leave the entity
+            // short by the unfinished part.
+            moveVehicleComponent(relX, relY, relZ);
+            moveAbsoluteRaw(lerpTarget.add(relX, relY, relZ), yaw, pitch, headYaw, isOnGround, false);
         } else {
+            // Entity#moveRelativeRaw moves the vehicle component itself
             super.moveRelative(relX, relY, relZ, yaw, pitch, headYaw, isOnGround);
+        }
+    }
+
+    /**
+     * Moves the vehicle component of a {@link ClientVehicle} along with a server update that does
+     * not go through {@link Entity#moveRelativeRaw}, which would move it itself.
+     */
+    private void moveVehicleComponent(double relX, double relY, double relZ) {
+        if (this instanceof ClientVehicle clientVehicle) {
+            clientVehicle.getVehicleComponent().moveRelative(relX, relY, relZ);
         }
     }
 
@@ -459,6 +491,8 @@ public class LivingEntity extends Entity implements Tickable {
         if (shouldLerp() && position.distanceSquared(this.position) < 4096 && position.distanceSquared(session.getPlayerEntity().position()) < 4096) {
             lerpAbsolute(position, yaw, pitch, headYaw, isOnGround);
         } else {
+            // This position replaces any lerp target, even when it equals where the lerp is now
+            cancelLerp();
             super.moveAbsolute(position, yaw, pitch, headYaw, isOnGround, teleported);
         }
     }
@@ -481,9 +515,9 @@ public class LivingEntity extends Entity implements Tickable {
         setHeadYaw(headYaw);
         setOnGround(isOnGround);
 
-        // Build on the outstanding target while steps are pending, so an update that arrives
+        // Build on the outstanding target while the lerp is running, so an update that arrives
         // mid-lerp does not lose the remainder of the previous one.
-        this.lerpPosition = lerpSteps == 0 ? this.position.add(relX, relY, relZ) : this.lerpPosition.add(relX, relY, relZ);
+        this.lerpPosition = isLerping() ? this.lerpPosition.add(relX, relY, relZ) : this.position.add(relX, relY, relZ);
         startLerp();
     }
 
@@ -501,15 +535,53 @@ public class LivingEntity extends Entity implements Tickable {
 
     @Override
     public void despawnEntity() {
-        synchronized (this) {
-            lerpGeneration++;
-            if (lerpFuture != null) {
-                lerpFuture.cancel(false);
-                lerpFuture = null;
-            }
-            lerpSteps = 0;
-        }
+        cancelLerp();
         super.despawnEntity();
+    }
+
+    /**
+     * Drops the pending lerp steps, including one that is already scheduled.
+     */
+    protected synchronized void cancelLerp() {
+        lerpGeneration++;
+        if (lerpFuture != null) {
+            lerpFuture.cancel(false);
+            lerpFuture = null;
+        }
+        lerpSteps = 0;
+    }
+
+    /**
+     * Whether the lerp is still running: steps remain and nothing else has moved the entity since
+     * the lerp last did. Caller holds the entity monitor.
+     */
+    private boolean isLerping() {
+        // == rather than Vector3f#equals, which tells -0.0 from 0.0: a rotation update adds a zero
+        // delta and can flip the sign of a zero coordinate without moving the entity
+        return lerpSteps > 0 && position.getX() == lerpLastPosition.getX()
+            && position.getY() == lerpLastPosition.getY() && position.getZ() == lerpLastPosition.getZ();
+    }
+
+    /**
+     * Ends a running lerp and returns its target, or null if no lerp is running.
+     */
+    private synchronized @Nullable Vector3f endLerp() {
+        if (!isLerping()) {
+            return null;
+        }
+        Vector3f target = lerpPosition;
+        cancelLerp();
+        return target;
+    }
+
+    /**
+     * Drops the pending lerp steps once this session moves the entity itself: they would pull it
+     * back toward an old server target, even if control returns to the server before they run.
+     */
+    private synchronized void cancelLerpIfMovedBySession() {
+        if (isMovedBySession()) {
+            cancelLerp();
+        }
     }
 
     /**
@@ -542,11 +614,24 @@ public class LivingEntity extends Entity implements Tickable {
             pending.cancel(false);
             this.lerpFuture = null;
         }
+        // The new lerp starts from wherever the entity is now
+        this.lerpLastPosition = this.position;
         lerpStep(generation);
     }
 
     private synchronized void lerpStep(int generation) {
-        if (generation != lerpGeneration || this.lerpSteps <= 0 || !valid) {
+        if (generation != lerpGeneration || !valid) {
+            return;
+        }
+        if (!isLerping() || isMovedBySession()) {
+            // Something else moved the entity since the last step, or this session moves it now,
+            // for example after the player took out the item that steers it. The remaining steps
+            // toward the old server target would pull it back and force move the client.
+            // Known limit: if control returns to the server before the session moved the entity,
+            // the lerp is dropped all the same, and the entity stays short of the server target
+            // until the next absolute position update. Telling that apart needs tracking of
+            // control transitions.
+            cancelLerp();
             return;
         }
         float time = 1.0f / this.lerpSteps;
@@ -583,6 +668,7 @@ public class LivingEntity extends Entity implements Tickable {
             moveEntityPacket.getFlags().add(MoveEntityDeltaPacket.Flag.HAS_PITCH);
         }
         this.position = Vector3f.from(lerpXTotal, lerpYTotal, lerpZTotal);
+        this.lerpLastPosition = this.position;
         Vector3f bedrockPosition = bedrockPosition();
         moveEntityPacket.setX(bedrockPosition.getX());
         moveEntityPacket.setY(bedrockPosition.getY());
@@ -600,6 +686,16 @@ public class LivingEntity extends Entity implements Tickable {
             this.lerpFuture = session.scheduleInEventLoop(() -> lerpStep(generation),
                     (long) (stepIntervalMs * 1000), TimeUnit.MICROSECONDS);
         }
+    }
+
+    /**
+     * Whether this session moves the entity itself: Geyser simulates it, or the client predicts it
+     * as the player's vehicle. Unlike {@link #shouldLerp()}, the client prediction case only covers
+     * the player's own vehicle, so other vehicles still finish their interpolation.
+     */
+    private boolean isMovedBySession() {
+        return this instanceof ClientVehicle clientVehicle && (clientVehicle.shouldSimulateMovement()
+            || session.isInClientPredictedVehicle() && session.getPlayerEntity().getVehicle() == this);
     }
 
     @Override
