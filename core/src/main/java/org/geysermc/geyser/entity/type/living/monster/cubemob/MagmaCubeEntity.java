@@ -25,7 +25,6 @@
 
 package org.geysermc.geyser.entity.type.living.monster.cubemob;
 
-import org.cloudburstmc.math.vector.Vector3f;
 import org.cloudburstmc.protocol.bedrock.data.entity.EntityDataTypes;
 import org.geysermc.geyser.entity.spawn.EntitySpawnContext;
 
@@ -45,16 +44,14 @@ public class MagmaCubeEntity extends AbstractCubeEntity {
         return false;
     }
 
+    /**
+     * Every server update sets the ground state once, also an interpolated one, which skips the
+     * raw move paths.
+     */
     @Override
-    public void moveRelativeRaw(double relX, double relY, double relZ, float yaw, float pitch, float headYaw, boolean isOnGround) {
-        updateJump(isOnGround);
-        super.moveRelativeRaw(relX, relY, relZ, yaw, pitch, headYaw, isOnGround);
-    }
-
-    @Override
-    public void moveAbsoluteRaw(Vector3f position, float yaw, float pitch, float headYaw, boolean isOnGround, boolean teleported) {
-        updateJump(isOnGround);
-        super.moveAbsoluteRaw(position, yaw, pitch, headYaw, isOnGround, teleported);
+    public void setOnGround(boolean onGround) {
+        updateJump(onGround);
+        super.setOnGround(onGround);
     }
 
     public void updateJump(boolean newOnGround) {

@@ -28,10 +28,12 @@ package org.geysermc.geyser.entity.type;
 import net.kyori.adventure.text.Component;
 import org.cloudburstmc.math.vector.Vector3f;
 import org.cloudburstmc.math.vector.Vector3i;
+import org.cloudburstmc.protocol.bedrock.data.entity.EntityDataTypes;
 import org.cloudburstmc.protocol.bedrock.data.entity.EntityFlag;
 import org.cloudburstmc.protocol.bedrock.packet.BedrockPacket;
 import org.cloudburstmc.protocol.bedrock.packet.MoveEntityAbsolutePacket;
 import org.cloudburstmc.protocol.bedrock.packet.MoveEntityDeltaPacket;
+import org.cloudburstmc.protocol.bedrock.packet.SetEntityDataPacket;
 import org.geysermc.geyser.GeyserImpl;
 import org.geysermc.geyser.entity.EntityTypeDefinition;
 import org.geysermc.geyser.entity.VanillaEntities;
@@ -39,6 +41,7 @@ import org.geysermc.geyser.entity.spawn.EntitySpawnContext;
 import org.geysermc.geyser.entity.type.living.ArmorStandEntity;
 import org.geysermc.geyser.entity.type.living.animal.StriderEntity;
 import org.geysermc.geyser.entity.type.living.merchant.VillagerEntity;
+import org.geysermc.geyser.entity.type.living.monster.cubemob.MagmaCubeEntity;
 import org.geysermc.geyser.entity.type.player.SessionPlayerEntity;
 import org.geysermc.geyser.inventory.GeyserItemStack;
 import org.geysermc.geyser.inventory.PlayerInventory;
@@ -61,6 +64,7 @@ import org.junit.jupiter.api.Test;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Objects;
 import java.util.Optional;
 import java.util.UUID;
 import java.util.concurrent.ScheduledFuture;
@@ -544,6 +548,36 @@ class LivingEntityLerpTest {
             assertEquals(90, packet.getPitch());
             assertEquals(90, packet.getYaw());
             assertEquals(90, packet.getHeadYaw());
+        });
+    }
+
+    /**
+     * A magma cube squashes when it lands and stretches when it jumps. Each server update with a
+     * ground change sends that event once, whether it is interpolated (the first two here) or
+     * applied at once out of the interpolation radius (the third).
+     */
+    @Test
+    void aMagmaCubeJumpsAndLandsOncePerServerUpdate() {
+        mockContext(context -> {
+            Fixture fixture = Fixture.create(context);
+            MagmaCubeEntity magmaCube = new MagmaCubeEntity(Fixture.spawnContext(fixture.session(), VanillaEntities.MAGMA_CUBE, 5));
+            magmaCube.setValid(true);
+
+            magmaCube.moveRelative(0.5, 0, 0, 0, 0, 0, true);
+            magmaCube.moveRelative(0.5, 0.5, 0, 0, 0, 0, false);
+            while (!fixture.scheduled().isEmpty()) {
+                fixture.runScheduledStep();
+            }
+            when(fixture.player().position()).thenReturn(Vector3f.from(200, 0, 0));
+            magmaCube.moveRelative(0.5, -0.5, 0, 0, 0, 0, true);
+
+            List<Byte> events = fixture.sent().stream()
+                .filter(SetEntityDataPacket.class::isInstance)
+                .map(packet -> ((SetEntityDataPacket) packet).getMetadata().get(EntityDataTypes.CLIENT_EVENT))
+                .filter(Objects::nonNull)
+                .toList();
+            // 1 lands, 2 jumps
+            assertEquals(List.of((byte) 1, (byte) 2, (byte) 1), events);
         });
     }
 
