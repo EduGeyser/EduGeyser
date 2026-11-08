@@ -542,7 +542,7 @@ public class LivingEntity extends Entity implements Tickable {
     /**
      * Drops the pending lerp steps, including one that is already scheduled.
      */
-    private synchronized void cancelLerp() {
+    protected synchronized void cancelLerp() {
         lerpGeneration++;
         if (lerpFuture != null) {
             lerpFuture.cancel(false);

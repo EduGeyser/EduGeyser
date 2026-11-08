@@ -42,12 +42,14 @@ import org.geysermc.geyser.inventory.PlayerInventory;
 import org.geysermc.geyser.level.WorldManager;
 import org.geysermc.geyser.level.block.property.Properties;
 import org.geysermc.geyser.level.block.type.BedBlock;
+import org.geysermc.geyser.level.block.type.Block;
 import org.geysermc.geyser.level.block.type.BlockState;
 import org.geysermc.geyser.level.physics.Direction;
 import org.geysermc.geyser.scoreboard.network.util.GeyserMockContext;
 import org.geysermc.geyser.session.GeyserSession;
 import org.geysermc.geyser.session.cache.WorldCache;
 import org.geysermc.mcprotocollib.protocol.data.game.entity.metadata.MetadataTypes;
+import org.geysermc.mcprotocollib.protocol.data.game.entity.metadata.Pose;
 import org.geysermc.mcprotocollib.protocol.data.game.entity.metadata.type.ObjectEntityMetadata;
 import org.junit.jupiter.api.Test;
 
@@ -305,9 +307,74 @@ class LivingEntityLerpTest {
     }
 
     /**
-     * A villager asleep in a bed facing east, which puts it at x = 2.5.
+     * An awake villager is interpolating from x = 1.5 toward 4.5 when it gets into the bed at
+     * x = 2.5, exactly where the first step put it. Getting into bed ends the lerp all the same.
      */
-    private static VillagerEntity sleepingVillager(GeyserMockContext context, Fixture fixture) {
+    @Test
+    void gettingIntoBedEndsTheLerpEvenWithoutMovingTheVillager() {
+        mockContext(context -> {
+            Fixture fixture = Fixture.create(context);
+            VillagerEntity villager = villager(context, fixture);
+            villager.setPosition(Vector3f.from(1.5f, 0.6875f, 0.5f));
+            villager.moveAbsolute(Vector3f.from(4.5f, 0.6875f, 0.5f), 0, 0, 0, false, false);
+            assertEquals(Vector3f.from(2.5f, 0.6875f, 0.5f), villager.position());
+
+            villager.setPose(Pose.SLEEPING);
+            villager.setBedPosition(BED);
+            fixture.runScheduledStep();
+
+            assertEquals(Vector3f.from(2.5f, 0.6875f, 0.5f), villager.position());
+            assertEquals(1, fixture.moves());
+            assertTrue(fixture.scheduled().isEmpty());
+        });
+    }
+
+    /**
+     * The client last got a sleeping villager in its bed pose. Waking up sends the Java position
+     * and rotation in full, since later relative moves only send what changed.
+     */
+    @Test
+    void wakingUpSendsTheJavaPoseAgain() {
+        mockContext(context -> {
+            Fixture fixture = Fixture.create(context);
+            VillagerEntity villager = sleepingVillager(context, fixture);
+            villager.moveAbsolute(Vector3f.from(2.5f, 0.6875f, 0.5f), 20, 10, 30, false, false);
+            assertBedPose(fixture, villager, 2.5f);
+
+            villager.setPose(Pose.STANDING);
+            villager.setBedPosition(new ObjectEntityMetadata<>(0, MetadataTypes.OPTIONAL_BLOCK_POS, Optional.empty()));
+
+            assertJavaPose(fixture, villager, 2.5f);
+        });
+    }
+
+    /**
+     * The bed is gone while the villager is still marked as sleeping in it, so a move sends the
+     * plain Java pose rather than a bed pose without a bed.
+     */
+    @Test
+    void aSleepingVillagerWithoutABedGetsTheJavaPose() {
+        mockContext(context -> {
+            Fixture fixture = Fixture.create(context);
+            VillagerEntity villager = sleepingVillager(context, fixture);
+            BlockState air = mock(BlockState.class);
+            when(air.block()).thenReturn(mock(Block.class));
+            WorldManager worldManager = context.mockOrSpy(GeyserImpl.class).getWorldManager();
+            when(worldManager.blockAt(any(GeyserSession.class), any(Vector3i.class))).thenReturn(air);
+
+            villager.moveAbsolute(Vector3f.from(2.5f, 0.6875f, 0.5f), 20, 10, 30, false, false);
+
+            assertJavaPose(fixture, villager, 2.5f);
+        });
+    }
+
+    private static final ObjectEntityMetadata<Optional<Vector3i>> BED =
+        new ObjectEntityMetadata<>(0, MetadataTypes.OPTIONAL_BLOCK_POS, Optional.of(Vector3i.from(2, 0, 0)));
+
+    /**
+     * An awake villager at the origin, with a bed facing east at block (2, 0, 0) in the world.
+     */
+    private static VillagerEntity villager(GeyserMockContext context, Fixture fixture) {
         BlockState bed = mock(BlockState.class);
         when(bed.block()).thenReturn(mock(BedBlock.class));
         when(bed.getValue(Properties.HORIZONTAL_FACING)).thenReturn(Direction.EAST);
@@ -317,9 +384,26 @@ class LivingEntityLerpTest {
 
         VillagerEntity villager = new VillagerEntity(Fixture.spawnContext(fixture.session(), VanillaEntities.VILLAGER, 3));
         villager.setValid(true);
-        villager.setFlag(EntityFlag.SLEEPING, true);
-        villager.setBedPosition(new ObjectEntityMetadata<>(0, MetadataTypes.OPTIONAL_BLOCK_POS, Optional.of(Vector3i.from(2, 0, 0))));
         return villager;
+    }
+
+    /**
+     * A villager asleep in that bed, which puts it at x = 2.5.
+     */
+    private static VillagerEntity sleepingVillager(GeyserMockContext context, Fixture fixture) {
+        VillagerEntity villager = villager(context, fixture);
+        villager.setPose(Pose.SLEEPING);
+        villager.setBedPosition(BED);
+        return villager;
+    }
+
+    /**
+     * The last packet sent the villager at {@code x} in its plain Java pose.
+     */
+    private static void assertJavaPose(Fixture fixture, VillagerEntity villager, float x) {
+        MoveEntityAbsolutePacket packet = assertInstanceOf(MoveEntityAbsolutePacket.class, fixture.sent().getLast());
+        assertEquals(villager.bedrockRotation(), packet.getRotation());
+        assertEquals(x, packet.getPosition().getX());
     }
 
     /**

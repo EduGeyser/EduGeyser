@@ -37,6 +37,7 @@ import org.geysermc.geyser.level.block.property.Properties;
 import org.geysermc.geyser.level.block.type.BedBlock;
 import org.geysermc.geyser.level.block.type.BlockState;
 import org.geysermc.mcprotocollib.protocol.data.game.entity.metadata.EntityMetadata;
+import org.geysermc.mcprotocollib.protocol.data.game.entity.metadata.Pose;
 import org.geysermc.mcprotocollib.protocol.data.game.entity.metadata.VillagerData;
 
 import java.util.Optional;
@@ -81,6 +82,11 @@ public class VillagerEntity extends AbstractMerchantEntity {
     @Nullable
     private Vector3i bedPosition;
     /**
+     * Whether the client was last sent this villager in its bed pose, which differs from the cached
+     * Java position and rotation.
+     */
+    private boolean bedPoseSent;
+    /**
      * Used in the interactive tag manager
      */
     @Getter
@@ -105,7 +111,30 @@ public class VillagerEntity extends AbstractMerchantEntity {
 
     @Override
     public @Nullable Vector3i setBedPosition(EntityMetadata<Optional<Vector3i>, ?> entityMetadata) {
-        return bedPosition = super.setBedPosition(entityMetadata);
+        bedPosition = super.setBedPosition(entityMetadata);
+        updateBedPose();
+        return bedPosition;
+    }
+
+    @Override
+    public void setPose(Pose pose) {
+        super.setPose(pose);
+        updateBedPose();
+    }
+
+    /**
+     * Follows the villager into and out of its bed, which takes two metadata fields: the sleeping
+     * pose and the bed position.
+     */
+    private void updateBedPose() {
+        if (isSleepingInBed()) {
+            // Getting into bed can leave the coordinates where a running lerp has them, so the
+            // position check that ends a lerp does not see it
+            cancelLerp();
+        } else if (bedPoseSent) {
+            // The client still shows the bed pose; send the Java position and rotation in full
+            moveAbsoluteRaw(position, getYaw(), getPitch(), getHeadYaw(), isOnGround(), false);
+        }
     }
 
     @Override
@@ -124,36 +153,35 @@ public class VillagerEntity extends AbstractMerchantEntity {
      */
     @Override
     public void moveAbsoluteRaw(Vector3f position, float yaw, float pitch, float headYaw, boolean isOnGround, boolean teleported) {
-        if (!isSleepingInBed()) {
+        BlockState bed = isSleepingInBed() ? session.getGeyser().getWorldManager().blockAt(session, bedPosition) : null;
+        if (bed == null || !(bed.block() instanceof BedBlock)) {
+            // Awake, or the bed is gone before the sleeping metadata cleared: an ordinary move,
+            // which sends the whole Java position and rotation
+            bedPoseSent = false;
             super.moveAbsoluteRaw(position, yaw, pitch, headYaw, isOnGround, teleported);
             return;
         }
-
-        // The bed block
-        BlockState state = session.getGeyser().getWorldManager().blockAt(session, bedPosition);
 
         // Set the correct position offset and rotation when sleeping
         int bedRotation = 0;
         float xOffset = 0;
         float zOffset = 0;
-        if (state.block() instanceof BedBlock) {
-            switch (state.getValue(Properties.HORIZONTAL_FACING)) {
-                case SOUTH -> {
-                    bedRotation = 180;
-                    zOffset = -.5f;
-                }
-                case EAST -> {
-                    bedRotation = 90;
-                    xOffset = -.5f;
-                }
-                case WEST -> {
-                    bedRotation = 270;
-                    xOffset = .5f;
-                }
-                case NORTH -> {
-                    // rotation does not change because north is 0
-                    zOffset = .5f;
-                }
+        switch (bed.getValue(Properties.HORIZONTAL_FACING)) {
+            case SOUTH -> {
+                bedRotation = 180;
+                zOffset = -.5f;
+            }
+            case EAST -> {
+                bedRotation = 90;
+                xOffset = -.5f;
+            }
+            case WEST -> {
+                bedRotation = 270;
+                xOffset = .5f;
+            }
+            case NORTH -> {
+                // rotation does not change because north is 0
+                zOffset = .5f;
             }
         }
 
@@ -170,12 +198,13 @@ public class VillagerEntity extends AbstractMerchantEntity {
         moveEntityPacket.setOnGround(isOnGround);
         moveEntityPacket.setTeleported(teleported);
         session.sendUpstreamPacket(moveEntityPacket);
+        bedPoseSent = true;
     }
 
     /**
      * A sleeping villager lies still, so a server move is applied at once instead of interpolated,
-     * which keeps it on the raw paths that send the bed pose. A lerp that is still running when it
-     * falls asleep ends, because getting into bed moves the villager.
+     * which keeps it on the raw paths that send the bed pose. Getting into bed ends a running lerp
+     * (see {@link #updateBedPose()}).
      */
     @Override
     public boolean shouldLerp() {
