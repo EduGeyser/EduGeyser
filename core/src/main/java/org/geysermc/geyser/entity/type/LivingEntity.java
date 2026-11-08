@@ -112,9 +112,10 @@ public class LivingEntity extends Entity implements Tickable {
 
     // Movement interpolation is timed from the arrival of each Java update instead of the session
     // tick, so the tick phase never delays the first step. Java updates most living entities every
-    // two or three server ticks; the delta is spread evenly over the measured interval. The lerp
-    // state is guarded by the entity monitor because arrivals run on the Java channel thread and
-    // the scheduled steps on the session loop.
+    // two or three server ticks; the delta is spread evenly over the measured interval. Arrivals
+    // and the scheduled steps both run on the session event loop, which is also the packet handler
+    // executor of the Java connection. The entity monitor guards the lerp state all the same, in
+    // case a move comes from another thread.
     private static final int MAX_LERP_STEPS = 3;
     private int lerpGeneration;
     private ScheduledFuture<?> lerpFuture;
