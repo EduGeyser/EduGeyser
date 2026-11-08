@@ -97,6 +97,12 @@ public class SquidEntity extends AgeableWaterEntity implements Tickable {
     }
 
     @Override
+    protected void moveLerpStep(Vector3f position) {
+        super.moveLerpStep(position);
+        checkInWater();
+    }
+
+    @Override
     public void setYaw(float yaw) {
         // Let the Java server control yaw when the squid is out of water
         if (!inWater.join()) {

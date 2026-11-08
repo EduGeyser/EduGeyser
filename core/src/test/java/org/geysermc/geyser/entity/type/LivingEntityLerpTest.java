@@ -39,6 +39,7 @@ import org.geysermc.geyser.entity.EntityTypeDefinition;
 import org.geysermc.geyser.entity.VanillaEntities;
 import org.geysermc.geyser.entity.spawn.EntitySpawnContext;
 import org.geysermc.geyser.entity.type.living.ArmorStandEntity;
+import org.geysermc.geyser.entity.type.living.SquidEntity;
 import org.geysermc.geyser.entity.type.living.animal.StriderEntity;
 import org.geysermc.geyser.entity.type.living.merchant.VillagerEntity;
 import org.geysermc.geyser.entity.type.living.monster.cubemob.MagmaCubeEntity;
@@ -47,6 +48,7 @@ import org.geysermc.geyser.inventory.GeyserItemStack;
 import org.geysermc.geyser.inventory.PlayerInventory;
 import org.geysermc.geyser.item.Items;
 import org.geysermc.geyser.level.WorldManager;
+import org.geysermc.geyser.level.block.Blocks;
 import org.geysermc.geyser.level.block.property.Properties;
 import org.geysermc.geyser.level.block.type.BedBlock;
 import org.geysermc.geyser.level.block.type.Block;
@@ -67,6 +69,7 @@ import java.util.List;
 import java.util.Objects;
 import java.util.Optional;
 import java.util.UUID;
+import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ScheduledFuture;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
@@ -578,6 +581,34 @@ class LivingEntityLerpTest {
                 .toList();
             // 1 lands, 2 jumps
             assertEquals(List.of((byte) 1, (byte) 2, (byte) 1), events);
+        });
+    }
+
+    /**
+     * A squid on land at the origin moves into water at x = 3 through an interpolation. The steps
+     * that change its block run the water check, so it swims there instead of tipping over as on
+     * land.
+     */
+    @Test
+    void anInterpolatedSquidChecksForWaterOnEachNewBlock() {
+        mockContext(context -> {
+            Fixture fixture = Fixture.create(context);
+            int water = Blocks.WATER.defaultBlockState().javaId();
+            WorldManager worldManager = mock(WorldManager.class);
+            when(worldManager.getBlockAtAsync(any(GeyserSession.class), any(Vector3i.class))).thenAnswer(invocation ->
+                CompletableFuture.completedFuture(invocation.getArgument(1, Vector3i.class).getX() == 3 ? water : Block.JAVA_AIR_ID));
+            when(context.mockOrSpy(GeyserImpl.class).getWorldManager()).thenReturn(worldManager);
+            SquidEntity squid = new SquidEntity(Fixture.spawnContext(fixture.session(), VanillaEntities.SQUID, 6));
+            squid.setValid(true);
+
+            squid.moveAbsolute(Vector3f.from(3, 0, 0), 0, 0, 0, false, false);
+            fixture.runScheduledStep();
+            fixture.runScheduledStep();
+            squid.tick();
+
+            assertEquals(Vector3f.from(3, 0, 0), squid.position());
+            // On land the pitch tips toward -90; in water it heads for the swimming pitch, 0 without motion
+            assertEquals(0, squid.getPitch());
         });
     }
 
