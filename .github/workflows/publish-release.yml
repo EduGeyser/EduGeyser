@@ -1,0 +1,40 @@
+name: Publish release
+
+# Publishes a release that release.yml drafted, on Codeberg and then on GitHub, with the notes of
+# the GitHub draft as edited there.
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: The drafted release, such as v2.28.0-edu
+        required: true
+        type: string
+
+permissions: {}
+
+# release.yml's group, so a release is never published while its draft is being made
+concurrency:
+  group: release
+  cancel-in-progress: false
+  # Every waiting run stays queued; by default a new one would cancel the one waiting
+  queue: max
+
+jobs:
+  publish:
+    if: github.repository == 'EduGeyser/EduGeyser'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Publish
+        run: bash .github/scripts/publish-release.sh
+        env:
+          TAG: ${{ inputs.tag }}
+          GH_TOKEN: ${{ github.token }}
+          CODEBERG_REPO: SendableMetatype/EduGeyser
+          CODEBERG_TOKEN: ${{ secrets.CODEBERG_RELEASE_TOKEN }}

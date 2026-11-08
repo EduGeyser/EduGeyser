@@ -1,7 +1,8 @@
 name: Release
 
-# Every successful build of a push to master becomes a release on GitHub and Codeberg,
-# with the same tag, notes and jars. The version line is in .github/edugeyser-release.properties.
+# Every successful build of a push to master becomes a draft release on GitHub and Codeberg,
+# with the same tag, notes and jars. Edit the notes on GitHub, then publish both with
+# publish-release.yml. The version line is in .github/edugeyser-release.properties.
 on:
   workflow_run:
     workflows: [Build]
@@ -14,6 +15,8 @@ permissions: {}
 concurrency:
   group: release
   cancel-in-progress: false
+  # Every waiting run stays queued; by default a new one would cancel the one waiting
+  queue: max
 
 jobs:
   release:
