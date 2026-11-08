@@ -25,6 +25,7 @@
 
 package org.geysermc.geyser.command.defaults;
 
+import io.github.sendablemetatype.netty.channel.nethernet.engine.IceEndpoint;
 import io.github.sendablemetatype.netty.channel.nethernet.nxs.ProviderClient;
 import io.github.sendablemetatype.netty.channel.nethernet.nxs.diagnostic.DiagnosticHostPolicy;
 import io.github.sendablemetatype.netty.channel.nethernet.nxs.host.DiagnosticResult;
@@ -73,6 +74,27 @@ class NetherNetCommandTest {
             NetherNetCommand.nxsPublished(new ProviderClient.PublishedEndpoints(List.of(), Set.of())));
         assertEquals("The signaling service has confirmed no addresses right now.",
             NetherNetCommand.nxsPublished(null));
+    }
+
+    @Test
+    void iceSocketsSayWhereThePortIsOpenAndWhereItCouldNotBeOpened() {
+        InetSocketAddress lan = new InetSocketAddress("192.168.1.5", 19132);
+        InetSocketAddress global = new InetSocketAddress("2001:db8::7", 19132);
+        IceEndpoint.BindFailure taken = new IceEndpoint.BindFailure(new InetSocketAddress("10.0.0.5", 19132),
+            "Address already in use");
+        IceEndpoint.BindFailure refused = new IceEndpoint.BindFailure(new InetSocketAddress("2001:db8::5", 19132),
+            "Permission denied");
+
+        assertEquals("The ICE port is open on UDP 192.168.1.5:19132, [2001:db8::7]:19132.",
+            NetherNetCommand.iceSockets(new IceEndpoint.Sockets(List.of(lan, global), List.of())));
+        assertEquals("The ICE port is open on UDP 192.168.1.5:19132. It could not be opened on 10.0.0.5:19132"
+                + " (Address already in use), [2001:db8::5]:19132 (Permission denied).",
+            NetherNetCommand.iceSockets(new IceEndpoint.Sockets(List.of(lan), List.of(taken, refused))));
+        assertEquals("The ICE port is not open on any address. It could not be opened on 10.0.0.5:19132"
+                + " (Address already in use).",
+            NetherNetCommand.iceSockets(new IceEndpoint.Sockets(List.of(), List.of(taken))));
+        assertEquals("The ICE port is not open on any address yet: it opens when the first player joins.",
+            NetherNetCommand.iceSockets(IceEndpoint.Sockets.NONE));
     }
 
     @Test

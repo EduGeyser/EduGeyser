@@ -25,6 +25,7 @@
 
 package org.geysermc.geyser.command.defaults;
 
+import io.github.sendablemetatype.netty.channel.nethernet.engine.IceEndpoint;
 import io.github.sendablemetatype.netty.channel.nethernet.nxs.ProviderClient;
 import io.github.sendablemetatype.netty.channel.nethernet.nxs.ServerStatus;
 import io.github.sendablemetatype.netty.channel.nethernet.nxs.host.DiagnosticResult;
@@ -49,14 +50,16 @@ import java.util.Comparator;
 import java.util.List;
 import java.util.Map;
 import java.util.TreeMap;
+import java.util.concurrent.ExecutionException;
+import java.util.concurrent.TimeoutException;
 import java.util.stream.Collectors;
 
 import static org.incendo.cloud.parser.standard.StringParser.greedyStringParser;
 
 /**
  * {@code geyser nethernet}: what NetherNet's signaling does, from the console only, as upstream Geyser's command.
- * {@code status}, {@code action} and {@code diagnostics} concern the signaling service (NXS), {@code advertised} every
- * source.
+ * {@code status} and {@code action} concern the signaling service (NXS), {@code advertised} every source, and
+ * {@code diagnostics} the ICE port and NXS.
  */
 public class NetherNetCommand extends GeyserCommand {
     private static final String ARGUMENTS = "arguments";
@@ -144,22 +147,28 @@ public class NetherNetCommand extends GeyserCommand {
     }
 
     /**
-     * Shows where NXS takes its players, what it could not report, the connectivity checks the service ran, and
-     * whether the service routes players here
+     * Shows which local addresses the ICE port is open on and which it could not be opened on. With NXS, also where
+     * NXS takes its players, what it could not report, the connectivity checks the service ran, and whether the
+     * service routes players here
      */
     private void diagnostics(CommandContext<GeyserCommandSource> context) {
         GeyserCommandSource source = context.sender();
-        NetherNetNxs nxs = nxs(source);
-        if (nxs == null) {
+        NethernetManagerImpl manager = manager(source);
+        if (manager == null) {
             return;
         }
-        ProviderClient client = nxs.client();
+        source.sendMessage(iceSockets(manager));
+
+        NetherNetNxs nxs = manager.nxs();
+        ProviderClient client = nxs == null ? null : nxs.client();
         if (client == null) {
-            source.sendMessage(NXS_NOT_RUNNING);
+            if (geyser.config().bedrock().signaling().mode().nxs()) {
+                source.sendMessage(NXS_NOT_RUNNING);
+            }
             return;
         }
 
-        InetSocketAddress ice = geyser.nethernetManager() instanceof NethernetManagerImpl manager ? manager.iceAddress() : null;
+        InetSocketAddress ice = manager.iceAddress();
         if (ice != null) {
             source.sendMessage("NXS players connect to UDP " + NetUtil.toSocketAddressString(ice) + ".");
         }
@@ -223,6 +232,41 @@ public class NetherNetCommand extends GeyserCommand {
         return message + " Assisted joins are offered over "
             + published.assistedFamilies().stream().sorted(Comparator.comparingInt(AddressFamily::number))
                 .map(family -> "IPv" + family.number()).collect(Collectors.joining(" and ")) + ".";
+    }
+
+    private static String iceSockets(NethernetManagerImpl manager) {
+        String failed = "Could not ask the ICE port which addresses it is open on: ";
+        try {
+            return iceSockets(manager.iceSockets());
+        } catch (ExecutionException e) {
+            Throwable cause = e.getCause();
+            String type = cause.getClass().getSimpleName();
+            return failed + (cause.getMessage() == null ? type : type + ": " + cause.getMessage()) + ".";
+        } catch (TimeoutException e) {
+            return failed + "the engine did not answer in time.";
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            return failed + "interrupted.";
+        }
+    }
+
+    /**
+     * Which local addresses the ICE port is open on, and which it could not be opened on and why. The port opens on
+     * an address when the first player's connection, or STUN discovery, uses it.
+     */
+    static String iceSockets(IceEndpoint.Sockets sockets) {
+        if (sockets.bound().isEmpty() && sockets.failed().isEmpty()) {
+            return "The ICE port is not open on any address yet: it opens when the first player joins.";
+        }
+        String open = sockets.bound().isEmpty()
+            ? "The ICE port is not open on any address."
+            : "The ICE port is open on UDP " + join(sockets.bound()) + ".";
+        if (sockets.failed().isEmpty()) {
+            return open;
+        }
+        return open + " It could not be opened on " + sockets.failed().stream()
+            .map(failure -> NetUtil.toSocketAddressString(failure.address()) + " (" + failure.reason() + ")")
+            .collect(Collectors.joining(", ")) + ".";
     }
 
     /** The connectivity checks the service ran since the last look, by how they ended. */
