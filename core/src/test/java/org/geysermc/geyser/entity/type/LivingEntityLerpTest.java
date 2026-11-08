@@ -55,6 +55,7 @@ import org.geysermc.geyser.level.block.type.BedBlock;
 import org.geysermc.geyser.level.block.type.Block;
 import org.geysermc.geyser.level.block.type.BlockState;
 import org.geysermc.geyser.level.physics.Direction;
+import org.geysermc.geyser.registry.java.JavaRegistryProvider;
 import org.geysermc.geyser.scoreboard.network.util.GeyserMockContext;
 import org.geysermc.geyser.session.GeyserSession;
 import org.geysermc.geyser.session.cache.EntityCache;
@@ -801,6 +802,31 @@ class LivingEntityLerpTest {
 
             assertEquals(Vector3f.from(100, 0, 0), fixture.strider().position());
             assertTrue(fixture.vehicleMoves().isEmpty());
+        });
+    }
+
+    /**
+     * The player steers a strider that rides another strider. A mob with AI is steered by the mob
+     * riding it first, so the Java client steers the lower strider too and answers a snapped
+     * teleport of it.
+     */
+    @Test
+    void aFarTeleportOfAVehicleThePlayerSteersThroughAMobIsAcknowledged() {
+        mockContext(context -> {
+            Fixture fixture = Fixture.create(context);
+            when(fixture.session().javaRegistries()).thenReturn(mock(JavaRegistryProvider.class));
+            StriderEntity upper = new StriderEntity(Fixture.spawnContext(fixture.session(), VanillaEntities.STRIDER, 8));
+            upper.setValid(true);
+            upper.setFlag(EntityFlag.SADDLED, true);
+            fixture.holding().set(true);
+            upper.setPassengers(new ArrayList<>(List.of(fixture.player())));
+            upper.setVehicle(fixture.strider());
+            fixture.strider().setPassengers(new ArrayList<>(List.of(upper)));
+
+            fixture.teleport(Vector3d.from(100, 0, 0), List.of());
+
+            assertEquals(List.of(Vector3d.from(100, 0, 0)),
+                fixture.vehicleMoves().stream().map(ServerboundMoveVehiclePacket::getPosition).toList());
         });
     }
 

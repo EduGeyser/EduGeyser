@@ -27,14 +27,20 @@ package org.geysermc.geyser.translator.protocol.java.entity;
 
 import org.cloudburstmc.math.vector.Vector3d;
 import org.cloudburstmc.math.vector.Vector3f;
+import org.cloudburstmc.protocol.bedrock.data.entity.EntityFlag;
 import org.cloudburstmc.protocol.bedrock.packet.SetEntityMotionPacket;
+import org.geysermc.geyser.entity.EntityTypeDefinition;
 import org.geysermc.geyser.entity.type.BoatEntity;
 import org.geysermc.geyser.entity.type.Entity;
+import org.geysermc.geyser.entity.type.living.MobEntity;
 import org.geysermc.geyser.entity.vehicle.ClientVehicle;
+import org.geysermc.geyser.registry.java.JavaRegistries;
 import org.geysermc.geyser.session.GeyserSession;
+import org.geysermc.geyser.session.cache.tags.Tag;
 import org.geysermc.geyser.translator.protocol.PacketTranslator;
 import org.geysermc.geyser.translator.protocol.Translator;
 import org.geysermc.geyser.util.MathUtils;
+import org.geysermc.geyser.util.MinecraftKey;
 import org.geysermc.mcprotocollib.protocol.data.game.entity.player.PositionElement;
 import org.geysermc.mcprotocollib.protocol.packet.ingame.clientbound.entity.ClientboundTeleportEntityPacket;
 import org.geysermc.mcprotocollib.protocol.packet.ingame.serverbound.level.ServerboundMoveVehiclePacket;
@@ -44,6 +50,7 @@ import java.util.Objects;
 
 @Translator(packet = ClientboundTeleportEntityPacket.class)
 public class JavaTeleportEntityTranslator extends PacketTranslator<ClientboundTeleportEntityPacket> {
+    private static final Tag<EntityTypeDefinition<?>> NON_CONTROLLING_RIDER = new Tag<>(JavaRegistries.ENTITY_TYPE, MinecraftKey.key("non_controlling_rider"));
 
     @Override
     public void translate(GeyserSession session, ClientboundTeleportEntityPacket packet) {
@@ -130,18 +137,25 @@ public class JavaTeleportEntityTranslator extends PacketTranslator<ClientboundTe
     }
 
     /**
-     * Whether the player steers the vehicle, which Geyser then simulates or the Bedrock client
-     * predicts. A server that gets a move vehicle packet for a vehicle the player does not steer
-     * warns and resets the vehicle.
+     * Whether the player steers the vehicle, itself or through the mob that steers it. The player
+     * steers a vehicle that Geyser then simulates or the Bedrock client predicts. A mob with AI is
+     * steered by a mob riding it first, unless that one is a non controlling rider. The server
+     * checks only the passenger that steers its vehicle itself, so it warns about and resets a
+     * vehicle that the player steers through a mob, for the Java client too.
      * <p>
-     * MojMap Entity#isLocalInstanceAuthoritative
+     * MojMap Entity#isLocalInstanceAuthoritative, Mob#getControllingPassenger
      */
     private static boolean isSteeredByPlayer(GeyserSession session, Entity entity) {
-        if (!(entity instanceof ClientVehicle clientVehicle)) {
+        if (entity.getPassengers().isEmpty()) {
             return false;
         }
-        // ClientVehicle#canSimulateMovement leaves out a vehicle the Bedrock client predicts
-        return clientVehicle.canSimulateMovement() || session.isInClientPredictedVehicle()
-            && !entity.getPassengers().isEmpty() && entity.getPassengers().getFirst() == session.getPlayerEntity();
+        Entity first = entity.getPassengers().getFirst();
+        if (first == session.getPlayerEntity()) {
+            // ClientVehicle#canSimulateMovement leaves out a vehicle the Bedrock client predicts
+            return entity instanceof ClientVehicle clientVehicle && (clientVehicle.canSimulateMovement() || session.isInClientPredictedVehicle());
+        }
+        return entity instanceof MobEntity && !entity.getFlag(EntityFlag.NO_AI) && first instanceof MobEntity
+            && !session.javaRegistries().is(NON_CONTROLLING_RIDER, first.getJavaDefinition())
+            && isSteeredByPlayer(session, first);
     }
 }
