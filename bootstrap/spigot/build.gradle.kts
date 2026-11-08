@@ -3,6 +3,9 @@ plugins {
     alias(libs.plugins.runpaper)
 }
 
+// Kept off the compile classpath: Geyser compiles against an older API, so it keeps working on older servers
+val runServerPaperApi: Configuration = configurations.create("runServerPaperApi")
+
 dependencies {
     api(projects.core)
     api(libs.erosion.bukkit.common) {
@@ -33,6 +36,15 @@ dependencies {
     implementation(libs.gson.record.factory) {
         isTransitive = false
     }
+
+    // Test
+    testImplementation(platform("org.junit:junit-bom:${libs.versions.junit.get()}"))
+    testImplementation(libs.junit)
+    testRuntimeOnly("org.junit.platform:junit-platform-launcher")
+    testRuntimeOnly(libs.folia.api) // The API Geyser compiles against, to load its classes in tests
+
+    // Latest paper-api build of the runServer version, see PaperApiCompatibilityTest
+    runServerPaperApi("io.papermc.paper:paper-api:${libs.versions.runpaperversion.get()}.build.+")
 }
 
 platformRelocate("it.unimi.dsi.fastutil")
@@ -80,5 +92,14 @@ tasks {
     runServer {
         minecraftVersion(libs.versions.runpaperversion.get())
         jvmArgs("-Dcom.mojang.eula.agree=true")
+    }
+
+    test {
+        useJUnitPlatform()
+        inputs.files(runServerPaperApi)
+        // Resolved when the test runs, not while configuring
+        jvmArgumentProviders.add(CommandLineArgumentProvider {
+            listOf("-Dgeyser.runServerPaperApi=" + runServerPaperApi.asPath)
+        })
     }
 }
