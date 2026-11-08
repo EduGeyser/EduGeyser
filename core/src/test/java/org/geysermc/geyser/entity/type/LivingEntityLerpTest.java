@@ -877,6 +877,28 @@ class LivingEntityLerpTest {
     }
 
     /**
+     * The Bedrock client predicts the boat the player rides and takes a move of it only as a
+     * teleport, so a teleport within 64 blocks reaches it as one. The Java client interpolates
+     * that teleport, so it gets no answer.
+     */
+    @Test
+    void aNearTeleportOfAVehicleTheBedrockClientPredictsIsSentAsATeleport() {
+        mockContext(context -> {
+            Fixture fixture = Fixture.create(context);
+            BoatEntity boat = boat(fixture);
+            boat.setPassengers(new ArrayList<>(List.of(fixture.player())));
+            when(fixture.player().getVehicle()).thenReturn(boat);
+            when(fixture.session().isInClientPredictedVehicle()).thenReturn(true);
+
+            fixture.teleport(boat, Vector3d.from(10, 0, 0), List.of());
+
+            assertEquals(Vector3f.from(10, 0, 0), boat.position());
+            assertTrue(fixture.lastAbsoluteMove().isTeleported());
+            assertTrue(fixture.vehicleMoves().isEmpty());
+        });
+    }
+
+    /**
      * A minecart interpolating toward x = 3 has ticked to x = 1. A relative teleport by 5 builds
      * on that target, as the Java client builds on its interpolation target, and ends at x = 8.
      */

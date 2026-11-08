@@ -91,7 +91,11 @@ public class JavaTeleportEntityTranslator extends PacketTranslator<ClientboundTe
             // simulation goes on from the target.
             clientVehicle.getVehicleComponent().moveAbsolute(position);
         }
-        entity.teleport(position.toFloat(), newYaw, newPitch, packet.isOnGround(), snap);
+        // The Bedrock client ignores a move without the teleport flag for the vehicle it predicts
+        // (see the world border correction in BedrockPlayerAuthInputTranslator), so that vehicle
+        // gets every teleport as one. Whether the Java client snaps stays the decision above.
+        boolean predictedByBedrock = session.isInClientPredictedVehicle() && session.getPlayerEntity().getVehicle() == entity;
+        entity.teleport(position.toFloat(), newYaw, newPitch, packet.isOnGround(), snap || predictedByBedrock);
 
         Vector3f deltaMovement = packet.getDeltaMovement().toFloat().add(
             packet.getRelatives().contains(PositionElement.DELTA_X) ? entity.getMotion().getX() : 0,
