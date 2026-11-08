@@ -32,7 +32,6 @@ import org.cloudburstmc.math.vector.Vector3f;
 import org.cloudburstmc.nbt.NbtMap;
 import org.cloudburstmc.protocol.bedrock.data.LevelEvent;
 import org.cloudburstmc.protocol.bedrock.data.LevelEventType;
-import org.cloudburstmc.protocol.bedrock.data.ParticleType;
 import org.cloudburstmc.protocol.bedrock.data.inventory.ItemData;
 import org.cloudburstmc.protocol.bedrock.packet.BedrockPacket;
 import org.cloudburstmc.protocol.bedrock.packet.LevelEventGenericPacket;
@@ -56,28 +55,19 @@ import org.geysermc.mcprotocollib.protocol.data.game.level.particle.VibrationPar
 import org.geysermc.mcprotocollib.protocol.data.game.level.particle.positionsource.BlockPositionSource;
 
 import java.util.List;
-import java.util.Locale;
 import java.util.Optional;
 import java.util.concurrent.ThreadLocalRandom;
 import java.util.function.Function;
 
+/**
+ * How a Java particle is sent to Bedrock as a packet. Area effect clouds take a Bedrock particle type instead,
+ * which {@link org.geysermc.geyser.entity.type.AreaEffectCloudEntity} maps itself.
+ */
 public sealed interface ParticleMapping {
-
-    Optional<ParticleType> particleType();
 
     Function<Vector3f, BedrockPacket> mapParticle(GeyserSession session, @Nullable ParticleData particleData);
 
     record IdentifierBased(Key identifier) implements ParticleMapping {
-
-        @Override
-        public Optional<ParticleType> particleType() {
-            try {
-                // Most particle types should match
-                return Optional.of(ParticleType.valueOf(identifier.value().toUpperCase(Locale.ROOT)));
-            } catch (IllegalArgumentException exception) {
-                return Optional.empty();
-            }
-        }
 
         @Override
         public Function<Vector3f, BedrockPacket> mapParticle(GeyserSession session, @Nullable ParticleData particleData) {
@@ -86,14 +76,6 @@ public sealed interface ParticleMapping {
     }
 
     record LevelEventTypeBased(LevelEventType event) implements ParticleMapping {
-
-        @Override
-        public Optional<ParticleType> particleType() {
-            if (event instanceof ParticleType type) {
-                return Optional.of(type);
-            }
-            return Optional.empty();
-        }
 
         @Override
         public Function<Vector3f, BedrockPacket> mapParticle(GeyserSession session, @Nullable ParticleData particleData) {
@@ -108,11 +90,6 @@ public sealed interface ParticleMapping {
 
     @FunctionalInterface
     non-sealed interface BuiltIn extends ParticleMapping {
-
-        @Override
-        default Optional<ParticleType> particleType() {
-            return Optional.empty();
-        }
     }
 
     static ParticleMapping ofIdentifier(String identifier) {
