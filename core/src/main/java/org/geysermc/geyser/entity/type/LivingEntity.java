@@ -512,7 +512,9 @@ public class LivingEntity extends Entity implements Tickable {
         if (interpolate && shouldLerp() && position.distanceSquared(session.getPlayerEntity().position()) < 4096) {
             lerpAbsolute(position, yaw, pitch, headYaw, isOnGround);
         } else {
-            // This position replaces any lerp target, even when it equals where the lerp is now
+            // This position replaces any lerp target, even when it equals where the lerp is now.
+            // Unlike the Java client: its interpolation handler survives a snap and shifts its
+            // target by the jump, so the entity ends past the new position until the next update.
             cancelLerp();
             super.moveAbsolute(position, yaw, pitch, headYaw, isOnGround, teleported);
         }

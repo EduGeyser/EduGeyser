@@ -104,7 +104,9 @@ public class MinecartEntity extends Entity implements Tickable {
         if (!snap && !session.isUsingExperimentalMinecartLogic() && position.distanceSquared(session.getPlayerEntity().position()) < 4096) {
             lerpTo(position, yaw, pitch, yaw, isOnGround);
         } else {
-            // This position replaces the target of a running lerp, which would pull the cart back
+            // This position replaces the target of a running lerp, which would pull the cart back.
+            // Unlike the Java client: its interpolation handler survives a snap and shifts its
+            // target by the jump, so the cart ends past the new position until the next update.
             this.steps = 0;
             super.moveAbsolute(position, yaw, pitch, yaw, isOnGround, snap);
         }
