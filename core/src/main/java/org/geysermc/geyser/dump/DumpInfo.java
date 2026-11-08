@@ -87,7 +87,6 @@ import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.ExecutionException;
-import java.util.concurrent.TimeoutException;
 import java.util.stream.Collectors;
 
 @Getter
@@ -196,12 +195,15 @@ public class DumpInfo {
     }
 
     /**
+     * Waits for the engine's answer, at most two seconds: the dump command builds and uploads the dump on the
+     * calling thread anyway.
+     *
      * @return what the ICE port holds, or null when the engine did not answer, which leaves it out of the dump
      */
     private static IceEndpoint.@Nullable Sockets iceSockets(NethernetManagerImpl manager) {
         try {
-            return manager.iceSockets();
-        } catch (ExecutionException | TimeoutException e) {
+            return manager.iceSockets().get();
+        } catch (ExecutionException e) {
             return null;
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();

@@ -50,7 +50,6 @@ import java.util.Comparator;
 import java.util.List;
 import java.util.Map;
 import java.util.TreeMap;
-import java.util.concurrent.ExecutionException;
 import java.util.concurrent.TimeoutException;
 import java.util.stream.Collectors;
 
@@ -157,8 +156,16 @@ public class NetherNetCommand extends GeyserCommand {
         if (manager == null) {
             return;
         }
-        source.sendMessage(iceSockets(manager));
+        // The engine answers on its own thread, which must not block, and the command may run on the server thread,
+        // which must not wait. The other lines follow the ICE port's, to keep their order.
+        manager.iceSockets().whenCompleteAsync((sockets, failure) -> {
+            source.sendMessage(failure == null ? iceSockets(sockets)
+                : "Could not ask the ICE port which addresses it is open on: " + iceSocketsFailure(failure) + ".");
+            nxsDiagnostics(source, manager);
+        }, geyser.getScheduledThread());
+    }
 
+    private void nxsDiagnostics(GeyserCommandSource source, NethernetManagerImpl manager) {
         NetherNetNxs nxs = manager.nxs();
         ProviderClient client = nxs == null ? null : nxs.client();
         if (client == null) {
@@ -234,29 +241,18 @@ public class NetherNetCommand extends GeyserCommand {
                 .map(family -> "IPv" + family.number()).collect(Collectors.joining(" and ")) + ".";
     }
 
-    private static String iceSockets(NethernetManagerImpl manager) {
-        String failed = "Could not ask the ICE port which addresses it is open on: ";
-        try {
-            return iceSockets(manager.iceSockets());
-        } catch (ExecutionException e) {
-            Throwable cause = e.getCause();
-            String type = cause.getClass().getSimpleName();
-            return failed + (cause.getMessage() == null ? type : type + ": " + cause.getMessage()) + ".";
-        } catch (TimeoutException e) {
-            return failed + "the engine did not answer in time.";
-        } catch (InterruptedException e) {
-            Thread.currentThread().interrupt();
-            return failed + "interrupted.";
-        }
+    private static String iceSocketsFailure(Throwable failure) {
+        return failure instanceof TimeoutException ? "the engine did not answer in time" : NetherNetNxs.failure(failure);
     }
 
     /**
      * Which local addresses the ICE port is open on, and which it could not be opened on and why. The port opens on
-     * an address when the first player's connection, or STUN discovery, uses it.
+     * an address the first time a connection, or STUN discovery, uses it.
      */
     static String iceSockets(IceEndpoint.Sockets sockets) {
         if (sockets.bound().isEmpty() && sockets.failed().isEmpty()) {
-            return "The ICE port is not open on any address yet: it opens when the first player joins.";
+            return "The ICE port is not open on any address yet: it opens on an address the first time a connection or STUN "
+                + "discovery uses it.";
         }
         String open = sockets.bound().isEmpty()
             ? "The ICE port is not open on any address."

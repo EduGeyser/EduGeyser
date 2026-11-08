@@ -93,7 +93,8 @@ class NetherNetCommandTest {
         assertEquals("The ICE port is not open on any address. It could not be opened on 10.0.0.5:19132"
                 + " (Address already in use).",
             NetherNetCommand.iceSockets(new IceEndpoint.Sockets(List.of(), List.of(taken))));
-        assertEquals("The ICE port is not open on any address yet: it opens when the first player joins.",
+        assertEquals("The ICE port is not open on any address yet: it opens on an address the first time a"
+                + " connection or STUN discovery uses it.",
             NetherNetCommand.iceSockets(IceEndpoint.Sockets.NONE));
     }
 
