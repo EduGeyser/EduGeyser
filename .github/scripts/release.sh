@@ -74,12 +74,18 @@ echo "Releasing $SHA as $tag"
 
 # --- Notes: every commit since the previous release, with its author ---
 
+# The list is collapsed, so the notes written above it on the draft and the downloads below stay in view
 previous=$(git describe --tags --abbrev=0 --match 'v*-edu' "$SHA^" 2>/dev/null || true)
 {
     if [ -n "$previous" ]; then
-        echo "Changes since $previous:"
+        count=$(git rev-list --count "$previous..$SHA")
+        [ "$count" = 1 ] && commits="1 commit" || commits="$count commits"
+        echo "<details>"
+        echo "<summary>Changes since $previous ($commits)</summary>"
         echo
         git log --reverse --abbrev=9 --format='- %h %s (%an)' "$previous..$SHA"
+        echo
+        echo "</details>"
         echo
     fi
     echo "Bundled EduGeyser extension: $extension_version"
