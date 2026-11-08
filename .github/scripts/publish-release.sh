@@ -24,7 +24,12 @@ codeberg() {
     curl -sS --fail-with-body -X "$method" -H "Authorization: token $CODEBERG_TOKEN" "$@" "$CODEBERG_API$path"
 }
 
-expected_assets=$(for platform in "${PLATFORMS[@]}"; do echo "EduGeyser-$platform.jar"; done | sort)
+required_assets=$(for platform in "${PLATFORMS[@]}"; do echo "EduGeyser-$platform.jar"; done | sort)
+
+# Prints the jars that the asset names on stdin lack; other assets may be there too
+missing_assets() {
+    comm -23 <(echo "$required_assets") <(sort -u)
+}
 
 # --- GitHub: the draft, the commit it targets and its notes ---
 
@@ -35,9 +40,12 @@ github_id=$(jq -r '.id' <<<"$github_release")
 github_draft=$(jq -r '.draft' <<<"$github_release")
 sha=$(jq -r '.target_commitish' <<<"$github_release")
 [[ "$sha" =~ ^[0-9a-f]{40}$ ]] || fail "GitHub's release $TAG targets '$sha', not a commit"
-[ "$(jq -r '.assets[] | select(.state == "uploaded") | .name' <<<"$github_release" | sort)" = "$expected_assets" ] \
+[ -z "$(jq -r '.assets[] | select(.state == "uploaded") | .name' <<<"$github_release" | missing_assets)" ] \
     || fail "GitHub's release $TAG does not have all jars. Rerun the Release workflow for its build."
-jq -r '.body // ""' <<<"$github_release" > notes.md
+# -j: the notes exactly as GitHub holds them, without a newline added
+jq -j '.body // ""' <<<"$github_release" > notes.md
+# Codeberg ignores an empty body, which would leave its generated notes in place
+[ -s notes.md ] || fail "GitHub's release $TAG has no notes"
 
 if [ "$github_draft" = false ]; then
     echo "$TAG is already published on GitHub, which publishes last"
@@ -46,9 +54,16 @@ fi
 
 # --- Codeberg: the same notes, then published ---
 
-codeberg_release=$(codeberg GET "/releases?limit=50" | jq -c --arg tag "$TAG" '[.[] | select(.tag_name == $tag)] | first // empty')
-[ -n "$codeberg_release" ] || fail "Codeberg has no release $TAG. Rerun the Release workflow for its build."
-[ "$(jq -r '.assets[].name' <<<"$codeberg_release" | sort)" = "$expected_assets" ] \
+status=$(curl -sS -o codeberg-release.json -w '%{http_code}' -H "Authorization: token $CODEBERG_TOKEN" \
+    "$CODEBERG_API/releases/tags/$TAG")
+case "$status" in
+    200) ;;
+    404) fail "Codeberg has no release $TAG. Rerun the Release workflow for its build." ;;
+    *) fail "Codeberg answered HTTP $status when looking up the release $TAG" ;;
+esac
+codeberg_release=$(cat codeberg-release.json)
+rm -f codeberg-release.json
+[ -z "$(jq -r '.assets[].name' <<<"$codeberg_release" | missing_assets)" ] \
     || fail "Codeberg's release $TAG does not have all jars. Rerun the Release workflow for its build."
 codeberg PATCH "/releases/$(jq -r '.id' <<<"$codeberg_release")" -H 'Content-Type: application/json' \
     -d "$(jq -n --rawfile body notes.md '{body: $body, draft: false}')" >/dev/null
@@ -56,6 +71,14 @@ codeberg PATCH "/releases/$(jq -r '.id' <<<"$codeberg_release")" -H 'Content-Typ
 
 # --- GitHub last ---
 
-gh api -X PATCH "repos/$GITHUB_REPOSITORY/releases/$github_id" -F draft=false -f make_latest=true >/dev/null
+# Latest only when no published release has a higher version, so publishing an older draft
+# after a newer one leaves the newer one as latest
+latest=$(gh api "repos/$GITHUB_REPOSITORY/releases/latest" --jq .tag_name 2>/dev/null || true)
+make_latest=true
+if [ -n "$latest" ] && [ "$latest" != "$TAG" ] \
+    && [ "$(printf '%s\n%s\n' "$latest" "$TAG" | sort -V | tail -n 1)" = "$latest" ]; then
+    make_latest=false
+fi
+gh api -X PATCH "repos/$GITHUB_REPOSITORY/releases/$github_id" -F draft=false -f make_latest="$make_latest" >/dev/null
 [ "$(gh api "repos/$GITHUB_REPOSITORY/commits/$TAG" --jq .sha)" = "$sha" ] || fail "GitHub's tag $TAG does not point at $sha"
 echo "Published $TAG on GitHub and Codeberg"

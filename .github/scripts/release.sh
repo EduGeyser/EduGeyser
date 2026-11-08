@@ -101,7 +101,12 @@ rm -f codeberg-repo.json
 
 # --- GitHub: a draft with all jars ---
 
-expected_assets=$(for platform in "${PLATFORMS[@]}"; do echo "EduGeyser-$platform.jar"; done | sort)
+required_assets=$(for platform in "${PLATFORMS[@]}"; do echo "EduGeyser-$platform.jar"; done | sort)
+
+# Prints the jars that the asset names on stdin lack; other assets may be there too
+missing_assets() {
+    comm -23 <(echo "$required_assets") <(sort -u)
+}
 
 github_id=""
 while IFS=$'\t' read -r id release_tag _ draft; do
@@ -111,9 +116,9 @@ while IFS=$'\t' read -r id release_tag _ draft; do
         exit 0
     fi
     # Inside this loop, nothing may read stdin: it holds the release list
-    uploaded=$(gh api "repos/$GITHUB_REPOSITORY/releases/$id" \
-        --jq '.assets[] | select(.state == "uploaded") | .name' </dev/null | sort)
-    if [ "$uploaded" = "$expected_assets" ]; then
+    missing=$(gh api "repos/$GITHUB_REPOSITORY/releases/$id" \
+        --jq '.assets[] | select(.state == "uploaded") | .name' </dev/null | missing_assets)
+    if [ -z "$missing" ]; then
         github_id=$id
     else
         # Left by a run that failed before its uploads finished
@@ -144,10 +149,16 @@ if [ "$(codeberg_status "/tags/$tag")" = 200 ]; then
     [ "$tagged" = "$SHA" ] || fail "Codeberg's tag $tag points at $tagged, not $SHA"
 fi
 
-codeberg_release=$(codeberg GET "/releases?limit=50" | jq -c --arg tag "$tag" '[.[] | select(.tag_name == $tag)] | first // empty')
+codeberg_release=""
+status=$(codeberg_status "/releases/tags/$tag")
+case "$status" in
+    200) codeberg_release=$(codeberg GET "/releases/tags/$tag") ;;
+    404) ;;
+    *) fail "Codeberg answered HTTP $status when looking up the release $tag" ;;
+esac
 # A published one means the Publish release workflow stopped between Codeberg and GitHub
 if [ -n "$codeberg_release" ] && [ "$(jq -r '.draft' <<<"$codeberg_release")" = true ]; then
-    if [ "$(jq -r '.assets[].name' <<<"$codeberg_release" | sort)" != "$expected_assets" ]; then
+    if [ -n "$(jq -r '.assets[].name' <<<"$codeberg_release" | missing_assets)" ]; then
         codeberg DELETE "/releases/$(jq -r '.id' <<<"$codeberg_release")" >/dev/null
         codeberg_release=""
     fi

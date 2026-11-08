@@ -16,6 +16,8 @@ permissions: {}
 concurrency:
   group: release
   cancel-in-progress: false
+  # Every waiting run stays queued; by default a new one would cancel the one waiting
+  queue: max
 
 jobs:
   publish:
