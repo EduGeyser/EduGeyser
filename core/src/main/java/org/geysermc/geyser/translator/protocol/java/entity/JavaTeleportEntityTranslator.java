@@ -46,7 +46,10 @@ import org.geysermc.mcprotocollib.protocol.packet.ingame.clientbound.entity.Clie
 import org.geysermc.mcprotocollib.protocol.packet.ingame.serverbound.level.ServerboundMoveVehiclePacket;
 import org.geysermc.mcprotocollib.protocol.packet.ingame.serverbound.player.ServerboundMovePlayerPosRotPacket;
 
+import java.util.Collections;
+import java.util.IdentityHashMap;
 import java.util.Objects;
+import java.util.Set;
 
 @Translator(packet = ClientboundTeleportEntityPacket.class)
 public class JavaTeleportEntityTranslator extends PacketTranslator<ClientboundTeleportEntityPacket> {
@@ -146,16 +149,22 @@ public class JavaTeleportEntityTranslator extends PacketTranslator<ClientboundTe
      * MojMap Entity#isLocalInstanceAuthoritative, Mob#getControllingPassenger
      */
     private static boolean isSteeredByPlayer(GeyserSession session, Entity entity) {
-        if (entity.getPassengers().isEmpty()) {
-            return false;
+        // Passenger packets can describe mobs riding each other in a loop, which the Java client
+        // refuses to form (Entity#startRiding) and nobody steers
+        Set<Entity> visited = Collections.newSetFromMap(new IdentityHashMap<>());
+        Entity vehicle = entity;
+        while (visited.add(vehicle) && !vehicle.getPassengers().isEmpty()) {
+            Entity first = vehicle.getPassengers().getFirst();
+            if (first == session.getPlayerEntity()) {
+                // ClientVehicle#canSimulateMovement leaves out a vehicle the Bedrock client predicts
+                return vehicle instanceof ClientVehicle clientVehicle && (clientVehicle.canSimulateMovement() || session.isInClientPredictedVehicle());
+            }
+            if (!(vehicle instanceof MobEntity) || vehicle.getFlag(EntityFlag.NO_AI) || !(first instanceof MobEntity)
+                || session.javaRegistries().is(NON_CONTROLLING_RIDER, first.getJavaDefinition())) {
+                return false;
+            }
+            vehicle = first;
         }
-        Entity first = entity.getPassengers().getFirst();
-        if (first == session.getPlayerEntity()) {
-            // ClientVehicle#canSimulateMovement leaves out a vehicle the Bedrock client predicts
-            return entity instanceof ClientVehicle clientVehicle && (clientVehicle.canSimulateMovement() || session.isInClientPredictedVehicle());
-        }
-        return entity instanceof MobEntity && !entity.getFlag(EntityFlag.NO_AI) && first instanceof MobEntity
-            && !session.javaRegistries().is(NON_CONTROLLING_RIDER, first.getJavaDefinition())
-            && isSteeredByPlayer(session, first);
+        return false;
     }
 }

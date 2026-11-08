@@ -831,6 +831,36 @@ class LivingEntityLerpTest {
     }
 
     /**
+     * Two striders ride each other, a loop that passenger packets can describe although the Java
+     * client refuses to form it. Nobody steers them, so a snapped teleport of one gets no answer.
+     */
+    @Test
+    void aTeleportOfMobsRidingEachOtherIsNotAcknowledged() {
+        mockContext(context -> {
+            Fixture fixture = Fixture.create(context);
+            when(fixture.session().javaRegistries()).thenReturn(mock(JavaRegistryProvider.class));
+            StriderEntity other = secondStrider(fixture);
+            other.setPassengers(new ArrayList<>(List.of(fixture.strider())));
+            fixture.strider().setPassengers(new ArrayList<>(List.of(other)));
+
+            fixture.teleport(Vector3d.from(100, 0, 0), List.of());
+
+            assertEquals(Vector3f.from(100, 0, 0), fixture.strider().position());
+            assertTrue(fixture.vehicleMoves().isEmpty());
+        });
+    }
+
+    /**
+     * A saddled strider at the origin, besides the one of the fixture.
+     */
+    private static StriderEntity secondStrider(Fixture fixture) {
+        StriderEntity strider = new StriderEntity(Fixture.spawnContext(fixture.session(), VanillaEntities.STRIDER, 8));
+        strider.setValid(true);
+        strider.setFlag(EntityFlag.SADDLED, true);
+        return strider;
+    }
+
+    /**
      * The Java client also applies a teleport within 64 blocks to a vehicle it steers, interpolated
      * and without an answer. Geyser simulates the strider, so the strider and its component go
      * there at once, and the Bedrock client interpolates the move.
