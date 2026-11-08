@@ -305,6 +305,23 @@ class LivingEntityLerpTest {
     }
 
     /**
+     * Out of the interpolation radius, with no lerp running, a relative update moves the vehicle
+     * component once, so its box stays on the strider.
+     */
+    @Test
+    void aRelativeUpdateOutsideTheRadiusMovesTheVehicleComponentOnce() {
+        mockContext(context -> {
+            Fixture fixture = Fixture.create(context);
+            when(fixture.player().position()).thenReturn(Vector3f.from(200, 0, 0));
+
+            fixture.strider().moveRelative(3, 0, 0, 0, 0, 0, false);
+
+            assertEquals(Vector3f.from(3, 0, 0), fixture.strider().position());
+            assertEquals(3, fixture.strider().getVehicleComponent().getBoundingBox().getMiddleX());
+        });
+    }
+
+    /**
      * A saddled strider at the origin on a mocked session that records the packets sent to the
      * client and the scheduled lerp steps, which the tests run by hand. The player holds the
      * fungus on a stick while {@code holding} is set.

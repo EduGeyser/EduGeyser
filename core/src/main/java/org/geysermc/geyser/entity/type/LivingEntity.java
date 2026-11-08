@@ -450,15 +450,13 @@ public class LivingEntity extends Entity implements Tickable {
 
     @Override
     public void moveRelative(double relX, double relY, double relZ, float yaw, float pitch, float headYaw, boolean isOnGround) {
-        if (this instanceof ClientVehicle clientVehicle) {
-            if (clientVehicle.shouldSimulateMovement()) {
-                return;
-            }
-            clientVehicle.getVehicleComponent().moveRelative(relX, relY, relZ);
+        if (this instanceof ClientVehicle clientVehicle && clientVehicle.shouldSimulateMovement()) {
+            return;
         }
 
         boolean moves = relX != 0 || relY != 0 || relZ != 0;
         if (shouldLerp() && moves && position.distanceSquared(session.getPlayerEntity().position()) < 4096) {
+            moveVehicleComponent(relX, relY, relZ);
             lerpRelative(relX, relY, relZ, yaw, pitch, headYaw, isOnGround);
             return;
         }
@@ -467,11 +465,22 @@ public class LivingEntity extends Entity implements Tickable {
         if (lerpTarget != null) {
             // The server's delta is relative to the lerp target, which the entity has not reached
             // yet. Move there in one absolute step: a relative one from here would leave the entity
-            // short by the unfinished part, and the raw relative path would also move the vehicle
-            // component, which already took this delta above, a second time.
+            // short by the unfinished part.
+            moveVehicleComponent(relX, relY, relZ);
             moveAbsoluteRaw(lerpTarget.add(relX, relY, relZ), yaw, pitch, headYaw, isOnGround, false);
         } else {
+            // Entity#moveRelativeRaw moves the vehicle component itself
             super.moveRelative(relX, relY, relZ, yaw, pitch, headYaw, isOnGround);
+        }
+    }
+
+    /**
+     * Moves the vehicle component of a {@link ClientVehicle} along with a server update that does
+     * not go through {@link Entity#moveRelativeRaw}, which would move it itself.
+     */
+    private void moveVehicleComponent(double relX, double relY, double relZ) {
+        if (this instanceof ClientVehicle clientVehicle) {
+            clientVehicle.getVehicleComponent().moveRelative(relX, relY, relZ);
         }
     }
 
