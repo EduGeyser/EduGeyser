@@ -549,6 +549,13 @@ public class LivingEntity extends Entity implements Tickable {
         if (generation != lerpGeneration || this.lerpSteps <= 0 || !valid) {
             return;
         }
+        if (isMovedBySession()) {
+            // Control passed to this session after the lerp started (mounting, or leaving the
+            // vehicle this one rode). The remaining steps toward the old server target would
+            // overwrite the session's position and force move the client, so drop them.
+            this.lerpSteps = 0;
+            return;
+        }
         float time = 1.0f / this.lerpSteps;
         float lerpXTotal = GenericMath.lerp(this.position.getX(), this.lerpPosition.getX(), time);
         float lerpYTotal = GenericMath.lerp(this.position.getY(), this.lerpPosition.getY(), time);
@@ -600,6 +607,16 @@ public class LivingEntity extends Entity implements Tickable {
             this.lerpFuture = session.scheduleInEventLoop(() -> lerpStep(generation),
                     (long) (stepIntervalMs * 1000), TimeUnit.MICROSECONDS);
         }
+    }
+
+    /**
+     * Whether this session moves the entity itself: Geyser simulates it, or the client predicts it
+     * as the player's vehicle. Unlike {@link #shouldLerp()}, the client prediction case only covers
+     * the player's own vehicle, so other vehicles still finish their interpolation.
+     */
+    private boolean isMovedBySession() {
+        return this instanceof ClientVehicle clientVehicle && (clientVehicle.shouldSimulateMovement()
+            || session.isInClientPredictedVehicle() && session.getPlayerEntity().getVehicle() == this);
     }
 
     @Override
