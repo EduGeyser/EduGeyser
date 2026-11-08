@@ -25,27 +25,46 @@
 
 package org.geysermc.geyser.entity.type;
 
+import io.netty.buffer.ByteBuf;
+import io.netty.buffer.Unpooled;
+import org.checkerframework.checker.nullness.qual.Nullable;
+import org.cloudburstmc.protocol.bedrock.codec.BedrockCodec;
+import org.cloudburstmc.protocol.bedrock.codec.BedrockCodecHelper;
+import org.cloudburstmc.protocol.bedrock.codec.v1001.Bedrock_v1001;
 import org.cloudburstmc.protocol.bedrock.data.ParticleType;
+import org.cloudburstmc.protocol.bedrock.data.entity.EntityDataMap;
 import org.cloudburstmc.protocol.bedrock.data.entity.EntityDataTypes;
 import org.geysermc.geyser.entity.VanillaEntities;
 import org.geysermc.geyser.entity.spawn.EntitySpawnContext;
+import org.geysermc.geyser.network.bedrock.GameProtocol;
+import org.geysermc.geyser.scoreboard.network.util.GeyserMockContext;
 import org.geysermc.geyser.session.GeyserSession;
 import org.geysermc.mcprotocollib.protocol.data.game.entity.metadata.MetadataTypes;
 import org.geysermc.mcprotocollib.protocol.data.game.entity.metadata.type.ObjectEntityMetadata;
 import org.geysermc.mcprotocollib.protocol.data.game.level.particle.Particle;
+import org.junit.jupiter.api.Named;
 import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.Arguments;
 import org.junit.jupiter.params.provider.CsvSource;
+import org.junit.jupiter.params.provider.EnumSource;
+import org.junit.jupiter.params.provider.MethodSource;
 
+import java.util.ArrayList;
+import java.util.List;
+import java.util.Objects;
 import java.util.UUID;
+import java.util.stream.Stream;
 
 import static org.geysermc.geyser.scoreboard.network.util.GeyserMockContext.mockContext;
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.mockito.Mockito.when;
 
 class AreaEffectCloudEntityTest {
 
     /**
-     * Every Java particle that has a Bedrock particle type for clouds. All but EGG_CRACK and SONIC_BOOM are the
-     * eventType values of the particle mappings before upstream Geyser #6878 (mappings b4cec82).
+     * Every Java particle that has a Bedrock particle type for clouds, on the newest Bedrock protocol. All but
+     * EGG_CRACK and SONIC_BOOM are the eventType values of the particle mappings before upstream Geyser #6878
+     * (mappings b4cec82).
      */
     @ParameterizedTest
     @CsvSource({
@@ -128,13 +147,84 @@ class AreaEffectCloudEntityTest {
     void cloudShowsBedrockParticleType(org.geysermc.mcprotocollib.protocol.data.game.level.particle.ParticleType javaType,
                                        ParticleType bedrockType) {
         mockContext(context -> {
-            var spawnContext = EntitySpawnContext.DUMMY_CONTEXT.apply(context.mock(GeyserSession.class), UUID.randomUUID(),
-                VanillaEntities.AREA_EFFECT_CLOUD).geyserId(1L);
-            AreaEffectCloudEntity cloud = new AreaEffectCloudEntity(spawnContext);
-
-            cloud.setParticle(new ObjectEntityMetadata<>(0, MetadataTypes.PARTICLE, new Particle(javaType, null)));
-
-            assertEquals(bedrockType, cloud.metadata.get(EntityDataTypes.AREA_EFFECT_CLOUD_PARTICLE));
+            GeyserSession session = session(context, GameProtocol.DEFAULT_BEDROCK_PROTOCOL);
+            assertEquals(bedrockType, cloudParticleType(session, javaType));
         });
+    }
+
+    @ParameterizedTest
+    @EnumSource(value = org.geysermc.mcprotocollib.protocol.data.game.level.particle.ParticleType.class,
+        names = {"ORANGE_POPLAR_LEAVES", "RED_POPLAR_LEAVES", "YELLOW_POPLAR_LEAVES"})
+    void poplarLeavesBecomeCherryLeavesBefore26_40(org.geysermc.mcprotocollib.protocol.data.game.level.particle.ParticleType javaType) {
+        mockContext(context -> {
+            GeyserSession session = session(context, Bedrock_v1001.CODEC.getProtocolVersion());
+            assertEquals(ParticleType.CHERRY_LEAVES, cloudParticleType(session, javaType));
+        });
+    }
+
+    /**
+     * Writes and reads back the cloud particle type of every Java particle with the codec of every protocol Geyser
+     * serves, so no session gets a particle type its codec has no ID for.
+     */
+    @ParameterizedTest
+    @MethodSource("servedCodecs")
+    void cloudParticleTypeEncodesForCodec(BedrockCodec codec) {
+        BedrockCodecHelper helper = codec.createHelper();
+        List<String> failures = new ArrayList<>();
+        mockContext(context -> {
+            GeyserSession session = session(context, codec.getProtocolVersion());
+            for (var javaType : org.geysermc.mcprotocollib.protocol.data.game.level.particle.ParticleType.values()) {
+                ParticleType type = cloudParticleType(session, javaType);
+                if (type == null) {
+                    continue;
+                }
+
+                EntityDataMap written = new EntityDataMap();
+                written.put(EntityDataTypes.AREA_EFFECT_CLOUD_PARTICLE, type);
+                ByteBuf buffer = Unpooled.buffer();
+                try {
+                    helper.writeEntityData(buffer, written);
+                    EntityDataMap read = new EntityDataMap();
+                    helper.readEntityData(buffer, read);
+                    ParticleType readType = read.get(EntityDataTypes.AREA_EFFECT_CLOUD_PARTICLE);
+                    if (readType != type) {
+                        failures.add(javaType + " -> " + type + " read back as " + readType);
+                    }
+                } catch (RuntimeException exception) {
+                    failures.add(javaType + " -> " + type + ": " + exception.getMessage());
+                } finally {
+                    buffer.release();
+                }
+            }
+        });
+        assertEquals(List.of(), failures);
+    }
+
+    static Stream<Arguments> servedCodecs() {
+        return GameProtocol.SUPPORTED_BEDROCK_PROTOCOLS.intStream().boxed().flatMap(protocol -> Stream.of(
+            codecArgument(GameProtocol.getBedrockCodec(protocol), "v" + protocol),
+            codecArgument(GameProtocol.getEducationCodec(protocol), "v" + protocol + " Education")
+        )).filter(Objects::nonNull);
+    }
+
+    private static @Nullable Arguments codecArgument(@Nullable BedrockCodec codec, String name) {
+        return codec == null ? null : Arguments.of(Named.of(name, codec));
+    }
+
+    private static GeyserSession session(GeyserMockContext context, int protocolVersion) {
+        GeyserSession session = context.mock(GeyserSession.class);
+        when(session.protocolVersion()).thenReturn(protocolVersion);
+        return session;
+    }
+
+    private static @Nullable ParticleType cloudParticleType(GeyserSession session,
+                                                           org.geysermc.mcprotocollib.protocol.data.game.level.particle.ParticleType javaType) {
+        var spawnContext = EntitySpawnContext.DUMMY_CONTEXT.apply(session, UUID.randomUUID(), VanillaEntities.AREA_EFFECT_CLOUD)
+            .geyserId(1L);
+        AreaEffectCloudEntity cloud = new AreaEffectCloudEntity(spawnContext);
+
+        cloud.setParticle(new ObjectEntityMetadata<>(0, MetadataTypes.PARTICLE, new Particle(javaType, null)));
+
+        return cloud.metadata.get(EntityDataTypes.AREA_EFFECT_CLOUD_PARTICLE);
     }
 }

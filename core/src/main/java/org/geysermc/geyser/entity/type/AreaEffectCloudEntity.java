@@ -30,6 +30,7 @@ import org.cloudburstmc.protocol.bedrock.data.ParticleType;
 import org.cloudburstmc.protocol.bedrock.data.entity.EntityDataTypes;
 import org.cloudburstmc.protocol.bedrock.data.entity.EntityFlag;
 import org.geysermc.geyser.entity.spawn.EntitySpawnContext;
+import org.geysermc.geyser.network.bedrock.GameProtocol;
 import org.geysermc.geyser.util.MathUtils;
 import org.geysermc.mcprotocollib.protocol.data.game.entity.metadata.EntityMetadata;
 import org.geysermc.mcprotocollib.protocol.data.game.entity.metadata.type.FloatEntityMetadata;
@@ -66,7 +67,7 @@ public class AreaEffectCloudEntity extends Entity {
 
     public void setParticle(EntityMetadata<Particle, ?> entityMetadata) {
         Particle particle = entityMetadata.getValue();
-        ParticleType type = bedrockParticleType(particle.getType());
+        ParticleType type = bedrockParticleType(particle.getType(), session.protocolVersion());
         if (type != null) {
             metadata.put(EntityDataTypes.AREA_EFFECT_CLOUD_PARTICLE, type);
         }
@@ -80,8 +81,10 @@ public class AreaEffectCloudEntity extends Entity {
      * The Bedrock particle type a cloud shows for a Java particle, or null if Bedrock has none. These are listed
      * here because the particle mappings send most particles by an identifier that rarely matches the enum name.
      * All but EGG_CRACK and SONIC_BOOM are the types the particle mappings held before upstream Geyser #6878.
+     * Each type must have an ID in the codec of every protocol Geyser serves, or the metadata fails to encode.
      */
-    private static @Nullable ParticleType bedrockParticleType(org.geysermc.mcprotocollib.protocol.data.game.level.particle.ParticleType javaType) {
+    private static @Nullable ParticleType bedrockParticleType(org.geysermc.mcprotocollib.protocol.data.game.level.particle.ParticleType javaType,
+                                                             int protocolVersion) {
         return switch (javaType) {
             case ANGRY_VILLAGER -> ParticleType.VILLAGER_ANGRY;
             case BLOCK -> ParticleType.TERRAIN;
@@ -122,13 +125,13 @@ public class AreaEffectCloudEntity extends Entity {
             case LARGE_SMOKE -> ParticleType.LARGE_SMOKE;
             case LAVA -> ParticleType.LAVA;
             case NOTE -> ParticleType.NOTE;
-            case ORANGE_POPLAR_LEAVES -> ParticleType.ORANGE_POPLAR_LEAVES;
+            case ORANGE_POPLAR_LEAVES -> poplarLeaves(ParticleType.ORANGE_POPLAR_LEAVES, protocolVersion);
             case PALE_OAK_LEAVES -> ParticleType.PALE_OAK_LEAVES;
             case PAUSE_MOB_GROWTH -> ParticleType.PAUSE_MOB_GROWTH;
             case POOF -> ParticleType.EXPLODE;
             case PORTAL -> ParticleType.PORTAL;
             case RAIN -> ParticleType.RAIN_SPLASH;
-            case RED_POPLAR_LEAVES -> ParticleType.RED_POPLAR_LEAVES;
+            case RED_POPLAR_LEAVES -> poplarLeaves(ParticleType.RED_POPLAR_LEAVES, protocolVersion);
             case RESET_MOB_GROWTH -> ParticleType.RESET_MOB_GROWTH;
             case SCULK_SOUL -> ParticleType.SCULK_SOUL;
             case SHRIEK -> ParticleType.SHRIEK;
@@ -147,8 +150,17 @@ public class AreaEffectCloudEntity extends Entity {
             case WAX_OFF, WAX_ON -> ParticleType.WAX;
             case WHITE_SMOKE -> ParticleType.WHITE_SMOKE;
             case WITCH -> ParticleType.WITCH_SPELL;
-            case YELLOW_POPLAR_LEAVES -> ParticleType.YELLOW_POPLAR_LEAVES;
+            case YELLOW_POPLAR_LEAVES -> poplarLeaves(ParticleType.YELLOW_POPLAR_LEAVES, protocolVersion);
             default -> null;
         };
+    }
+
+    /**
+     * The poplar leaves particle types exist since Bedrock 26.40. Older clients, such as Education 26.3x, get cherry
+     * leaves instead: of the two falling leaves types they have, its pink is closer to the autumn colors than the
+     * grey of pale oak leaves.
+     */
+    private static ParticleType poplarLeaves(ParticleType type, int protocolVersion) {
+        return GameProtocol.is26_40orHigher(protocolVersion) ? type : ParticleType.CHERRY_LEAVES;
     }
 }
