@@ -635,10 +635,27 @@ public class LivingEntity extends Entity implements Tickable {
             return;
         }
         float time = 1.0f / this.lerpSteps;
-        float lerpXTotal = GenericMath.lerp(this.position.getX(), this.lerpPosition.getX(), time);
-        float lerpYTotal = GenericMath.lerp(this.position.getY(), this.lerpPosition.getY(), time);
-        float lerpZTotal = GenericMath.lerp(this.position.getZ(), this.lerpPosition.getZ(), time);
+        moveLerpStep(Vector3f.from(
+            GenericMath.lerp(this.position.getX(), this.lerpPosition.getX(), time),
+            GenericMath.lerp(this.position.getY(), this.lerpPosition.getY(), time),
+            GenericMath.lerp(this.position.getZ(), this.lerpPosition.getZ(), time)));
+        this.lerpLastPosition = this.position;
+        this.dirtyPitch = this.dirtyYaw = this.dirtyHeadYaw = false;
 
+        this.lerpSteps--;
+        if (this.lerpSteps > 0) {
+            this.lerpFuture = session.scheduleInEventLoop(() -> lerpStep(generation),
+                    (long) (stepIntervalMs * 1000), TimeUnit.MICROSECONDS);
+        }
+    }
+
+    /**
+     * Moves the entity one interpolation step, to {@code position}, and sends the client a snap
+     * there, since Geyser interpolates and the client must not interpolate again. The raw move
+     * paths do not run for a step, so subclasses that do more on each move than set the position
+     * extend this. Caller holds the entity monitor.
+     */
+    protected void moveLerpStep(Vector3f position) {
         MoveEntityDeltaPacket moveEntityPacket = new MoveEntityDeltaPacket();
         moveEntityPacket.getFlags().add(MoveEntityDeltaPacket.Flag.TELEPORTING);
         // Since 26.40 the snap is its own field instead of that flag
@@ -649,43 +666,33 @@ public class LivingEntity extends Entity implements Tickable {
         if (onGround) {
             moveEntityPacket.getFlags().add(MoveEntityDeltaPacket.Flag.ON_GROUND);
         }
-        if (lerpXTotal != this.position.getX()) {
+        if (position.getX() != this.position.getX()) {
             moveEntityPacket.getFlags().add(MoveEntityDeltaPacket.Flag.HAS_X);
         }
-        if (lerpYTotal != this.position.getY()) {
+        if (position.getY() != this.position.getY()) {
             moveEntityPacket.getFlags().add(MoveEntityDeltaPacket.Flag.HAS_Y);
         }
-        if (lerpZTotal != this.position.getZ()) {
+        if (position.getZ() != this.position.getZ()) {
             moveEntityPacket.getFlags().add(MoveEntityDeltaPacket.Flag.HAS_Z);
         }
-        if (this.dirtyYaw) {
+        // A Bedrock rotation part need not follow the Java part of the same name (an armor stand
+        // shows its yaw in all three), so any change sends the whole rotation
+        if (this.dirtyPitch || this.dirtyYaw || this.dirtyHeadYaw) {
+            moveEntityPacket.getFlags().add(MoveEntityDeltaPacket.Flag.HAS_PITCH);
             moveEntityPacket.getFlags().add(MoveEntityDeltaPacket.Flag.HAS_YAW);
-        }
-        if (this.dirtyHeadYaw) {
             moveEntityPacket.getFlags().add(MoveEntityDeltaPacket.Flag.HAS_HEAD_YAW);
         }
-        if (this.dirtyPitch) {
-            moveEntityPacket.getFlags().add(MoveEntityDeltaPacket.Flag.HAS_PITCH);
-        }
-        this.position = Vector3f.from(lerpXTotal, lerpYTotal, lerpZTotal);
-        this.lerpLastPosition = this.position;
+        this.position = position;
         Vector3f bedrockPosition = bedrockPosition();
         moveEntityPacket.setX(bedrockPosition.getX());
         moveEntityPacket.setY(bedrockPosition.getY());
         moveEntityPacket.setZ(bedrockPosition.getZ());
-        moveEntityPacket.setYaw(getYaw());
-        moveEntityPacket.setPitch(getPitch());
-        moveEntityPacket.setHeadYaw(getHeadYaw());
-
-        this.dirtyPitch = this.dirtyYaw = this.dirtyHeadYaw = false;
+        Vector3f bedrockRotation = bedrockRotation();
+        moveEntityPacket.setPitch(bedrockRotation.getX());
+        moveEntityPacket.setYaw(bedrockRotation.getY());
+        moveEntityPacket.setHeadYaw(bedrockRotation.getZ());
 
         session.sendUpstreamPacket(moveEntityPacket);
-
-        this.lerpSteps--;
-        if (this.lerpSteps > 0) {
-            this.lerpFuture = session.scheduleInEventLoop(() -> lerpStep(generation),
-                    (long) (stepIntervalMs * 1000), TimeUnit.MICROSECONDS);
-        }
     }
 
     /**

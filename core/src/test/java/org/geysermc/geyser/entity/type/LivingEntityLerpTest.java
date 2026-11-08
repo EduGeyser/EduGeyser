@@ -25,6 +25,7 @@
 
 package org.geysermc.geyser.entity.type;
 
+import net.kyori.adventure.text.Component;
 import org.cloudburstmc.math.vector.Vector3f;
 import org.cloudburstmc.math.vector.Vector3i;
 import org.cloudburstmc.protocol.bedrock.data.entity.EntityFlag;
@@ -35,10 +36,13 @@ import org.geysermc.geyser.GeyserImpl;
 import org.geysermc.geyser.entity.EntityTypeDefinition;
 import org.geysermc.geyser.entity.VanillaEntities;
 import org.geysermc.geyser.entity.spawn.EntitySpawnContext;
+import org.geysermc.geyser.entity.type.living.ArmorStandEntity;
 import org.geysermc.geyser.entity.type.living.animal.StriderEntity;
 import org.geysermc.geyser.entity.type.living.merchant.VillagerEntity;
 import org.geysermc.geyser.entity.type.player.SessionPlayerEntity;
+import org.geysermc.geyser.inventory.GeyserItemStack;
 import org.geysermc.geyser.inventory.PlayerInventory;
+import org.geysermc.geyser.item.Items;
 import org.geysermc.geyser.level.WorldManager;
 import org.geysermc.geyser.level.block.property.Properties;
 import org.geysermc.geyser.level.block.type.BedBlock;
@@ -47,9 +51,11 @@ import org.geysermc.geyser.level.block.type.BlockState;
 import org.geysermc.geyser.level.physics.Direction;
 import org.geysermc.geyser.scoreboard.network.util.GeyserMockContext;
 import org.geysermc.geyser.session.GeyserSession;
+import org.geysermc.geyser.session.cache.EntityCache;
 import org.geysermc.geyser.session.cache.WorldCache;
 import org.geysermc.mcprotocollib.protocol.data.game.entity.metadata.MetadataTypes;
 import org.geysermc.mcprotocollib.protocol.data.game.entity.metadata.Pose;
+import org.geysermc.mcprotocollib.protocol.data.game.entity.metadata.type.ByteEntityMetadata;
 import org.geysermc.mcprotocollib.protocol.data.game.entity.metadata.type.ObjectEntityMetadata;
 import org.junit.jupiter.api.Test;
 
@@ -485,6 +491,71 @@ class LivingEntityLerpTest {
             assertEquals(Vector3f.from(3, 0, 0), fixture.strider().position());
             assertEquals(3, fixture.strider().getVehicleComponent().getBoundingBox().getMiddleX());
         });
+    }
+
+    /**
+     * An invisible armor stand with a name and equipment shows the name through a second entity.
+     * Every step takes that entity along, or the name stays where the lerp started.
+     */
+    @Test
+    void anArmorStandStepMovesItsNameTagEntity() {
+        mockContext(context -> {
+            Fixture fixture = Fixture.create(context);
+            EntityCache entityCache = mock(EntityCache.class);
+            when(entityCache.nextEntityId()).thenReturn(NAME_TAG_ENTITY_ID);
+            when(fixture.session().getEntityCache()).thenReturn(entityCache);
+            when(fixture.session().locale()).thenReturn("en_us");
+            ArmorStandEntity armorStand = armorStand(fixture);
+            armorStand.setFlags(new ByteEntityMetadata(0, MetadataTypes.BYTE, (byte) 0x20));
+            armorStand.setCustomName(new ObjectEntityMetadata<>(2, MetadataTypes.OPTIONAL_COMPONENT, Optional.of(Component.text("name"))));
+            armorStand.setHelmet(GeyserItemStack.of(fixture.session(), Items.DIAMOND_HELMET.javaId(), 1));
+
+            armorStand.moveAbsolute(Vector3f.from(3, 0, 0), 0, 0, 0, false, false);
+            fixture.runScheduledStep();
+            fixture.runScheduledStep();
+
+            assertEquals(Vector3f.from(3, 0, 0), armorStand.position());
+            MoveEntityAbsolutePacket nameTagMove = fixture.sent().stream()
+                .filter(MoveEntityAbsolutePacket.class::isInstance)
+                .map(MoveEntityAbsolutePacket.class::cast)
+                .filter(packet -> packet.getRuntimeEntityId() == NAME_TAG_ENTITY_ID)
+                .reduce((first, second) -> second)
+                .orElseThrow();
+            assertEquals(3, nameTagMove.getPosition().getX());
+            assertTrue(nameTagMove.isTeleported());
+        });
+    }
+
+    /**
+     * An armor stand shows its yaw as its pitch and head yaw too. A step after a turn sends all
+     * three, not only the part that changed on Java.
+     */
+    @Test
+    void anArmorStandStepSendsItsYawAsTheWholeRotation() {
+        mockContext(context -> {
+            Fixture fixture = Fixture.create(context);
+            ArmorStandEntity armorStand = armorStand(fixture);
+
+            armorStand.moveRelative(1, 0, 0, 90, 0, 0, false);
+
+            MoveEntityDeltaPacket packet = assertInstanceOf(MoveEntityDeltaPacket.class, fixture.sent().getLast());
+            assertTrue(packet.getFlags().containsAll(List.of(MoveEntityDeltaPacket.Flag.HAS_PITCH,
+                MoveEntityDeltaPacket.Flag.HAS_YAW, MoveEntityDeltaPacket.Flag.HAS_HEAD_YAW)));
+            assertEquals(90, packet.getPitch());
+            assertEquals(90, packet.getYaw());
+            assertEquals(90, packet.getHeadYaw());
+        });
+    }
+
+    private static final long NAME_TAG_ENTITY_ID = 10;
+
+    /**
+     * A visible armor stand at the origin.
+     */
+    private static ArmorStandEntity armorStand(Fixture fixture) {
+        ArmorStandEntity armorStand = new ArmorStandEntity(Fixture.spawnContext(fixture.session(), VanillaEntities.ARMOR_STAND, 4));
+        armorStand.setValid(true);
+        return armorStand;
     }
 
     /**

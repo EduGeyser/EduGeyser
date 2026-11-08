@@ -119,6 +119,16 @@ public class ArmorStandEntity extends LivingEntity {
     }
 
     @Override
+    protected void moveLerpStep(Vector3f position) {
+        if (secondEntity != null) {
+            // Teleported, so the name tag snaps along with the step
+            secondEntity.moveAbsoluteRaw(position, yaw, pitch, headYaw, onGround, true);
+        }
+        setOffset(getYOffset());
+        super.moveLerpStep(position);
+    }
+
+    @Override
     public void updateNametag(@Nullable Team team) {
         // unlike all other LivingEntities, armor stands are not affected by team nametag visibility
         super.updateNametag(team, passengers.isEmpty());
