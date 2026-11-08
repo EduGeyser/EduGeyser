@@ -58,6 +58,10 @@ public class ParticleTypesRegistryLoader extends EffectRegistryLoader<Map<Partic
             GeyserImpl.getInstance().getLogger().error("Failed to load particle mappings!", exception);
             throw exception;
         }
+        // The mappings left entity_effect out in upstream Geyser #6878. Before that it was sent as the MOB_SPELL
+        // particle type, without its color. An entry in the mappings takes precedence.
+        particles.putIfAbsent(ParticleType.ENTITY_EFFECT,
+            ParticleMapping.ofEvent(org.cloudburstmc.protocol.bedrock.data.ParticleType.MOB_SPELL));
         return particles;
     }
 
