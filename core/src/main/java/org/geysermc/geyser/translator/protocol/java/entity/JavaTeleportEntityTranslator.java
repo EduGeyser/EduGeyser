@@ -68,23 +68,24 @@ public class JavaTeleportEntityTranslator extends PacketTranslator<ClientboundTe
             packet.getRelatives().contains(PositionElement.Z) ? base.getZ() : 0
         );
 
-        boolean hasRelative = packet.getRelatives().contains(PositionElement.X) || packet.getRelatives().contains(PositionElement.Y) || packet.getRelatives().contains(PositionElement.Z);
-        boolean interpolate = (entity instanceof LivingEntity || hasRelative) && entity.position().distance(position.toFloat()) < 4096.0;
+        // As the Java client does (ClientPacketListener#setValuesFromPositionPacket): interpolate a
+        // teleport that ends within 64 blocks of where the client has the entity, the base above,
+        // and snap a farther one. The client also snaps a vehicle it steers outside the chunks it
+        // ticks, which the vehicle the player rides never is, and the player itself when it gets
+        // the teleport of its removed vehicle.
+        boolean snap = isPreviouslyRemovedVehicle || base.toDouble().distanceSquared(position) > 4096;
 
         float newPitch = MathUtils.clamp(packet.getXRot() + (packet.getRelatives().contains(PositionElement.X_ROT) ? entity.getPitch() : 0), -90, 90);
         float newYaw = packet.getYRot() + (packet.getRelatives().contains(PositionElement.Y_ROT) ? entity.getYaw() : 0);
 
         float lastPitch = entity.getPitch(), lastYaw = entity.getYaw();
-        if (!interpolate) {
+        // Geyser moves this vehicle itself
+        boolean ignored = !snap && entity instanceof ClientVehicle clientVehicle && clientVehicle.shouldSimulateMovement();
+        if (!ignored) {
             if (entity instanceof ClientVehicle clientVehicle) {
                 clientVehicle.getVehicleComponent().moveAbsolute(position);
             }
-            entity.teleport(position.toFloat(), newYaw, newPitch, packet.isOnGround());
-        } else if (entity instanceof LivingEntity livingEntity) {
-            moveLivingEntity(livingEntity, position, newYaw, newPitch, packet.isOnGround());
-        } else {
-            final Vector3d currentPosition = entity.position().toDouble();
-            entity.moveRelative(position.getX() - currentPosition.getX(), position.getY() - currentPosition.getY(), position.getZ() - currentPosition.getZ(), newYaw, newPitch, newYaw, packet.isOnGround());
+            entity.teleport(position.toFloat(), newYaw, newPitch, packet.isOnGround(), snap);
         }
 
         Vector3f deltaMovement = packet.getDeltaMovement().toFloat().add(
@@ -104,7 +105,7 @@ public class JavaTeleportEntityTranslator extends PacketTranslator<ClientboundTe
             session.sendUpstreamPacket(entityMotionPacket);
         }
 
-        if (!interpolate && !entity.getPassengers().isEmpty() && entity.getPassengers().getFirst() == session.getPlayerEntity() && !isPreviouslyRemovedVehicle) {
+        if (snap && !entity.getPassengers().isEmpty() && entity.getPassengers().getFirst() == session.getPlayerEntity() && !isPreviouslyRemovedVehicle) {
             ServerboundMoveVehiclePacket vehiclePacket = new ServerboundMoveVehiclePacket(position, newYaw, newPitch, entity.isOnGround());
             session.sendDownstreamGamePacket(vehiclePacket);
         }
@@ -113,23 +114,5 @@ public class JavaTeleportEntityTranslator extends PacketTranslator<ClientboundTe
             ServerboundMovePlayerPosRotPacket positionPacket = new ServerboundMovePlayerPosRotPacket(false, false, position.getX(), position.getY(), position.getZ(), newYaw, newPitch);
             session.sendDownstreamGamePacket(positionPacket);
         }
-    }
-
-    /**
-     * Moves a living entity to the teleport target, interpolated where
-     * {@link LivingEntity#moveAbsolute} chooses to. The target goes in as is: as a delta from the
-     * shown position it would be added to the target of a running interpolation and overshoot by
-     * the part not interpolated yet.
-     */
-    private static void moveLivingEntity(LivingEntity entity, Vector3d position, float yaw, float pitch, boolean onGround) {
-        if (entity instanceof ClientVehicle clientVehicle) {
-            // Geyser moves this vehicle itself
-            if (clientVehicle.shouldSimulateMovement()) {
-                return;
-            }
-            clientVehicle.getVehicleComponent().moveAbsolute(position);
-        }
-        // As in Entity#teleport, the head yaw follows the yaw
-        entity.moveAbsolute(position.toFloat(), yaw, pitch, yaw, onGround, false);
     }
 }

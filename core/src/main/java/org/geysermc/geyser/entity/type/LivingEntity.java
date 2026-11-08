@@ -487,9 +487,29 @@ public class LivingEntity extends Entity implements Tickable {
 
     @Override
     public void moveAbsolute(Vector3f position, float yaw, float pitch, float headYaw, boolean isOnGround, boolean teleported) {
-        // It's vanilla behaviour to lerp if the position is within 64 blocks, however we also check if the position is close enough to the player
-        // position to see if it can actually affect anything to save network.
-        if (shouldLerp() && position.distanceSquared(this.position) < 4096 && position.distanceSquared(session.getPlayerEntity().position()) < 4096) {
+        // It's vanilla behaviour to lerp if the position is within 64 blocks
+        moveOrLerp(position, yaw, pitch, headYaw, isOnGround, teleported, position.distanceSquared(this.position) < 4096);
+    }
+
+    /**
+     * Moves to the target of a teleport, interpolated unless {@code snap} is set. The target goes
+     * in as is: as a delta from the shown position it would be added to the target of a running
+     * interpolation and overshoot by the part not interpolated yet.
+     */
+    @Override
+    public void teleport(Vector3f position, float yaw, float pitch, boolean isOnGround, boolean snap) {
+        // As in Entity#teleport, the head yaw follows the yaw
+        moveOrLerp(position, yaw, pitch, yaw, isOnGround, snap, !snap);
+    }
+
+    /**
+     * Interpolates to the position if {@code interpolate} is set and Geyser interpolates this
+     * entity, otherwise moves there at once.
+     */
+    private void moveOrLerp(Vector3f position, float yaw, float pitch, float headYaw, boolean isOnGround, boolean teleported, boolean interpolate) {
+        // We also check if the position is close enough to the player position to see if it can
+        // actually affect anything to save network.
+        if (interpolate && shouldLerp() && position.distanceSquared(session.getPlayerEntity().position()) < 4096) {
             lerpAbsolute(position, yaw, pitch, headYaw, isOnGround);
         } else {
             // This position replaces any lerp target, even when it equals where the lerp is now

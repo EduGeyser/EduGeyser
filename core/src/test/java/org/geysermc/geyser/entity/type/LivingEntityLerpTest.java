@@ -60,12 +60,14 @@ import org.geysermc.geyser.session.GeyserSession;
 import org.geysermc.geyser.session.cache.EntityCache;
 import org.geysermc.geyser.session.cache.WorldCache;
 import org.geysermc.geyser.translator.protocol.java.entity.JavaTeleportEntityTranslator;
+import org.geysermc.mcprotocollib.network.packet.Packet;
 import org.geysermc.mcprotocollib.protocol.data.game.entity.metadata.MetadataTypes;
 import org.geysermc.mcprotocollib.protocol.data.game.entity.metadata.Pose;
 import org.geysermc.mcprotocollib.protocol.data.game.entity.metadata.type.ByteEntityMetadata;
 import org.geysermc.mcprotocollib.protocol.data.game.entity.metadata.type.ObjectEntityMetadata;
 import org.geysermc.mcprotocollib.protocol.data.game.entity.player.PositionElement;
 import org.geysermc.mcprotocollib.protocol.packet.ingame.clientbound.entity.ClientboundTeleportEntityPacket;
+import org.geysermc.mcprotocollib.protocol.packet.ingame.serverbound.level.ServerboundMoveVehiclePacket;
 import org.junit.jupiter.api.Test;
 
 import java.util.ArrayList;
@@ -687,6 +689,148 @@ class LivingEntityLerpTest {
         });
     }
 
+    /**
+     * The Java client interpolates a teleport that ends 64 blocks away.
+     */
+    @Test
+    void aTeleportOf64BlocksIsInterpolated() {
+        mockContext(context -> {
+            Fixture fixture = Fixture.create(context);
+            // Near the target, so Geyser interpolates for this player
+            when(fixture.player().position()).thenReturn(Vector3f.from(64, 0, 0));
+
+            fixture.teleport(Vector3d.from(64, 0, 0), List.of());
+
+            assertEquals(1, fixture.moves());
+            assertEquals(0, fixture.absoluteMoves());
+            fixture.runAllSteps();
+            assertEquals(Vector3f.from(64, 0, 0), fixture.strider().position());
+        });
+    }
+
+    /**
+     * The Java client snaps a teleport past 64 blocks, so the Bedrock client gets it as a
+     * teleport.
+     */
+    @Test
+    void aTeleportPast64BlocksSnaps() {
+        mockContext(context -> {
+            Fixture fixture = Fixture.create(context);
+            when(fixture.player().position()).thenReturn(Vector3f.from(64.5f, 0, 0));
+
+            fixture.teleport(Vector3d.from(64.5, 0, 0), List.of());
+
+            assertEquals(Vector3f.from(64.5f, 0, 0), fixture.strider().position());
+            assertTrue(fixture.lastAbsoluteMove().isTeleported());
+            assertTrue(fixture.scheduled().isEmpty());
+        });
+    }
+
+    /**
+     * The 64 blocks count from where the Java client has the strider, the target x = 3 of the
+     * running lerp. A teleport to x = 66 is interpolated, though the strider is shown 65 blocks
+     * from there.
+     */
+    @Test
+    void theInterpolationRangeCountsFromTheLerpTarget() {
+        mockContext(context -> {
+            Fixture fixture = Fixture.create(context);
+            when(fixture.player().position()).thenReturn(Vector3f.from(66, 0, 0));
+            fixture.startLerp();
+
+            fixture.teleport(Vector3d.from(66, 0, 0), List.of());
+
+            assertEquals(2, fixture.moves());
+            assertEquals(0, fixture.absoluteMoves());
+            fixture.runAllSteps();
+            assertEquals(Vector3f.from(66, 0, 0), fixture.strider().position());
+        });
+    }
+
+    /**
+     * Likewise a teleport to x = -62, 65 blocks from the lerp target, snaps, though the strider is
+     * shown 63 blocks from there.
+     */
+    @Test
+    void aTeleportPast64BlocksFromTheLerpTargetSnaps() {
+        mockContext(context -> {
+            Fixture fixture = Fixture.create(context);
+            // Near both the lerp target and the teleport target
+            when(fixture.player().position()).thenReturn(Vector3f.from(-30, 0, 0));
+            fixture.startLerp();
+
+            fixture.teleport(Vector3d.from(-62, 0, 0), List.of());
+
+            assertTrue(fixture.lastAbsoluteMove().isTeleported());
+            fixture.runAllSteps();
+            assertEquals(Vector3f.from(-62, 0, 0), fixture.strider().position());
+        });
+    }
+
+    /**
+     * The Java client applies a teleport past 64 blocks to a vehicle it steers and answers with
+     * the vehicle's new position.
+     */
+    @Test
+    void aFarTeleportOfASteeredVehicleIsAppliedAndAcknowledged() {
+        mockContext(context -> {
+            Fixture fixture = Fixture.create(context);
+            fixture.ride(true);
+
+            fixture.teleport(Vector3d.from(100, 0, 0), List.of());
+
+            assertEquals(Vector3f.from(100, 0, 0), fixture.strider().position());
+            assertEquals(100, fixture.strider().getVehicleComponent().getBoundingBox().getMiddleX());
+            assertTrue(fixture.lastAbsoluteMove().isTeleported());
+            assertEquals(List.of(Vector3d.from(100, 0, 0)),
+                fixture.vehicleMoves().stream().map(ServerboundMoveVehiclePacket::getPosition).toList());
+        });
+    }
+
+    /**
+     * A boat, a vehicle that is not a living entity, snaps a teleport past 64 blocks as a
+     * teleport, with its vehicle component.
+     */
+    @Test
+    void aFarTeleportOfABoatSnaps() {
+        mockContext(context -> {
+            Fixture fixture = Fixture.create(context);
+            BoatEntity boat = boat(fixture);
+
+            fixture.teleport(boat, Vector3d.from(100, 0, 0), List.of());
+
+            assertEquals(Vector3f.from(100, 0, 0), boat.position());
+            assertEquals(100, boat.getVehicleComponent().getBoundingBox().getMiddleX());
+            assertTrue(fixture.lastAbsoluteMove().isTeleported());
+        });
+    }
+
+    /**
+     * A relative teleport of a boat keeps the quarter turn that Geyser adds to the yaw of a boat
+     * for Bedrock.
+     */
+    @Test
+    void aRelativeTeleportOfABoatKeepsItsBedrockYaw() {
+        mockContext(context -> {
+            Fixture fixture = Fixture.create(context);
+            BoatEntity boat = boat(fixture);
+
+            fixture.teleport(boat, Vector3d.from(5, 0, 0), List.of(PositionElement.X));
+
+            assertEquals(Vector3f.from(5, 0, 0), boat.position());
+            assertEquals(90, boat.getYaw());
+        });
+    }
+
+    /**
+     * An oak boat at the origin.
+     */
+    private static BoatEntity boat(Fixture fixture) {
+        BoatEntity boat = new BoatEntity(Fixture.spawnContext(fixture.session(), VanillaEntities.OAK_BOAT, 7), BoatEntity.BoatVariant.OAK);
+        boat.setValid(true);
+        return boat;
+    }
+
     private static final long NAME_TAG_ENTITY_ID = 10;
 
     /**
@@ -700,11 +844,12 @@ class LivingEntityLerpTest {
 
     /**
      * A saddled strider at the origin on a mocked session that records the packets sent to the
-     * client and the scheduled lerp steps, which the tests run by hand. The player holds the
-     * fungus on a stick while {@code holding} is set.
+     * client and to the server, and the scheduled lerp steps, which the tests run by hand. The
+     * player holds the fungus on a stick while {@code holding} is set.
      */
     private record Fixture(GeyserSession session, StriderEntity strider, SessionPlayerEntity player,
-                           List<BedrockPacket> sent, List<Runnable> scheduled, AtomicBoolean holding) {
+                           List<BedrockPacket> sent, List<Packet> sentToServer, List<Runnable> scheduled,
+                           AtomicBoolean holding) {
 
         static Fixture create(GeyserMockContext context) {
             GeyserSession session = context.mock(GeyserSession.class);
@@ -716,6 +861,8 @@ class LivingEntityLerpTest {
 
             List<BedrockPacket> sent = new ArrayList<>();
             doAnswer(invocation -> sent.add(invocation.getArgument(0))).when(session).sendUpstreamPacket(any());
+            List<Packet> sentToServer = new ArrayList<>();
+            doAnswer(invocation -> sentToServer.add(invocation.getArgument(0))).when(session).sendDownstreamGamePacket(any());
             List<Runnable> scheduled = new ArrayList<>();
             doAnswer(invocation -> {
                 scheduled.add(invocation.getArgument(0));
@@ -733,7 +880,7 @@ class LivingEntityLerpTest {
             StriderEntity strider = new StriderEntity(spawnContext(session, VanillaEntities.STRIDER, 2));
             strider.setValid(true);
             strider.setFlag(EntityFlag.SADDLED, true);
-            return new Fixture(session, strider, player, sent, scheduled, holding);
+            return new Fixture(session, strider, player, sent, sentToServer, scheduled, holding);
         }
 
         static EntitySpawnContext spawnContext(GeyserSession session, EntityTypeDefinition<?> type, int id) {
@@ -769,14 +916,42 @@ class LivingEntityLerpTest {
         }
 
         /**
+         * The player rides the strider, steering it if {@code steering} is set.
+         */
+        void ride(boolean steering) {
+            holding.set(steering);
+            strider.setPassengers(new ArrayList<>(List.of(player)));
+            assertEquals(steering, strider.shouldSimulateMovement());
+        }
+
+        /**
          * Translates a server teleport of the strider.
          */
         void teleport(Vector3d position, List<PositionElement> relatives) {
+            teleport(strider, position, relatives);
+        }
+
+        /**
+         * Translates a server teleport of the entity.
+         */
+        void teleport(Entity entity, Vector3d position, List<PositionElement> relatives) {
             EntityCache entityCache = mock(EntityCache.class);
-            when(entityCache.getEntityByJavaId(strider.getEntityId())).thenReturn(strider);
+            when(entityCache.getEntityByJavaId(entity.getEntityId())).thenReturn(entity);
             when(session.getEntityCache()).thenReturn(entityCache);
             new JavaTeleportEntityTranslator().translate(session,
-                new ClientboundTeleportEntityPacket(strider.getEntityId(), position, Vector3d.ZERO, 0, 0, relatives, false));
+                new ClientboundTeleportEntityPacket(entity.getEntityId(), position, Vector3d.ZERO, 0, 0, relatives, false));
+        }
+
+        /**
+         * The last move sent to the client, which must be absolute.
+         */
+        MoveEntityAbsolutePacket lastAbsoluteMove() {
+            return assertInstanceOf(MoveEntityAbsolutePacket.class, sent.getLast());
+        }
+
+        List<ServerboundMoveVehiclePacket> vehicleMoves() {
+            return sentToServer.stream().filter(ServerboundMoveVehiclePacket.class::isInstance)
+                .map(ServerboundMoveVehiclePacket.class::cast).toList();
         }
 
         long moves() {

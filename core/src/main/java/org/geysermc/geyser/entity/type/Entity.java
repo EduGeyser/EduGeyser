@@ -441,10 +441,12 @@ public class Entity implements GeyserEntity {
      * @param yaw The new yaw of the entity.
      * @param pitch The new pitch of the entity.
      * @param isOnGround Whether the entity is currently on the ground.
+     * @param snap Whether the entity moves there at once rather than interpolated, which the
+     *             Bedrock client gets as a teleport. The caller decides as the Java client does.
      */
-    public void teleport(Vector3f position, float yaw, float pitch, boolean isOnGround) {
+    public void teleport(Vector3f position, float yaw, float pitch, boolean isOnGround, boolean snap) {
         // teleport will always set the headYaw to yaw
-        moveAbsolute(position, yaw, pitch, yaw, isOnGround, false);
+        moveAbsolute(position, yaw, pitch, yaw, isOnGround, snap);
     }
 
     /**
