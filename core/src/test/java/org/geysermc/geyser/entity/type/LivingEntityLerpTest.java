@@ -58,8 +58,8 @@ import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
 
 /**
- * Lerp steps toward a server position must stop once the session moves the vehicle itself, or
- * they pull it back toward that old target.
+ * Lerp steps toward a server position must stop once something else moves the entity or the
+ * session moves the vehicle itself, or they pull it back toward that old target.
  */
 class LivingEntityLerpTest {
 
@@ -132,6 +132,67 @@ class LivingEntityLerpTest {
             assertEquals(Vector3f.from(1, 0, 0), fixture.strider().position());
             assertEquals(1, fixture.moves());
             assertTrue(fixture.scheduled().isEmpty());
+        });
+    }
+
+    /**
+     * The player riding a strider takes out the fungus on a stick, Geyser's simulation moves it,
+     * and the player puts the fungus away before the next step, so no hook sees the handoff.
+     */
+    @Test
+    void stepsStopAfterGeyserSimulatedTheVehicle() {
+        mockContext(context -> {
+            Fixture fixture = Fixture.create(context);
+            fixture.strider().setPassengers(new ArrayList<>(List.of(fixture.player())));
+            fixture.startLerp();
+
+            fixture.holding().set(true);
+            // What VehicleComponent#moveVehicle does on a simulation tick
+            fixture.strider().setPosition(Vector3f.from(1.5f, 0, 0));
+            fixture.holding().set(false);
+            fixture.runScheduledStep();
+
+            assertEquals(Vector3f.from(1.5f, 0, 0), fixture.strider().position());
+            assertEquals(1, fixture.moves());
+            assertTrue(fixture.scheduled().isEmpty());
+        });
+    }
+
+    /**
+     * While the server moves a strider toward x = 3, a position sync puts it at x = 100, too far
+     * to interpolate, so it moves there at once. The pending step must not pull it back.
+     */
+    @Test
+    void stepsStopAfterADirectServerMove() {
+        mockContext(context -> {
+            Fixture fixture = Fixture.create(context);
+            fixture.startLerp();
+
+            fixture.strider().moveAbsolute(Vector3f.from(100, 0, 0), 0, 0, 0, false, false);
+            fixture.runScheduledStep();
+
+            assertEquals(Vector3f.from(100, 0, 0), fixture.strider().position());
+            assertEquals(1, fixture.moves());
+            assertTrue(fixture.scheduled().isEmpty());
+        });
+    }
+
+    /**
+     * A relative update that arrives after such a direct move, before the pending step runs,
+     * builds on the new position instead of the old target.
+     */
+    @Test
+    void aRelativeUpdateAfterADirectServerMoveBuildsOnIt() {
+        mockContext(context -> {
+            Fixture fixture = Fixture.create(context);
+            // Near x = 100, so the relative update is interpolated
+            when(fixture.player().position()).thenReturn(Vector3f.from(60, 0, 0));
+            fixture.startLerp();
+
+            fixture.strider().moveAbsolute(Vector3f.from(100, 0, 0), 0, 0, 0, false, false);
+            fixture.strider().moveRelative(3, 0, 0, 0, 0, 0, false);
+
+            assertEquals(Vector3f.from(101, 0, 0), fixture.strider().position());
         });
     }
 
