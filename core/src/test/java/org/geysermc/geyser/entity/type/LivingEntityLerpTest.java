@@ -368,6 +368,59 @@ class LivingEntityLerpTest {
         });
     }
 
+    /**
+     * The sleeping pose arrives before the bed position and no move follows. Once both are there,
+     * the client gets the bed pose.
+     */
+    @Test
+    void gettingIntoBedSendsTheBedPoseWhenThePoseComesFirst() {
+        mockContext(context -> {
+            Fixture fixture = Fixture.create(context);
+            VillagerEntity villager = villager(context, fixture);
+
+            villager.setPose(Pose.SLEEPING);
+            villager.setBedPosition(BED);
+
+            assertEquals(1, fixture.absoluteMoves());
+            assertBedPose(fixture, villager, 2.5f);
+        });
+    }
+
+    /**
+     * The bed position arrives before the sleeping pose and no move follows. The same pose sent
+     * again changes nothing, so it sends nothing.
+     */
+    @Test
+    void gettingIntoBedSendsTheBedPoseWhenTheBedComesFirst() {
+        mockContext(context -> {
+            Fixture fixture = Fixture.create(context);
+            VillagerEntity villager = villager(context, fixture);
+
+            villager.setBedPosition(BED);
+            villager.setPose(Pose.SLEEPING);
+            villager.setPose(Pose.SLEEPING);
+
+            assertEquals(1, fixture.absoluteMoves());
+            assertBedPose(fixture, villager, 2.5f);
+        });
+    }
+
+    /**
+     * A new bed while asleep moves the villager there, and no move follows.
+     */
+    @Test
+    void aNewBedWhileAsleepSendsTheBedPose() {
+        mockContext(context -> {
+            Fixture fixture = Fixture.create(context);
+            VillagerEntity villager = sleepingVillager(context, fixture);
+
+            villager.setBedPosition(new ObjectEntityMetadata<>(0, MetadataTypes.OPTIONAL_BLOCK_POS, Optional.of(Vector3i.from(12, 0, 0))));
+
+            assertEquals(2, fixture.absoluteMoves());
+            assertBedPose(fixture, villager, 12.5f);
+        });
+    }
+
     private static final ObjectEntityMetadata<Optional<Vector3i>> BED =
         new ObjectEntityMetadata<>(0, MetadataTypes.OPTIONAL_BLOCK_POS, Optional.of(Vector3i.from(2, 0, 0)));
 
@@ -496,6 +549,10 @@ class LivingEntityLerpTest {
 
         long moves() {
             return sent.stream().filter(MoveEntityDeltaPacket.class::isInstance).count();
+        }
+
+        long absoluteMoves() {
+            return sent.stream().filter(MoveEntityAbsolutePacket.class::isInstance).count();
         }
     }
 }

@@ -40,6 +40,7 @@ import org.geysermc.mcprotocollib.protocol.data.game.entity.metadata.EntityMetad
 import org.geysermc.mcprotocollib.protocol.data.game.entity.metadata.Pose;
 import org.geysermc.mcprotocollib.protocol.data.game.entity.metadata.VillagerData;
 
+import java.util.Objects;
 import java.util.Optional;
 
 public class VillagerEntity extends AbstractMerchantEntity {
@@ -82,10 +83,10 @@ public class VillagerEntity extends AbstractMerchantEntity {
     @Nullable
     private Vector3i bedPosition;
     /**
-     * Whether the client was last sent this villager in its bed pose, which differs from the cached
-     * Java position and rotation.
+     * The bed pose the client was last sent, or null while it shows the cached Java position and
+     * rotation.
      */
-    private boolean bedPoseSent;
+    private @Nullable BedPose sentBedPose;
     /**
      * Used in the interactive tag manager
      */
@@ -127,12 +128,15 @@ public class VillagerEntity extends AbstractMerchantEntity {
      * pose and the bed position.
      */
     private void updateBedPose() {
-        if (isSleepingInBed()) {
+        boolean inBed = isSleepingInBed();
+        if (inBed) {
             // Getting into bed can leave the coordinates where a running lerp has them, so the
             // position check that ends a lerp does not see it
             cancelLerp();
-        } else if (bedPoseSent) {
-            // The client still shows the bed pose; send the Java position and rotation in full
+        }
+        // The client only learns a pose from a move, and the server need not send one with this
+        // metadata. Getting into bed, a new bed, waking up and a vanished bed all change the pose.
+        if (!Objects.equals(inBed ? bedPose(position) : null, sentBedPose)) {
             moveAbsoluteRaw(position, getYaw(), getPitch(), getHeadYaw(), isOnGround(), false);
         }
     }
@@ -153,16 +157,43 @@ public class VillagerEntity extends AbstractMerchantEntity {
      */
     @Override
     public void moveAbsoluteRaw(Vector3f position, float yaw, float pitch, float headYaw, boolean isOnGround, boolean teleported) {
-        BlockState bed = isSleepingInBed() ? session.getGeyser().getWorldManager().blockAt(session, bedPosition) : null;
-        if (bed == null || !(bed.block() instanceof BedBlock)) {
+        BedPose pose = isSleepingInBed() ? bedPose(position) : null;
+        if (pose == null) {
             // Awake, or the bed is gone before the sleeping metadata cleared: an ordinary move,
             // which sends the whole Java position and rotation
-            bedPoseSent = false;
+            sentBedPose = null;
             super.moveAbsoluteRaw(position, yaw, pitch, headYaw, isOnGround, teleported);
             return;
         }
 
-        // Set the correct position offset and rotation when sleeping
+        setYaw(yaw);
+        setPitch(pitch);
+        setHeadYaw(headYaw);
+        setOnGround(isOnGround);
+        setPosition(position);
+
+        if (isValid()) {
+            MoveEntityAbsolutePacket moveEntityPacket = new MoveEntityAbsolutePacket();
+            moveEntityPacket.setRuntimeEntityId(geyserId);
+            moveEntityPacket.setRotation(pose.rotation());
+            moveEntityPacket.setPosition(pose.position());
+            moveEntityPacket.setOnGround(isOnGround);
+            moveEntityPacket.setTeleported(teleported);
+            session.sendUpstreamPacket(moveEntityPacket);
+            sentBedPose = pose;
+        }
+    }
+
+    /**
+     * The packet position and rotation of this villager asleep at {@code position}: shifted onto
+     * its bed and turned to face along it. Null if the bed block is gone.
+     */
+    private @Nullable BedPose bedPose(Vector3f position) {
+        BlockState bed = session.getGeyser().getWorldManager().blockAt(session, bedPosition);
+        if (!(bed.block() instanceof BedBlock)) {
+            return null;
+        }
+
         int bedRotation = 0;
         float xOffset = 0;
         float zOffset = 0;
@@ -184,21 +215,11 @@ public class VillagerEntity extends AbstractMerchantEntity {
                 zOffset = .5f;
             }
         }
+        return new BedPose(Vector3f.from(position.getX() + xOffset, position.getY() + getOffset(), position.getZ() + zOffset),
+            Vector3f.from(0, 0, bedRotation));
+    }
 
-        setYaw(yaw);
-        setPitch(pitch);
-        setHeadYaw(headYaw);
-        setOnGround(isOnGround);
-        setPosition(position);
-
-        MoveEntityAbsolutePacket moveEntityPacket = new MoveEntityAbsolutePacket();
-        moveEntityPacket.setRuntimeEntityId(geyserId);
-        moveEntityPacket.setRotation(Vector3f.from(0, 0, bedRotation));
-        moveEntityPacket.setPosition(Vector3f.from(position.getX() + xOffset, position.getY() + getOffset(), position.getZ() + zOffset));
-        moveEntityPacket.setOnGround(isOnGround);
-        moveEntityPacket.setTeleported(teleported);
-        session.sendUpstreamPacket(moveEntityPacket);
-        bedPoseSent = true;
+    private record BedPose(Vector3f position, Vector3f rotation) {
     }
 
     /**
