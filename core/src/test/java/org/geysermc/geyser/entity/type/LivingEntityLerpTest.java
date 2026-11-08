@@ -788,6 +788,27 @@ class LivingEntityLerpTest {
     }
 
     /**
+     * The Java client also applies a teleport within 64 blocks to a vehicle it steers, interpolated
+     * and without an answer. Geyser simulates the strider, so the strider and its component go
+     * there at once, and the Bedrock client interpolates the move.
+     */
+    @Test
+    void aNearTeleportOfASteeredVehicleIsApplied() {
+        mockContext(context -> {
+            Fixture fixture = Fixture.create(context);
+            fixture.ride(true);
+
+            fixture.teleport(Vector3d.from(10, 0, 0), List.of());
+
+            assertEquals(Vector3f.from(10, 0, 0), fixture.strider().position());
+            assertEquals(10, fixture.strider().getVehicleComponent().getBoundingBox().getMiddleX());
+            assertFalse(fixture.lastAbsoluteMove().isTeleported());
+            assertTrue(fixture.scheduled().isEmpty());
+            assertTrue(fixture.vehicleMoves().isEmpty());
+        });
+    }
+
+    /**
      * A boat, a vehicle that is not a living entity, snaps a teleport past 64 blocks as a
      * teleport, with its vehicle component.
      */

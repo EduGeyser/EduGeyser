@@ -79,14 +79,13 @@ public class JavaTeleportEntityTranslator extends PacketTranslator<ClientboundTe
         float newYaw = packet.getYRot() + (packet.getRelatives().contains(PositionElement.Y_ROT) ? entity.getYaw() : 0);
 
         float lastPitch = entity.getPitch(), lastYaw = entity.getYaw();
-        // Geyser moves this vehicle itself
-        boolean ignored = !snap && entity instanceof ClientVehicle clientVehicle && clientVehicle.shouldSimulateMovement();
-        if (!ignored) {
-            if (entity instanceof ClientVehicle clientVehicle) {
-                clientVehicle.getVehicleComponent().moveAbsolute(position);
-            }
-            entity.teleport(position.toFloat(), newYaw, newPitch, packet.isOnGround(), snap);
+        if (entity instanceof ClientVehicle clientVehicle) {
+            // Unlike its other position updates, the Java client applies a teleport to a vehicle it
+            // steers too, and its interpolation adds the vehicle's own movement on top. Geyser's
+            // simulation goes on from the target.
+            clientVehicle.getVehicleComponent().moveAbsolute(position);
         }
+        entity.teleport(position.toFloat(), newYaw, newPitch, packet.isOnGround(), snap);
 
         Vector3f deltaMovement = packet.getDeltaMovement().toFloat().add(
             packet.getRelatives().contains(PositionElement.DELTA_X) ? entity.getMotion().getX() : 0,
