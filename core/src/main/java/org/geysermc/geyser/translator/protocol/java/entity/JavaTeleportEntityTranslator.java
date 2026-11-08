@@ -30,7 +30,6 @@ import org.cloudburstmc.math.vector.Vector3f;
 import org.cloudburstmc.protocol.bedrock.packet.SetEntityMotionPacket;
 import org.geysermc.geyser.entity.type.BoatEntity;
 import org.geysermc.geyser.entity.type.Entity;
-import org.geysermc.geyser.entity.type.LivingEntity;
 import org.geysermc.geyser.entity.vehicle.ClientVehicle;
 import org.geysermc.geyser.session.GeyserSession;
 import org.geysermc.geyser.translator.protocol.PacketTranslator;
@@ -61,7 +60,7 @@ public class JavaTeleportEntityTranslator extends PacketTranslator<ClientboundTe
 
         // Relative coordinates build on where the server has the entity, which an interpolation
         // may not have reached yet
-        Vector3f base = entity instanceof LivingEntity livingEntity ? livingEntity.serverPosition() : entity.position();
+        Vector3f base = entity.serverPosition();
         Vector3d position = packet.getPosition();
         position = position.add(
             packet.getRelatives().contains(PositionElement.X) ? base.getX() : 0,

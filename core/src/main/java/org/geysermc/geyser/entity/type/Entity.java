@@ -450,6 +450,14 @@ public class Entity implements GeyserEntity {
     }
 
     /**
+     * Where the server has this entity: the target of a running interpolation, otherwise its
+     * position. Server moves relative to the entity build on this.
+     */
+    public Vector3f serverPosition() {
+        return position;
+    }
+
+    /**
      * Updates an entity's head position. Used in JavaRotateHeadTranslator.
      * @param headYaw The new head rotation of the entity.
      */

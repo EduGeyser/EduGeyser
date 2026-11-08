@@ -877,6 +877,93 @@ class LivingEntityLerpTest {
     }
 
     /**
+     * A minecart interpolating toward x = 3 has ticked to x = 1. A relative teleport by 5 builds
+     * on that target, as the Java client builds on its interpolation target, and ends at x = 8.
+     */
+    @Test
+    void aRelativeTeleportOfAMinecartBuildsOnItsLerpTarget() {
+        mockContext(context -> {
+            Fixture fixture = Fixture.create(context);
+            MinecartEntity minecart = minecartAtOneOnTheWayToThree(fixture);
+
+            fixture.teleport(minecart, Vector3d.from(5, 0, 0), List.of(PositionElement.X));
+            tickThrice(minecart);
+
+            assertEquals(Vector3f.from(8, 0, 0), minecart.position());
+        });
+    }
+
+    /**
+     * A teleport past 64 blocks from the interpolation target snaps the minecart there, and the
+     * rest of the old interpolation does not pull it back.
+     */
+    @Test
+    void aSnappedTeleportEndsTheLerpOfAMinecart() {
+        mockContext(context -> {
+            Fixture fixture = Fixture.create(context);
+            MinecartEntity minecart = minecartAtOneOnTheWayToThree(fixture);
+
+            fixture.teleport(minecart, Vector3d.from(100, 0, 0), List.of());
+            assertTrue(fixture.lastAbsoluteMove().isTeleported());
+            tickThrice(minecart);
+
+            assertEquals(Vector3f.from(100, 0, 0), minecart.position());
+        });
+    }
+
+    /**
+     * The interpolation range of a minecart also counts from its interpolation target, x = 60
+     * here: a teleport to x = 110 is interpolated, though the minecart is shown 90 blocks away.
+     */
+    @Test
+    void aMinecartInterpolatesATeleportWithin64BlocksOfItsLerpTarget() {
+        mockContext(context -> {
+            Fixture fixture = Fixture.create(context);
+            when(fixture.player().position()).thenReturn(Vector3f.from(60, 0, 0));
+            MinecartEntity minecart = minecart(fixture);
+            minecart.moveAbsolute(Vector3f.from(60, 0, 0), 0, 0, 0, false, false);
+            minecart.tick();
+            Vector3f shown = minecart.position();
+
+            fixture.teleport(minecart, Vector3d.from(110, 0, 0), List.of());
+
+            assertEquals(shown, minecart.position());
+            tickThrice(minecart);
+            assertEquals(Vector3f.from(110, 0, 0), minecart.position());
+        });
+    }
+
+    /**
+     * A minecart at the origin, moved with the minecart logic that is not experimental.
+     */
+    private static MinecartEntity minecart(Fixture fixture) {
+        when(fixture.session().getQueuedImmediatelyPackets()).thenReturn(new ArrayList<>());
+        MinecartEntity minecart = new MinecartEntity(Fixture.spawnContext(fixture.session(), VanillaEntities.MINECART, 9));
+        minecart.setValid(true);
+        return minecart;
+    }
+
+    /**
+     * A minecart that interpolates toward x = 3 and has ticked to x = 1.
+     */
+    private static MinecartEntity minecartAtOneOnTheWayToThree(Fixture fixture) {
+        MinecartEntity minecart = minecart(fixture);
+        minecart.moveAbsolute(Vector3f.from(3, 0, 0), 0, 0, 0, false, false);
+        minecart.tick();
+        assertEquals(Vector3f.from(1, 0, 0), minecart.position());
+        return minecart;
+    }
+
+    /**
+     * Runs the three ticks of a minecart interpolation.
+     */
+    private static void tickThrice(MinecartEntity minecart) {
+        for (int i = 0; i < 3; i++) {
+            minecart.tick();
+        }
+    }
+
+    /**
      * An oak boat at the origin.
      */
     private static BoatEntity boat(Fixture fixture) {

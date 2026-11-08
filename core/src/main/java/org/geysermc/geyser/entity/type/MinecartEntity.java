@@ -89,18 +89,42 @@ public class MinecartEntity extends Entity implements Tickable {
         // It's vanilla behaviour to lerp if the position is within 64 blocks, however we also check if the position is close enough to the player
         // position to see if it can actually affect anything to save network.
         if (position.distanceSquared(this.position) < 4096 && position.distanceSquared(session.getPlayerEntity().position()) < 4096) {
-            this.dirtyPitch = this.dirtyYaw = this.dirtyHeadYaw = true;
-
-            setYaw(yaw);
-            setPitch(pitch);
-            setHeadYaw(headYaw);
-            setOnGround(isOnGround);
-
-            this.lerpPosition = position;
-            this.steps = 3;
+            lerpTo(position, yaw, pitch, headYaw, isOnGround);
         } else {
             super.moveAbsolute(position, yaw, pitch, headYaw, isOnGround, teleported);
         }
+    }
+
+    /**
+     * Moves to the target of a teleport, interpolated unless {@code snap} is set.
+     */
+    @Override
+    public void teleport(Vector3f position, float yaw, float pitch, boolean isOnGround, boolean snap) {
+        // As in Entity#teleport, the head yaw follows the yaw
+        if (!snap && !session.isUsingExperimentalMinecartLogic() && position.distanceSquared(session.getPlayerEntity().position()) < 4096) {
+            lerpTo(position, yaw, pitch, yaw, isOnGround);
+        } else {
+            // This position replaces the target of a running lerp, which would pull the cart back
+            this.steps = 0;
+            super.moveAbsolute(position, yaw, pitch, yaw, isOnGround, snap);
+        }
+    }
+
+    @Override
+    public Vector3f serverPosition() {
+        return !session.isUsingExperimentalMinecartLogic() && steps > 0 ? lerpPosition : position;
+    }
+
+    private void lerpTo(Vector3f position, float yaw, float pitch, float headYaw, boolean isOnGround) {
+        this.dirtyPitch = this.dirtyYaw = this.dirtyHeadYaw = true;
+
+        setYaw(yaw);
+        setPitch(pitch);
+        setHeadYaw(headYaw);
+        setOnGround(isOnGround);
+
+        this.lerpPosition = position;
+        this.steps = 3;
     }
 
     @Override

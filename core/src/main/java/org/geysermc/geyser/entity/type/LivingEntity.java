@@ -542,10 +542,7 @@ public class LivingEntity extends Entity implements Tickable {
         startLerp();
     }
 
-    /**
-     * Where the server has this entity: the target of a running interpolation, otherwise its
-     * position. Server moves relative to the entity build on this.
-     */
+    @Override
     public synchronized Vector3f serverPosition() {
         return isLerping() ? lerpPosition : position;
     }
