@@ -76,6 +76,9 @@ public class JavaTeleportEntityTranslator extends PacketTranslator<ClientboundTe
 
         float lastPitch = entity.getPitch(), lastYaw = entity.getYaw();
         if (!interpolate) {
+            if (entity instanceof ClientVehicle clientVehicle) {
+                clientVehicle.getVehicleComponent().moveAbsolute(position);
+            }
             entity.teleport(position.toFloat(), newYaw, newPitch, packet.isOnGround());
         } else if (entity instanceof LivingEntity livingEntity) {
             moveLivingEntity(livingEntity, position, newYaw, newPitch, packet.isOnGround());

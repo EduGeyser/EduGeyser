@@ -650,6 +650,43 @@ class LivingEntityLerpTest {
         });
     }
 
+    /**
+     * The same past the interpolation range: built on the shown position x = 1, the strider would
+     * end at x = 5001. The vehicle component goes along to x = 5003.
+     */
+    @Test
+    void aFarRelativeTeleportDuringALerpBuildsOnTheLerpTarget() {
+        mockContext(context -> {
+            Fixture fixture = Fixture.create(context);
+            fixture.startLerp();
+
+            fixture.teleport(Vector3d.from(5000, 0, 0), List.of(PositionElement.X));
+            fixture.runAllSteps();
+
+            assertEquals(Vector3f.from(5003, 0, 0), fixture.strider().position());
+            assertEquals(5003, fixture.strider().getVehicleComponent().getBoundingBox().getMiddleX());
+        });
+    }
+
+    /**
+     * A teleport past the interpolation range of a strider the player steers moves its vehicle
+     * component too, so Geyser's simulation goes on from the new position.
+     */
+    @Test
+    void aFarTeleportMovesTheComponentOfASteeredVehicle() {
+        mockContext(context -> {
+            Fixture fixture = Fixture.create(context);
+            fixture.holding().set(true);
+            fixture.strider().setPassengers(new ArrayList<>(List.of(fixture.player())));
+            assertTrue(fixture.strider().shouldSimulateMovement());
+
+            fixture.teleport(Vector3d.from(5000, 0, 0), List.of());
+
+            assertEquals(Vector3f.from(5000, 0, 0), fixture.strider().position());
+            assertEquals(5000, fixture.strider().getVehicleComponent().getBoundingBox().getMiddleX());
+        });
+    }
+
     private static final long NAME_TAG_ENTITY_ID = 10;
 
     /**
