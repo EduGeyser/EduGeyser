@@ -70,9 +70,12 @@ public class JavaTeleportEntityTranslator extends PacketTranslator<ClientboundTe
 
         // As the Java client does (ClientPacketListener#setValuesFromPositionPacket): interpolate a
         // teleport that ends within 64 blocks of where the client has the entity, the base above,
-        // and snap a farther one. The client also snaps a vehicle it steers outside the chunks it
-        // ticks, which the vehicle the player rides never is, and the player itself when it gets
-        // the teleport of its removed vehicle.
+        // and snap a farther one. The player itself always snaps when it gets the teleport of its
+        // removed vehicle.
+        // Known limit: the client also snaps, and answers, a teleport of a vehicle it steers while
+        // that vehicle is outside the chunks it ticks, as after a far teleport into chunks it has
+        // not loaded yet. Geyser does not track which chunks the client would tick, so it
+        // interpolates such a teleport within 64 blocks and does not answer it.
         boolean snap = isPreviouslyRemovedVehicle || base.toDouble().distanceSquared(position) > 4096;
 
         // Relative rotation builds on the Java yaw. Geyser keeps the yaw of a boat a quarter turn
