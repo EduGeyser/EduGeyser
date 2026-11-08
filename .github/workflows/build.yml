@@ -1,7 +1,7 @@
 name: Build
 
 # Builds and tests every push and pull request. A successful build of a push to master
-# is then released by release.yml.
+# is then drafted as a release by release.yml.
 on:
   push:
     paths-ignore: &unbuilt
@@ -17,6 +17,7 @@ on:
       - '.github/ISSUE_TEMPLATE/**'
       - '.github/scripts/**'
       - '.github/workflows/release.yml'
+      - '.github/workflows/publish-release.yml'
   pull_request:
     paths-ignore: *unbuilt
 

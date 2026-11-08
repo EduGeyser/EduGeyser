@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
-# Releases one master build on GitHub and Codeberg with the same tag, notes and jars.
-# Run by .github/workflows/release.yml. Both releases stay drafts until every upload has worked,
-# and a rerun finishes a release that failed halfway instead of starting a second one.
+# Drafts the release of one master build on GitHub and Codeberg with the same tag, notes and jars.
+# Run by .github/workflows/release.yml. Both stay drafts: edit the notes on GitHub, then the
+# Publish release workflow (.github/scripts/publish-release.sh) publishes both. A rerun keeps a
+# complete draft, edited notes included, and replaces only a draft whose uploads did not finish.
 set -euo pipefail
 
 : "${SHA:?}" "${JARS:?}" "${GH_TOKEN:?}" "${GITHUB_REPOSITORY:?}" "${CODEBERG_REPO:?}"
@@ -100,27 +101,34 @@ rm -f codeberg-repo.json
 
 # --- GitHub: a draft with all jars ---
 
+expected_assets=$(for platform in "${PLATFORMS[@]}"; do echo "EduGeyser-$platform.jar"; done | sort)
+
 github_id=""
-github_published=false
 while IFS=$'\t' read -r id release_tag _ draft; do
     [ "$release_tag" = "$tag" ] || continue
     if [ "$draft" = false ]; then
-        github_published=true
+        echo "$tag is already published, nothing to draft"
+        exit 0
+    fi
+    # Inside this loop, nothing may read stdin: it holds the release list
+    uploaded=$(gh api "repos/$GITHUB_REPOSITORY/releases/$id" \
+        --jq '.assets[] | select(.state == "uploaded") | .name' </dev/null | sort)
+    if [ "$uploaded" = "$expected_assets" ]; then
         github_id=$id
     else
-        # Left by a run that failed before publishing; its uploads may be incomplete
-        gh api -X DELETE "repos/$GITHUB_REPOSITORY/releases/$id" >/dev/null
+        # Left by a run that failed before its uploads finished
+        gh api -X DELETE "repos/$GITHUB_REPOSITORY/releases/$id" </dev/null >/dev/null
     fi
 done <<<"$github_releases"
 
-if [ "$github_published" = false ]; then
+if [ -z "$github_id" ]; then
     gh release create "$tag" "$JARS"/EduGeyser-*.jar --draft --target "$SHA" --title "$tag" --notes-file notes.md
     github_id=$(gh api "repos/$GITHUB_REPOSITORY/releases" --paginate \
         --jq ".[] | select(.tag_name == \"$tag\" and .draft) | .id" | head -n 1)
     [ -n "$github_id" ] || fail "Cannot find the GitHub draft for $tag"
 fi
 
-# --- Codeberg: the same release ---
+# --- Codeberg: the same draft ---
 
 # The commit reaches Codeberg with the mirror push, which can come a little later
 for attempt in $(seq 1 40); do
@@ -137,9 +145,12 @@ if [ "$(codeberg_status "/tags/$tag")" = 200 ]; then
 fi
 
 codeberg_release=$(codeberg GET "/releases?limit=50" | jq -c --arg tag "$tag" '[.[] | select(.tag_name == $tag)] | first // empty')
+# A published one means the Publish release workflow stopped between Codeberg and GitHub
 if [ -n "$codeberg_release" ] && [ "$(jq -r '.draft' <<<"$codeberg_release")" = true ]; then
-    codeberg DELETE "/releases/$(jq -r '.id' <<<"$codeberg_release")" >/dev/null
-    codeberg_release=""
+    if [ "$(jq -r '.assets[].name' <<<"$codeberg_release" | sort)" != "$expected_assets" ]; then
+        codeberg DELETE "/releases/$(jq -r '.id' <<<"$codeberg_release")" >/dev/null
+        codeberg_release=""
+    fi
 fi
 
 if [ -z "$codeberg_release" ]; then
@@ -151,15 +162,6 @@ if [ -z "$codeberg_release" ]; then
         codeberg POST "/releases/$codeberg_id/assets?name=$(basename "$jar")" \
             -F "attachment=@$jar;type=application/java-archive" >/dev/null
     done
-    codeberg PATCH "/releases/$codeberg_id" -H 'Content-Type: application/json' -d '{"draft": false}' >/dev/null
 fi
 
-[ "$(codeberg GET "/tags/$tag" | jq -r '.commit.sha')" = "$SHA" ] || fail "Codeberg's tag $tag does not point at $SHA"
-
-# --- Publish on GitHub last, so it only shows once Codeberg has the release too ---
-
-if [ "$github_published" = false ]; then
-    gh api -X PATCH "repos/$GITHUB_REPOSITORY/releases/$github_id" -F draft=false -f make_latest=true >/dev/null
-fi
-[ "$(gh api "repos/$GITHUB_REPOSITORY/commits/$tag" --jq .sha)" = "$SHA" ] || fail "GitHub's tag $tag does not point at $SHA"
-echo "Released $tag on GitHub and Codeberg"
+echo "Drafted $tag on GitHub and Codeberg. Edit the notes on GitHub, then run the Publish release workflow with $tag."
