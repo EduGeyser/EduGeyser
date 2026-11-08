@@ -113,7 +113,7 @@ class NetherNetNxsLifecycleTest {
             awaitError("Could not register with the signaling service", 1);
             first.stop().toCompletableFuture().get(20, TimeUnit.SECONDS);
 
-            assertTrue(endpoint.sources().isEmpty(), "the stop took NXS off the endpoint");
+            awaitNoSources(endpoint, "the stop took NXS off the endpoint");
             String certificate = Files.readString(state.resolve("host-cert.pem"));
             String key = Files.readString(state.resolve("host-key.pem"));
             // Its lock is free for the next start
@@ -125,7 +125,7 @@ class NetherNetNxsLifecycleTest {
             awaitError("Could not register with the signaling service", 2);
             second.stop().toCompletableFuture().get(20, TimeUnit.SECONDS);
 
-            assertTrue(endpoint.sources().isEmpty());
+            awaitNoSources(endpoint, "the second stop took NXS off the endpoint");
             assertEquals(certificate, Files.readString(state.resolve("host-cert.pem")), "the certificate is kept");
             assertEquals(key, Files.readString(state.resolve("host-key.pem")));
             assertTrue(errors.stream().noneMatch(error -> error.contains("NXS did not start")), errors.toString());
@@ -182,6 +182,18 @@ class NetherNetNxsLifecycleTest {
         } finally {
             endpoint.close().syncUninterruptibly();
         }
+    }
+
+    /**
+     * NetworkM takes NXS off the endpoint in a callback of the transport's close, which can run just after the stop
+     * the test waited for completed.
+     */
+    private static void awaitNoSources(NetherNetServerChannel endpoint, String message) throws InterruptedException {
+        long deadline = System.nanoTime() + Duration.ofSeconds(5).toNanos();
+        while (!endpoint.sources().isEmpty() && System.nanoTime() < deadline) {
+            Thread.sleep(10);
+        }
+        assertTrue(endpoint.sources().isEmpty(), message);
     }
 
     private void awaitError(String text, int count) throws InterruptedException {
