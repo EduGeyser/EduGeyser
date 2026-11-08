@@ -147,7 +147,11 @@ class NetherNetServerTest {
             throws Exception {
         int port = freeUdpPort();
         GeyserImpl geyser = geyser(config, port, GeyserPluginConfig.class);
-        when(geyser.config().java().port()).thenReturn(port);
+        // An explicit IntegratedJavaConfig: a deep stub reached through GeyserConfig#java can come back as a plain
+        // JavaConfig mock, which the server's cast to the plugin config's covariant java() then rejects
+        GeyserPluginConfig.IntegratedJavaConfig java = mock(GeyserPluginConfig.IntegratedJavaConfig.class);
+        when(java.port()).thenReturn(port);
+        when(((GeyserPluginConfig) geyser.config()).java()).thenReturn(java);
         NetherNetServer server = new NetherNetServer(geyser, group, "1234567890", "custom", "device",
                 threshold -> failingEngine());
 
