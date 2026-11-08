@@ -877,6 +877,22 @@ class LivingEntityLerpTest {
     }
 
     /**
+     * A teleport that turns the strider by 90 degrees and rotates its motion, with an absolute
+     * motion of (1, 0, 0): only the current motion turns, as in the Java client, so the strider
+     * ends with the motion of the packet.
+     */
+    @Test
+    void aRotatedTeleportTurnsOnlyTheCurrentMotion() {
+        mockContext(context -> {
+            Fixture fixture = Fixture.create(context);
+
+            fixture.teleport(fixture.strider(), Vector3d.ZERO, Vector3d.from(1, 0, 0), 90, List.of(PositionElement.ROTATE_DELTA));
+
+            assertEquals(Vector3f.from(1, 0, 0), fixture.strider().getMotion());
+        });
+    }
+
+    /**
      * The Bedrock client predicts the boat the player rides and takes a move of it only as a
      * teleport, so a teleport within 64 blocks reaches it as one. The Java client interpolates
      * that teleport, so it gets no answer.

@@ -97,14 +97,17 @@ public class JavaTeleportEntityTranslator extends PacketTranslator<ClientboundTe
         boolean predictedByBedrock = session.isInClientPredictedVehicle() && session.getPlayerEntity().getVehicle() == entity;
         entity.teleport(position.toFloat(), newYaw, newPitch, packet.isOnGround(), snap || predictedByBedrock);
 
-        Vector3f deltaMovement = packet.getDeltaMovement().toFloat().add(
-            packet.getRelatives().contains(PositionElement.DELTA_X) ? entity.getMotion().getX() : 0,
-            packet.getRelatives().contains(PositionElement.DELTA_Y) ? entity.getMotion().getY() : 0,
-            packet.getRelatives().contains(PositionElement.DELTA_Z) ? entity.getMotion().getZ() : 0
-        );
+        // As in PositionMoveRotation#calculateAbsolute, the rotation turns the current motion, and
+        // only then are its relative parts added to the motion in the packet
+        Vector3f motion = entity.getMotion();
         if (packet.getRelatives().contains(PositionElement.ROTATE_DELTA)) {
-            deltaMovement = MathUtils.xYRot(deltaMovement, (float) Math.toRadians(lastPitch - newPitch), (float) Math.toRadians(lastYaw - newYaw));
+            motion = MathUtils.xYRot(motion, (float) Math.toRadians(lastPitch - newPitch), (float) Math.toRadians(lastYaw - newYaw));
         }
+        Vector3f deltaMovement = packet.getDeltaMovement().toFloat().add(
+            packet.getRelatives().contains(PositionElement.DELTA_X) ? motion.getX() : 0,
+            packet.getRelatives().contains(PositionElement.DELTA_Y) ? motion.getY() : 0,
+            packet.getRelatives().contains(PositionElement.DELTA_Z) ? motion.getZ() : 0
+        );
 
         entity.setMotion(deltaMovement);
         if (deltaMovement.distanceSquared(Vector3f.ZERO) > 1.0E-8F) {
