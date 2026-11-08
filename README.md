@@ -21,17 +21,18 @@ Website and documentation: [edugeyser.org](https://edugeyser.org)
 
 ## NetherNet
 
-NetherNet is Microsoft's successor to RakNet. It is the main transport of Education Edition, and Bedrock Edition has started using it for standard connections as well, so it is not an Education-only feature. EduGeyser serves Bedrock players over NetherNet only, on every platform; it does not serve RakNet.
+NetherNet is the main transport of Education Edition, and Bedrock Edition has started using it for standard connections as well, so it is not an Education-only feature. EduGeyser serves Bedrock players over NetherNet only, on every platform.
 
 EduGeyser listens on the Bedrock port (19132 by default) on both TCP and UDP, so open and forward both. TCP carries HTTP signaling, which direct connections and joins from the Education server list need. UDP carries every player's NetherNet traffic, joins over Xbox signaling (join codes, connection IDs and friend list joins) included. To put either side on a port of its own, set `webrtc-port` (UDP) or `port` under `signaling` (TCP) in the `bedrock` section of the config.
 
 Connection ID, join code, and Xbox friends list joins run over Microsoft's signaling service and therefore always use NetherNet.
 
-A server list entry only advertises an IP and port, which is the same as typing them into Bedrock's server list. For such direct connections the client tries three modes in order, and EduGeyser serves the first two:
+A server list entry only advertises an IP and port, which is the same as typing them into Bedrock's server list. For such direct connections the client tries two modes in order, and EduGeyser serves both:
 
 1. **NetherNet with HTTPS signaling.** EduGeyser obtains a certificate for the server's IP from Let's Encrypt automatically. You can also use your own certificate: set `certificate`, `private-key` and `password` under `bedrock.signaling.builtin.https` in the config (a PEM chain and its key, or a PKCS12 file), as in upstream Geyser, or place `cert.pem` and `key.pem` in the `nethernet` folder next to the Geyser config. EduGeyser checks that the certificate is valid and reloads it when its files change.
 2. **NetherNet with HTTP signaling**, used when no valid certificate is available or the client rejects the HTTPS connection. The server proves its identity with the key in `nethernet/identity.pem`, the same file upstream Geyser uses (EduGeyser moves a key from the older `nethernet/identity-key.pem` there). The client shows a trust prompt on the first connection and again whenever that key changes.
-3. **RakNet**, if both NetherNet modes fail. EduGeyser does not serve it, so such a join fails.
+
+If neither works, for example because the TCP port is not forwarded, Education falls back to RakNet, which EduGeyser does not serve, so the join fails.
 
 EduGeyser can also register with an NXS signaling service, as upstream Geyser can: set `mode` under `bedrock.signaling` to `nxs` or `hybrid`, and choose the service in `nxs.endpoint` (by default `https://agent.warden.cloud`, upstream Geyser's default). The service hands joining players this server's address and a short-lived token, and their traffic arrives on the NetherNet UDP port like every other join. `nxs` turns HTTP signaling off, so players who add the server by its own address and the Education server list can no longer join; `hybrid` keeps HTTP signaling on. Joins over Xbox signaling work in every mode. The registration and the DTLS certificate NXS players see are kept in `nethernet/provider-state`, where upstream Geyser keeps them. `geyser nethernet` (console only) shows what each source advertises and the service's status.
 
