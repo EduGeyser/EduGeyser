@@ -104,7 +104,8 @@ public class JavaTeleportEntityTranslator extends PacketTranslator<ClientboundTe
             session.sendUpstreamPacket(entityMotionPacket);
         }
 
-        if (snap && !entity.getPassengers().isEmpty() && entity.getPassengers().getFirst() == session.getPlayerEntity() && !isPreviouslyRemovedVehicle) {
+        // The Java client answers a snapped teleport of a vehicle it steers with the new position
+        if (snap && isSteeredByPlayer(session, entity)) {
             ServerboundMoveVehiclePacket vehiclePacket = new ServerboundMoveVehiclePacket(position, newYaw, newPitch, entity.isOnGround());
             session.sendDownstreamGamePacket(vehiclePacket);
         }
@@ -113,5 +114,21 @@ public class JavaTeleportEntityTranslator extends PacketTranslator<ClientboundTe
             ServerboundMovePlayerPosRotPacket positionPacket = new ServerboundMovePlayerPosRotPacket(false, false, position.getX(), position.getY(), position.getZ(), newYaw, newPitch);
             session.sendDownstreamGamePacket(positionPacket);
         }
+    }
+
+    /**
+     * Whether the player steers the vehicle, which Geyser then simulates or the Bedrock client
+     * predicts. A server that gets a move vehicle packet for a vehicle the player does not steer
+     * warns and resets the vehicle.
+     * <p>
+     * MojMap Entity#isLocalInstanceAuthoritative
+     */
+    private static boolean isSteeredByPlayer(GeyserSession session, Entity entity) {
+        if (!(entity instanceof ClientVehicle clientVehicle)) {
+            return false;
+        }
+        // ClientVehicle#canSimulateMovement leaves out a vehicle the Bedrock client predicts
+        return clientVehicle.canSimulateMovement() || session.isInClientPredictedVehicle()
+            && !entity.getPassengers().isEmpty() && entity.getPassengers().getFirst() == session.getPlayerEntity();
     }
 }

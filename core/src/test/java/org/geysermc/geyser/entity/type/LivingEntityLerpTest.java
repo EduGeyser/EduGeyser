@@ -788,6 +788,23 @@ class LivingEntityLerpTest {
     }
 
     /**
+     * The Java client answers a snapped teleport only for a vehicle it steers, not for one the
+     * player just rides.
+     */
+    @Test
+    void aFarTeleportOfAVehicleThePlayerDoesNotSteerIsNotAcknowledged() {
+        mockContext(context -> {
+            Fixture fixture = Fixture.create(context);
+            fixture.ride(false);
+
+            fixture.teleport(Vector3d.from(100, 0, 0), List.of());
+
+            assertEquals(Vector3f.from(100, 0, 0), fixture.strider().position());
+            assertTrue(fixture.vehicleMoves().isEmpty());
+        });
+    }
+
+    /**
      * The Java client also applies a teleport within 64 blocks to a vehicle it steers, interpolated
      * and without an answer. Geyser simulates the strider, so the strider and its component go
      * there at once, and the Bedrock client interpolates the move.
