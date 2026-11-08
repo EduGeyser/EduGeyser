@@ -26,6 +26,7 @@
 package org.geysermc.geyser.dump;
 
 import com.google.gson.Gson;
+import io.github.sendablemetatype.netty.channel.nethernet.engine.IceEndpoint;
 import io.github.sendablemetatype.netty.channel.nethernet.nxs.ProviderClient;
 import io.github.sendablemetatype.netty.channel.nethernet.nxs.transport.AddressFamily;
 import org.geysermc.geyser.configuration.GeyserConfig;
@@ -141,12 +142,33 @@ class DumpCensorTest {
             List.of(endpoint("1.2.3.4", 19132), endpoint("192.168.1.5", 19132)), true,
             List.of(endpoint("2606:4700::1", 19132)));
 
-        DumpInfo.NetherNetInfo info = DumpInfo.NetherNetInfo.of(announced, null, null);
+        DumpInfo.NetherNetInfo info = DumpInfo.NetherNetInfo.of(announced, null, null, null);
         assertEquals(List.of("***:19132", "192.168.1.5:19132"), info.advertised());
         assertEquals(List.of("[***]:19132"), info.discovered());
 
         AsteriskSerializer.showSensitive = true;
-        assertEquals(List.of("[2606:4700::1]:19132"), DumpInfo.NetherNetInfo.of(announced, null, null).discovered());
+        assertEquals(List.of("[2606:4700::1]:19132"), DumpInfo.NetherNetInfo.of(announced, null, null, null).discovered());
+    }
+
+    @Test
+    void censorsTheIcePortsPublicLocalAddressesButNotTheReasons() throws Exception {
+        NetherNetServer.Announced announced = new NetherNetServer.Announced(19132, List.of(), false, List.of());
+        IceEndpoint.Sockets sockets = new IceEndpoint.Sockets(
+            List.of(endpoint("192.168.1.5", 19132), endpoint("203.0.113.9", 19132), endpoint("2001:db8::5", 19132)),
+            List.of(new IceEndpoint.BindFailure(endpoint("10.0.0.5", 19132), "Address already in use"),
+                new IceEndpoint.BindFailure(endpoint("198.51.100.7", 19132), "Permission denied")));
+
+        // As with the announced addresses: a LAN address stays readable, a public one does not
+        assertEquals("{\"bound\":[\"192.168.1.5:19132\",\"***:19132\",\"[***]:19132\"],"
+                + "\"failed\":[{\"address\":\"10.0.0.5:19132\",\"reason\":\"Address already in use\"},"
+                + "{\"address\":\"***:19132\",\"reason\":\"Permission denied\"}]}",
+            new Gson().toJson(DumpInfo.NetherNetInfo.of(announced, null, sockets, null).iceSockets()));
+
+        AsteriskSerializer.showSensitive = true;
+        DumpInfo.NetherNetInfo.IceSockets full = DumpInfo.NetherNetInfo.of(announced, null, sockets, null).iceSockets();
+        assertEquals(List.of("192.168.1.5:19132", "203.0.113.9:19132", "[2001:db8::5]:19132"), full.bound(),
+            "a full dump shows them");
+        assertEquals("198.51.100.7:19132", full.failed().getLast().address());
     }
 
     @ParameterizedTest
@@ -184,26 +206,26 @@ class DumpCensorTest {
 
         assertEquals("{\"confirmed\":true,\"instanceId\":\"srv_01HZX\",\"clockOffsetMillis\":-125000,"
                 + "\"addresses\":[\"***:19132\",\"[***]:19133\",\"192.168.1.5:19132\"],\"assistedFamilies\":[4,6]}",
-            new Gson().toJson(DumpInfo.NetherNetInfo.of(announced, null, PUBLISHED).nxs()));
+            new Gson().toJson(DumpInfo.NetherNetInfo.of(announced, null, null, PUBLISHED).nxs()));
 
         AsteriskSerializer.showSensitive = true;
         assertEquals(List.of("198.51.100.1:19132", "[2001:db8::1]:19133", "192.168.1.5:19132"),
-            DumpInfo.NetherNetInfo.of(announced, null, PUBLISHED).nxs().addresses(), "a full dump shows them");
+            DumpInfo.NetherNetInfo.of(announced, null, null, PUBLISHED).nxs().addresses(), "a full dump shows them");
     }
 
     @Test
     void keepsTheNxsInstanceIdReadableWithoutAFullDump() {
         // Support looks the server up by it, and registration already logs it
         NetherNetServer.Announced announced = new NetherNetServer.Announced(19132, List.of(), false, List.of());
-        assertEquals("srv_01HZX", DumpInfo.NetherNetInfo.of(announced, null, PUBLISHED).nxs().instanceId());
+        assertEquals("srv_01HZX", DumpInfo.NetherNetInfo.of(announced, null, null, PUBLISHED).nxs().instanceId());
     }
 
     @Test
     void tellsNxsRunningWithoutConfirmedAddressesFromNotRunning() {
         NetherNetServer.Announced announced = new NetherNetServer.Announced(19132, List.of(), false, List.of());
         assertEquals("{\"confirmed\":false,\"clockOffsetMillis\":0,\"addresses\":[],\"assistedFamilies\":[]}",
-            new Gson().toJson(DumpInfo.NetherNetInfo.of(announced, null, new NetherNetNxs.Published(null, null, 0)).nxs()));
-        assertNull(DumpInfo.NetherNetInfo.of(announced, null, null).nxs());
+            new Gson().toJson(DumpInfo.NetherNetInfo.of(announced, null, null, new NetherNetNxs.Published(null, null, 0)).nxs()));
+        assertNull(DumpInfo.NetherNetInfo.of(announced, null, null, null).nxs());
     }
 
     @Test

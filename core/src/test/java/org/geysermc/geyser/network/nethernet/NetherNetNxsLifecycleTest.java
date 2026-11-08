@@ -298,6 +298,11 @@ class NetherNetNxsLifecycleTest {
         }
 
         @Override
+        public CompletionStage<Sockets> sockets() {
+            return CompletableFuture.failedFuture(new UnsupportedOperationException("no sockets in this test"));
+        }
+
+        @Override
         public CompletionStage<Void> close() {
             return CompletableFuture.completedFuture(null);
         }

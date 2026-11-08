@@ -30,6 +30,7 @@ import io.github.sendablemetatype.netty.channel.nethernet.NetherNetServerChannel
 import io.github.sendablemetatype.netty.channel.nethernet.NetherNetServerStatus;
 import io.github.sendablemetatype.netty.channel.nethernet.UnreadableRelaysException;
 import io.github.sendablemetatype.netty.channel.nethernet.config.NetherChannelOption;
+import io.github.sendablemetatype.netty.channel.nethernet.engine.IceEndpoint;
 import io.github.sendablemetatype.netty.channel.nethernet.engine.NetherNetEngine;
 import io.github.sendablemetatype.netty.channel.nethernet.engine.webrtc.WebRtcEngine;
 import io.github.sendablemetatype.netty.channel.nethernet.signaling.NetherNetHttpSignaling;
@@ -70,6 +71,8 @@ import java.nio.file.Path;
 import java.security.GeneralSecurityException;
 import java.time.Duration;
 import java.util.List;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CompletionStage;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
@@ -430,6 +433,17 @@ public class NetherNetServer {
     }
 
     /**
+     * What the shared ICE port holds now: the local addresses it is open on and those it could not be opened on, see
+     * {@link NetherNetServerChannel#iceSockets()}. The engine answers on its own thread.
+     *
+     * @return completes with the sockets; with none when the endpoint is not bound
+     */
+    public CompletionStage<IceEndpoint.Sockets> iceSockets() {
+        return endpointChannel instanceof NetherNetServerChannel endpoint ? endpoint.iceSockets()
+                : CompletableFuture.completedStage(IceEndpoint.Sockets.NONE);
+    }
+
+    /**
      * What answers announce about this server. Without advertised addresses, answers carry the
      * addresses ICE gathers on this machine, the address an HTTP join's Host header names, and the
      * discovered ones.
@@ -637,7 +651,8 @@ public class NetherNetServer {
      * itself. That is all this confirms: the port is not held yet. WebRTC
      * binds the socket on each local address when the first join gathers
      * there, so a process that takes the port in between costs those joins
-     * their host candidates on that address, and nothing reports it.
+     * their host candidates on that address. NetworkM logs that, and
+     * {@link #iceSockets()} shows it.
      */
     private boolean awaitReady(NetherNetServerChannel endpoint) {
         try {

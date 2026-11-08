@@ -35,6 +35,7 @@ import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
 import com.google.gson.JsonPrimitive;
 import com.google.gson.annotations.SerializedName;
+import io.github.sendablemetatype.netty.channel.nethernet.engine.IceEndpoint;
 import io.github.sendablemetatype.netty.channel.nethernet.nxs.ProviderClient;
 import io.github.sendablemetatype.netty.channel.nethernet.nxs.transport.AddressFamily;
 import it.unimi.dsi.fastutil.objects.Object2IntMap;
@@ -85,6 +86,7 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
+import java.util.concurrent.ExecutionException;
 import java.util.stream.Collectors;
 
 @Getter
@@ -186,9 +188,26 @@ public class DumpInfo {
             // Read once: a shutdown can clear it in between
             NetherNetNxs nxs = manager.nxs();
             this.netherNetInfo = NetherNetInfo.of(manager.announced(), manager.httpSignalingAddress(),
-                nxs == null ? null : nxs.published());
+                iceSockets(manager), nxs == null ? null : nxs.published());
         } else {
             this.netherNetInfo = null;
+        }
+    }
+
+    /**
+     * Waits for the engine's answer, at most two seconds: the dump command builds and uploads the dump on the
+     * calling thread anyway.
+     *
+     * @return what the ICE port holds, or null when the engine did not answer, which leaves it out of the dump
+     */
+    private static IceEndpoint.@Nullable Sockets iceSockets(NethernetManagerImpl manager) {
+        try {
+            return manager.iceSockets().get();
+        } catch (ExecutionException e) {
+            return null;
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            return null;
         }
     }
 
@@ -441,20 +460,49 @@ public class DumpInfo {
      *                      addresses, the address an HTTP join's Host header names, and {@code discovered}
      * @param stunDiscovery whether STUN discovery runs
      * @param discovered    the public addresses STUN discovery currently finds
+     * @param iceSockets    the local addresses the ICE port is open on and those it could not be opened on, or null
+     *                      when the engine did not answer
      * @param nxs           what the signaling service hands joining players, or null when NXS is not running
      */
     public record NetherNetInfo(int icePort, @Nullable Integer signalingPort, List<String> advertised,
-                                boolean stunDiscovery, List<String> discovered, @Nullable Nxs nxs) {
+                                boolean stunDiscovery, List<String> discovered, @Nullable IceSockets iceSockets,
+                                @Nullable Nxs nxs) {
         static @Nullable NetherNetInfo of(NetherNetServer.@Nullable Announced announced,
                                           @Nullable InetSocketAddress httpSignaling,
+                                          IceEndpoint.@Nullable Sockets iceSockets,
                                           NetherNetNxs.@Nullable Published nxs) {
             return announced == null ? null : new NetherNetInfo(announced.icePort(),
                 httpSignaling == null ? null : httpSignaling.getPort(), censor(announced.advertised()),
-                announced.stunDiscovery(), censor(announced.discovered()), nxs == null ? null : Nxs.of(nxs));
+                announced.stunDiscovery(), censor(announced.discovered()),
+                iceSockets == null ? null : IceSockets.of(iceSockets), nxs == null ? null : Nxs.of(nxs));
         }
 
         private static List<String> censor(List<InetSocketAddress> addresses) {
             return addresses.stream().map(AsteriskSerializer::censor).toList();
+        }
+
+        /**
+         * The ICE port's sockets. The port opens on a local address when the first player's connection, or STUN
+         * discovery, uses it, so an address shows up once something used it. The addresses are this machine's own and
+         * are censored like the others: private and loopback addresses stay readable, the rest only in a full dump.
+         * The reasons name no address.
+         *
+         * @param bound  the local addresses the port is open on
+         * @param failed the local addresses it could not be opened on, with the system's reason for the latest attempt
+         */
+        public record IceSockets(List<String> bound, List<Failure> failed) {
+            static IceSockets of(IceEndpoint.Sockets sockets) {
+                return new IceSockets(censor(sockets.bound()), sockets.failed().stream()
+                    .map(failure -> new Failure(AsteriskSerializer.censor(failure.address()), failure.reason()))
+                    .toList());
+            }
+
+            /**
+             * @param address the local address, censored like the others
+             * @param reason  why the system refused it, such as "Address already in use"
+             */
+            public record Failure(String address, String reason) {
+            }
         }
 
         /**
