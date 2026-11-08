@@ -30,6 +30,7 @@ import org.cloudburstmc.math.vector.Vector3f;
 import org.cloudburstmc.protocol.bedrock.packet.SetEntityMotionPacket;
 import org.geysermc.geyser.entity.type.Entity;
 import org.geysermc.geyser.entity.type.LivingEntity;
+import org.geysermc.geyser.entity.vehicle.ClientVehicle;
 import org.geysermc.geyser.session.GeyserSession;
 import org.geysermc.geyser.translator.protocol.PacketTranslator;
 import org.geysermc.geyser.translator.protocol.Translator;
@@ -57,11 +58,14 @@ public class JavaTeleportEntityTranslator extends PacketTranslator<ClientboundTe
             return;
         }
 
+        // Relative coordinates build on where the server has the entity, which an interpolation
+        // may not have reached yet
+        Vector3f base = entity instanceof LivingEntity livingEntity ? livingEntity.serverPosition() : entity.position();
         Vector3d position = packet.getPosition();
         position = position.add(
-            packet.getRelatives().contains(PositionElement.X) ? entity.position().getX() : 0,
-            packet.getRelatives().contains(PositionElement.Y) ? entity.position().getY() : 0,
-            packet.getRelatives().contains(PositionElement.Z) ? entity.position().getZ() : 0
+            packet.getRelatives().contains(PositionElement.X) ? base.getX() : 0,
+            packet.getRelatives().contains(PositionElement.Y) ? base.getY() : 0,
+            packet.getRelatives().contains(PositionElement.Z) ? base.getZ() : 0
         );
 
         boolean hasRelative = packet.getRelatives().contains(PositionElement.X) || packet.getRelatives().contains(PositionElement.Y) || packet.getRelatives().contains(PositionElement.Z);
@@ -73,6 +77,8 @@ public class JavaTeleportEntityTranslator extends PacketTranslator<ClientboundTe
         float lastPitch = entity.getPitch(), lastYaw = entity.getYaw();
         if (!interpolate) {
             entity.teleport(position.toFloat(), newYaw, newPitch, packet.isOnGround());
+        } else if (entity instanceof LivingEntity livingEntity) {
+            moveLivingEntity(livingEntity, position, newYaw, newPitch, packet.isOnGround());
         } else {
             final Vector3d currentPosition = entity.position().toDouble();
             entity.moveRelative(position.getX() - currentPosition.getX(), position.getY() - currentPosition.getY(), position.getZ() - currentPosition.getZ(), newYaw, newPitch, newYaw, packet.isOnGround());
@@ -104,5 +110,23 @@ public class JavaTeleportEntityTranslator extends PacketTranslator<ClientboundTe
             ServerboundMovePlayerPosRotPacket positionPacket = new ServerboundMovePlayerPosRotPacket(false, false, position.getX(), position.getY(), position.getZ(), newYaw, newPitch);
             session.sendDownstreamGamePacket(positionPacket);
         }
+    }
+
+    /**
+     * Moves a living entity to the teleport target, interpolated where
+     * {@link LivingEntity#moveAbsolute} chooses to. The target goes in as is: as a delta from the
+     * shown position it would be added to the target of a running interpolation and overshoot by
+     * the part not interpolated yet.
+     */
+    private static void moveLivingEntity(LivingEntity entity, Vector3d position, float yaw, float pitch, boolean onGround) {
+        if (entity instanceof ClientVehicle clientVehicle) {
+            // Geyser moves this vehicle itself
+            if (clientVehicle.shouldSimulateMovement()) {
+                return;
+            }
+            clientVehicle.getVehicleComponent().moveAbsolute(position);
+        }
+        // As in Entity#teleport, the head yaw follows the yaw
+        entity.moveAbsolute(position.toFloat(), yaw, pitch, yaw, onGround, false);
     }
 }

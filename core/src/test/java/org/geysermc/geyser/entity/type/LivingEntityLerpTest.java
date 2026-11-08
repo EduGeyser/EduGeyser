@@ -26,6 +26,7 @@
 package org.geysermc.geyser.entity.type;
 
 import net.kyori.adventure.text.Component;
+import org.cloudburstmc.math.vector.Vector3d;
 import org.cloudburstmc.math.vector.Vector3f;
 import org.cloudburstmc.math.vector.Vector3i;
 import org.cloudburstmc.protocol.bedrock.data.entity.EntityDataTypes;
@@ -58,10 +59,13 @@ import org.geysermc.geyser.scoreboard.network.util.GeyserMockContext;
 import org.geysermc.geyser.session.GeyserSession;
 import org.geysermc.geyser.session.cache.EntityCache;
 import org.geysermc.geyser.session.cache.WorldCache;
+import org.geysermc.geyser.translator.protocol.java.entity.JavaTeleportEntityTranslator;
 import org.geysermc.mcprotocollib.protocol.data.game.entity.metadata.MetadataTypes;
 import org.geysermc.mcprotocollib.protocol.data.game.entity.metadata.Pose;
 import org.geysermc.mcprotocollib.protocol.data.game.entity.metadata.type.ByteEntityMetadata;
 import org.geysermc.mcprotocollib.protocol.data.game.entity.metadata.type.ObjectEntityMetadata;
+import org.geysermc.mcprotocollib.protocol.data.game.entity.player.PositionElement;
+import org.geysermc.mcprotocollib.protocol.packet.ingame.clientbound.entity.ClientboundTeleportEntityPacket;
 import org.junit.jupiter.api.Test;
 
 import java.util.ArrayList;
@@ -568,9 +572,7 @@ class LivingEntityLerpTest {
 
             magmaCube.moveRelative(0.5, 0, 0, 0, 0, 0, true);
             magmaCube.moveRelative(0.5, 0.5, 0, 0, 0, 0, false);
-            while (!fixture.scheduled().isEmpty()) {
-                fixture.runScheduledStep();
-            }
+            fixture.runAllSteps();
             when(fixture.player().position()).thenReturn(Vector3f.from(200, 0, 0));
             magmaCube.moveRelative(0.5, -0.5, 0, 0, 0, 0, true);
 
@@ -609,6 +611,42 @@ class LivingEntityLerpTest {
             assertEquals(Vector3f.from(3, 0, 0), squid.position());
             // On land the pitch tips toward -90; in water it heads for the swimming pitch, 0 without motion
             assertEquals(0, squid.getPitch());
+        });
+    }
+
+    /**
+     * While the strider moves toward x = 3, the server teleports it to x = 10. The strider and
+     * its vehicle component end there, not at the old target plus the distance from where the
+     * strider was shown.
+     */
+    @Test
+    void aTeleportDuringALerpEndsAtTheTeleportTarget() {
+        mockContext(context -> {
+            Fixture fixture = Fixture.create(context);
+            fixture.startLerp();
+
+            fixture.teleport(Vector3d.from(10, 0, 0), List.of());
+            fixture.runAllSteps();
+
+            assertEquals(Vector3f.from(10, 0, 0), fixture.strider().position());
+            assertEquals(10, fixture.strider().getVehicleComponent().getBoundingBox().getMiddleX());
+        });
+    }
+
+    /**
+     * A relative teleport during a lerp builds on where the server has the strider, the lerp
+     * target x = 3, rather than on where it is shown.
+     */
+    @Test
+    void aRelativeTeleportDuringALerpBuildsOnTheLerpTarget() {
+        mockContext(context -> {
+            Fixture fixture = Fixture.create(context);
+            fixture.startLerp();
+
+            fixture.teleport(Vector3d.from(5, 0, 0), List.of(PositionElement.X));
+            fixture.runAllSteps();
+
+            assertEquals(Vector3f.from(8, 0, 0), fixture.strider().position());
         });
     }
 
@@ -681,6 +719,27 @@ class LivingEntityLerpTest {
 
         void runScheduledStep() {
             scheduled.removeFirst().run();
+        }
+
+        /**
+         * Runs the scheduled steps until none is left, including stale ones of a replaced lerp,
+         * which do nothing.
+         */
+        void runAllSteps() {
+            while (!scheduled.isEmpty()) {
+                runScheduledStep();
+            }
+        }
+
+        /**
+         * Translates a server teleport of the strider.
+         */
+        void teleport(Vector3d position, List<PositionElement> relatives) {
+            EntityCache entityCache = mock(EntityCache.class);
+            when(entityCache.getEntityByJavaId(strider.getEntityId())).thenReturn(strider);
+            when(session.getEntityCache()).thenReturn(entityCache);
+            new JavaTeleportEntityTranslator().translate(session,
+                new ClientboundTeleportEntityPacket(strider.getEntityId(), position, Vector3d.ZERO, 0, 0, relatives, false));
         }
 
         long moves() {

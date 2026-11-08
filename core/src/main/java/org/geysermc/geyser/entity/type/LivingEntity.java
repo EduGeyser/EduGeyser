@@ -517,8 +517,16 @@ public class LivingEntity extends Entity implements Tickable {
 
         // Build on the outstanding target while the lerp is running, so an update that arrives
         // mid-lerp does not lose the remainder of the previous one.
-        this.lerpPosition = isLerping() ? this.lerpPosition.add(relX, relY, relZ) : this.position.add(relX, relY, relZ);
+        this.lerpPosition = serverPosition().add(relX, relY, relZ);
         startLerp();
+    }
+
+    /**
+     * Where the server has this entity: the target of a running interpolation, otherwise its
+     * position. Server moves relative to the entity build on this.
+     */
+    public synchronized Vector3f serverPosition() {
+        return isLerping() ? lerpPosition : position;
     }
 
     private synchronized void lerpAbsolute(Vector3f position, float yaw, float pitch, float headYaw, boolean isOnGround) {
