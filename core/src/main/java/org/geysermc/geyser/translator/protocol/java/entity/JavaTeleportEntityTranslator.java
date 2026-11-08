@@ -28,6 +28,7 @@ package org.geysermc.geyser.translator.protocol.java.entity;
 import org.cloudburstmc.math.vector.Vector3d;
 import org.cloudburstmc.math.vector.Vector3f;
 import org.cloudburstmc.protocol.bedrock.packet.SetEntityMotionPacket;
+import org.geysermc.geyser.entity.type.BoatEntity;
 import org.geysermc.geyser.entity.type.Entity;
 import org.geysermc.geyser.entity.type.LivingEntity;
 import org.geysermc.geyser.entity.vehicle.ClientVehicle;
@@ -75,10 +76,13 @@ public class JavaTeleportEntityTranslator extends PacketTranslator<ClientboundTe
         // the teleport of its removed vehicle.
         boolean snap = isPreviouslyRemovedVehicle || base.toDouble().distanceSquared(position) > 4096;
 
+        // Relative rotation builds on the Java yaw. Geyser keeps the yaw of a boat a quarter turn
+        // ahead for Bedrock, and BoatEntity#moveAbsoluteRaw adds that turn again.
+        float yaw = entity instanceof BoatEntity ? entity.getYaw() - 90 : entity.getYaw();
         float newPitch = MathUtils.clamp(packet.getXRot() + (packet.getRelatives().contains(PositionElement.X_ROT) ? entity.getPitch() : 0), -90, 90);
-        float newYaw = packet.getYRot() + (packet.getRelatives().contains(PositionElement.Y_ROT) ? entity.getYaw() : 0);
+        float newYaw = packet.getYRot() + (packet.getRelatives().contains(PositionElement.Y_ROT) ? yaw : 0);
 
-        float lastPitch = entity.getPitch(), lastYaw = entity.getYaw();
+        float lastPitch = entity.getPitch(), lastYaw = yaw;
         if (entity instanceof ClientVehicle clientVehicle) {
             // Unlike its other position updates, the Java client applies a teleport to a vehicle it
             // steers too, and its interpolation adds the vehicle's own movement on top. Geyser's

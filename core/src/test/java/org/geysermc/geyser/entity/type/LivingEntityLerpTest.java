@@ -861,6 +861,22 @@ class LivingEntityLerpTest {
     }
 
     /**
+     * A relative yaw builds on the Java yaw of a boat, 0 here: turning it by 30 degrees gives a
+     * Java yaw of 30, shown on Bedrock as 120.
+     */
+    @Test
+    void aRelativeYawOfABoatBuildsOnItsJavaYaw() {
+        mockContext(context -> {
+            Fixture fixture = Fixture.create(context);
+            BoatEntity boat = boat(fixture);
+
+            fixture.teleport(boat, Vector3d.ZERO, Vector3d.ZERO, 30, List.of(PositionElement.X, PositionElement.Y_ROT));
+
+            assertEquals(120, boat.getYaw());
+        });
+    }
+
+    /**
      * An oak boat at the origin.
      */
     private static BoatEntity boat(Fixture fixture) {
@@ -973,11 +989,18 @@ class LivingEntityLerpTest {
          * Translates a server teleport of the entity.
          */
         void teleport(Entity entity, Vector3d position, List<PositionElement> relatives) {
+            teleport(entity, position, Vector3d.ZERO, 0, relatives);
+        }
+
+        /**
+         * Translates a server teleport of the entity with a motion and a yaw.
+         */
+        void teleport(Entity entity, Vector3d position, Vector3d motion, float yaw, List<PositionElement> relatives) {
             EntityCache entityCache = mock(EntityCache.class);
             when(entityCache.getEntityByJavaId(entity.getEntityId())).thenReturn(entity);
             when(session.getEntityCache()).thenReturn(entityCache);
             new JavaTeleportEntityTranslator().translate(session,
-                new ClientboundTeleportEntityPacket(entity.getEntityId(), position, Vector3d.ZERO, 0, 0, relatives, false));
+                new ClientboundTeleportEntityPacket(entity.getEntityId(), position, motion, yaw, 0, relatives, false));
         }
 
         /**
