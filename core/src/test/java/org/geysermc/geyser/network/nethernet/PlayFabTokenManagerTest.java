@@ -74,7 +74,7 @@ class PlayFabTokenManagerTest {
             + "\"isPreview\":false,\"memory\":\"29687091200\",\"platform\":\"Win32\",\"playFabTitleId\":\"6955F\","
             + "\"storePlatform\":\"uwp.store\",\"treatmentOverrides\":null,\"type\":\"Win32\"},"
             + "\"user\":{\"language\":\"en\",\"languageCode\":\"en-US\",\"regionCode\":\"US\","
-            + "\"token\":\"A-B/c+d=\",\"tokenType\":\"PlayFab\"}}", body);
+            + "\"token\":\"A-B/c+d=\",\"tokenType\":\"PlayFab\"}}\n", body);
     }
 
     @Test

@@ -292,7 +292,9 @@ public class PlayFabTokenManager {
         JsonObject payload = new JsonObject();
         payload.add("device", device);
         payload.add("user", user);
-        return payload.toString();
+        // The client ends the body with one more byte: its Content-Length is one more than the
+        // JSON text (captured 2026-11-20). Its other request bodies end with a line feed.
+        return payload + "\n";
     }
 
     /** Package-private so tests can answer for PlayFab and the session service. */
