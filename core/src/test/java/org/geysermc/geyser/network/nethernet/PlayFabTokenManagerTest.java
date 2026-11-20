@@ -35,6 +35,8 @@ import org.junit.jupiter.api.Test;
 import java.io.IOException;
 import java.net.InetAddress;
 import java.net.InetSocketAddress;
+import java.net.URI;
+import java.net.URISyntaxException;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.time.Instant;
@@ -100,6 +102,11 @@ class PlayFabTokenManagerTest {
         assertEquals(2, playFab.loginBodies.size());
         assertTrue(playFab.loginBodies.get(0).contains("\"CreateAccount\" : false"));
         assertTrue(playFab.loginBodies.get(1).contains("\"CreateAccount\" : true"));
+        assertEquals(List.of(
+            "https://6955f.playfabapi.com/Client/LoginWithCustomID as libhttpclient/1.0.0.0",
+            "https://6955f.playfabapi.com/Client/LoginWithCustomID as libhttpclient/1.0.0.0",
+            "https://authorization.franchise.minecraft-services.net/api/v1.0/session/start as libhttpclient/1.0.0.0"),
+            playFab.requests);
     }
 
     @Test
@@ -110,6 +117,7 @@ class PlayFabTokenManagerTest {
                 + "\"errorMessage\":\"The account making this request is currently banned\"}"),
             new RecordingPlayFab(503, "{\"errorCode\":1001}"),
             new RecordingPlayFab(400, "{\"errorCode\":1001.5}"),
+            new RecordingPlayFab(400, "{\"errorCode\":1001.00000000000001}"),
             new RecordingPlayFab(400, "{\"errorCode\":[1001]}"),
             new RecordingPlayFab(400, "<html>Bad Request</html>"));
 
@@ -120,7 +128,7 @@ class PlayFabTokenManagerTest {
     }
 
     @Test
-    void sendsOnlyTheHeadersOfTheClient() throws IOException {
+    void sendsOnlyTheHeadersOfTheClient() throws Exception {
         AtomicReference<HttpExchange> received = new AtomicReference<>();
         AtomicReference<String> receivedBody = new AtomicReference<>();
         HttpServer server = answering(exchange -> {
@@ -146,12 +154,13 @@ class PlayFabTokenManagerTest {
     }
 
     @Test
-    void refusesAnAnswerThatIsNoSuccess() throws IOException {
+    void refusesAnAnswerThatIsNoSuccess() throws Exception {
         // A redirect is not followed, so its body must not be read as the answer
         HttpServer server = answering(exchange -> 307);
         try {
+            String url = url(server);
             PlayFabTokenManager.HttpStatusException refused = assertThrows(PlayFabTokenManager.HttpStatusException.class,
-                () -> manager().postJson(url(server), "{}\n", null));
+                () -> manager().postJson(url, "{}\n", null));
 
             assertEquals("HTTP 307: {\"ok\":true}", refused.getMessage());
         } finally {
@@ -163,8 +172,10 @@ class PlayFabTokenManagerTest {
         return new PlayFabTokenManager(new EmptyGeyserLogger(), CUSTOM_ID, "device-id");
     }
 
-    private static String url(HttpServer server) {
-        return "http://127.0.0.1:" + server.getAddress().getPort() + "/";
+    /** The address the server is bound to, which is ::1 on a machine that prefers IPv6. */
+    private static String url(HttpServer server) throws URISyntaxException {
+        InetSocketAddress bound = server.getAddress();
+        return new URI("http", null, bound.getAddress().getHostAddress(), bound.getPort(), "/", null, null).toString();
     }
 
     /** A server on the loopback address that answers every request with the status its handler gives. */
@@ -188,6 +199,8 @@ class PlayFabTokenManagerTest {
     /** Refuses the first login with the given answer. */
     private static final class RecordingPlayFab extends PlayFabTokenManager {
         final List<String> loginBodies = new ArrayList<>();
+        /** Every request, as "URL as user agent". */
+        final List<String> requests = new ArrayList<>();
         private final int refusalStatus;
         private final String refusalBody;
 
@@ -200,6 +213,7 @@ class PlayFabTokenManagerTest {
         @Override
         JsonObject postJson(String url, String jsonBody, @Nullable String userAgent) throws IOException {
             JsonObject response = new JsonObject();
+            requests.add(url + " as " + userAgent);
             if (url.endsWith("/Client/LoginWithCustomID")) {
                 loginBodies.add(jsonBody);
                 if (loginBodies.size() == 1) {

@@ -35,6 +35,7 @@ import org.geysermc.geyser.GeyserLogger;
 
 import java.io.IOException;
 import java.io.InterruptedIOException;
+import java.math.BigDecimal;
 import java.net.URI;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
@@ -56,8 +57,10 @@ import java.util.concurrent.TimeoutException;
  * Auth chain: PlayFab LoginWithCustomID -> SessionTicket -> session/start -> MCToken
  * <p>
  * The Education client signs in the same way: anonymously, with a custom ID it keeps. Both
- * requests follow those of an Education 26.33 client captured on 2026-11-20, with two differences:
+ * requests follow those of an Education 26.33 client captured on 2026-11-20, with three differences:
  * <ul>
+ *     <li>No {@code Connection: Keep-Alive} header. Java's HTTP client does not let a caller set
+ *     it, and HTTP/1.1 keeps the connection open without it.</li>
  *     <li>The PlayFab login is not signed. The client adds x-playfab-signature and
  *     x-playfab-timestamp, made with a secret of its own account, and PlayFab accepts the login
  *     without them.</li>
@@ -243,14 +246,14 @@ public class PlayFabTokenManager {
 
         JsonObject response = postJson(SESSION_START_URL, sessionStartBody(deviceId, sessionTicket), CLIENT_USER_AGENT);
 
-        if (!response.has("result") || !response.getAsJsonObject("result").has("authorizationHeader")) {
-            throw new IOException("session/start response missing authorizationHeader");
-        }
-
         // Read the whole answer before keeping any of it: a cached token must not end up with
         // the expiry or pmid of another when the answer cannot be read
-        JsonObject result = response.getAsJsonObject("result");
-        String token = result.get("authorizationHeader").getAsString();
+        if (!(response.get("result") instanceof JsonObject result)
+                || !(result.get("authorizationHeader") instanceof JsonPrimitive header)
+                || !header.isString() || header.getAsString().isBlank()) {
+            throw new IOException("session/start response missing authorizationHeader");
+        }
+        String token = header.getAsString();
         JsonElement validUntil = result.get("validUntil");
         // A token without an expiry counts as expired; it must not inherit the previous token's
         String expiry = validUntil == null || validUntil.isJsonNull() ? null : validUntil.getAsString();
@@ -370,7 +373,8 @@ public class PlayFabTokenManager {
             }
             try {
                 JsonElement code = JsonParser.parseString(body).getAsJsonObject().get("errorCode");
-                return code instanceof JsonPrimitive number && number.isNumber() && number.getAsDouble() == 1001;
+                return code instanceof JsonPrimitive number && number.isNumber()
+                        && number.getAsBigDecimal().compareTo(BigDecimal.valueOf(1001)) == 0;
             } catch (RuntimeException e) {
                 return false;
             }
