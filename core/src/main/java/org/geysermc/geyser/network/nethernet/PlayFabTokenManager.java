@@ -30,14 +30,14 @@ import com.google.gson.JsonParser;
 import org.checkerframework.checker.nullness.qual.Nullable;
 import org.geysermc.geyser.GeyserLogger;
 
-import java.io.BufferedReader;
 import java.io.IOException;
-import java.io.InputStream;
-import java.io.InputStreamReader;
-import java.io.OutputStream;
-import java.net.HttpURLConnection;
+import java.io.InterruptedIOException;
 import java.net.URI;
+import java.net.http.HttpClient;
+import java.net.http.HttpRequest;
+import java.net.http.HttpResponse;
 import java.nio.charset.StandardCharsets;
+import java.time.Duration;
 import java.time.Instant;
 import java.time.OffsetDateTime;
 import java.util.UUID;
@@ -47,13 +47,29 @@ import java.util.UUID;
  * The MCToken is required for Nethernet signaling WebSocket authentication.
  *
  * Auth chain: PlayFab LoginWithCustomID -> SessionTicket -> session/start -> MCToken
+ * <p>
+ * The Education client signs in the same way: anonymously, with a custom ID it keeps. The
+ * PlayFab login follows the request of an Education 26.33 client captured on 2026-11-20, body
+ * and headers, except that it is not signed: the client adds x-playfab-signature and
+ * x-playfab-timestamp, made with a secret of its own account, and PlayFab accepts the login
+ * without them.
  */
 public class PlayFabTokenManager {
 
     private static final String PLAYFAB_BASE = "https://6955f.playfabapi.com";
     private static final String SESSION_START_URL = "https://authorization.franchise.minecraft-services.net/api/v1.0/session/start";
+    private static final String LOGIN_URL = PLAYFAB_BASE + "/Client/LoginWithCustomID";
     private static final String TITLE_ID = "6955F";
-    private static final int HTTP_TIMEOUT = 15000;
+    /** The client's HTTP library names itself so on every request. */
+    private static final String CLIENT_USER_AGENT = "libhttpclient/1.0.0.0";
+    /** PlayFab's error code for a custom ID that has no account yet. */
+    private static final int ACCOUNT_NOT_FOUND = 1001;
+    private static final Duration HTTP_TIMEOUT = Duration.ofSeconds(15);
+    /** Unlike HttpURLConnection, this client adds no Accept header, which the game client does not send either. */
+    private static final HttpClient HTTP = HttpClient.newBuilder()
+            .version(HttpClient.Version.HTTP_1_1)
+            .connectTimeout(HTTP_TIMEOUT)
+            .build();
     /** Cached tokens within this margin of expiry are treated as expired. */
     private static final long TOKEN_EXPIRY_MARGIN_MILLIS = 10 * 60 * 1000;
 
@@ -168,27 +184,16 @@ public class PlayFabTokenManager {
     }
 
     private void loginToPlayFab() throws IOException {
-        JsonObject payload = new JsonObject();
-        payload.addProperty("CreateAccount", true);
-        payload.addProperty("CustomId", customId);
-        payload.add("EncryptedRequest", null);
-
-        JsonObject infoParams = new JsonObject();
-        infoParams.addProperty("GetCharacterInventories", false);
-        infoParams.addProperty("GetCharacterList", false);
-        infoParams.addProperty("GetPlayerProfile", true);
-        infoParams.addProperty("GetPlayerStatistics", false);
-        infoParams.addProperty("GetTitleData", false);
-        infoParams.addProperty("GetUserAccountInfo", true);
-        infoParams.addProperty("GetUserData", false);
-        infoParams.addProperty("GetUserInventory", false);
-        infoParams.addProperty("GetUserReadOnlyData", false);
-        infoParams.addProperty("GetUserVirtualCurrency", false);
-        payload.add("InfoRequestParameters", infoParams);
-        payload.add("PlayerSecret", null);
-        payload.addProperty("TitleId", TITLE_ID);
-
-        JsonObject response = postJson(PLAYFAB_BASE + "/Client/LoginWithCustomID", payload.toString(), null);
+        JsonObject response;
+        try {
+            response = postJson(LOGIN_URL, loginBody(customId, false), CLIENT_USER_AGENT);
+        } catch (HttpStatusException e) {
+            if (!e.isPlayFabError(ACCOUNT_NOT_FOUND)) {
+                throw e;
+            }
+            // The first sign in of this custom ID, on a new install
+            response = postJson(LOGIN_URL, loginBody(customId, true), CLIENT_USER_AGENT);
+        }
 
         if (!response.has("data") || !response.getAsJsonObject("data").has("SessionTicket")) {
             throw new IOException("PlayFab login response missing SessionTicket");
@@ -196,6 +201,27 @@ public class PlayFabTokenManager {
 
         this.sessionTicket = response.getAsJsonObject("data").get("SessionTicket").getAsString();
         logger.debug("[Nethernet] PlayFab login successful");
+    }
+
+    /**
+     * The login request as the client writes it, to the byte: its JSON library indents by three
+     * spaces, puts spaces around the colons and ends with a line feed. The captured client sent
+     * {@code CreateAccount} false for its existing account.
+     *
+     * @param customId the custom ID, which holds nothing JSON would need escaped (see connection-id.yml)
+     */
+    static String loginBody(String customId, boolean createAccount) {
+        return """
+            {
+               "CreateAccount" : %s,
+               "CustomId" : "%s",
+               "InfoRequestParameters" : {
+                  "GetPlayerProfile" : true,
+                  "GetUserAccountInfo" : true
+               },
+               "TitleId" : "%s"
+            }
+            """.formatted(createAccount, customId, TITLE_ID);
     }
 
     private void obtainMCToken() throws IOException {
@@ -226,7 +252,7 @@ public class PlayFabTokenManager {
         payload.add("device", device);
         payload.add("user", user);
 
-        JsonObject response = postJson(SESSION_START_URL, payload.toString(), "libhttpclient/1.0.0.0");
+        JsonObject response = postJson(SESSION_START_URL, payload.toString(), CLIENT_USER_AGENT);
 
         if (!response.has("result") || !response.getAsJsonObject("result").has("authorizationHeader")) {
             throw new IOException("session/start response missing authorizationHeader");
@@ -245,42 +271,45 @@ public class PlayFabTokenManager {
 
     /** Package-private so tests can answer for PlayFab and the session service. */
     JsonObject postJson(String url, String jsonBody, @Nullable String userAgent) throws IOException {
-        HttpURLConnection con = (HttpURLConnection) URI.create(url).toURL().openConnection();
-        try {
-            con.setRequestMethod("POST");
-            con.setRequestProperty("Content-Type", "application/json");
-            if (userAgent != null) {
-                con.setRequestProperty("User-Agent", userAgent);
-            }
-            con.setConnectTimeout(HTTP_TIMEOUT);
-            con.setReadTimeout(HTTP_TIMEOUT);
-            con.setDoOutput(true);
-
-            try (OutputStream os = con.getOutputStream()) {
-                os.write(jsonBody.getBytes(StandardCharsets.UTF_8));
-            }
-
-            int code = con.getResponseCode();
-            if (code >= 400) {
-                String err = readStream(con.getErrorStream());
-                throw new IOException("HTTP " + code + ": " + err);
-            }
-
-            try (InputStreamReader isr = new InputStreamReader(con.getInputStream(), StandardCharsets.UTF_8)) {
-                return JsonParser.parseReader(isr).getAsJsonObject();
-            }
-        } finally {
-            con.disconnect();
+        HttpRequest.Builder request = HttpRequest.newBuilder(URI.create(url))
+                .timeout(HTTP_TIMEOUT)
+                .header("Content-Type", "application/json")
+                .POST(HttpRequest.BodyPublishers.ofString(jsonBody, StandardCharsets.UTF_8));
+        if (userAgent != null) {
+            request.header("User-Agent", userAgent);
         }
+        HttpResponse<String> response;
+        try {
+            response = HTTP.send(request.build(), HttpResponse.BodyHandlers.ofString(StandardCharsets.UTF_8));
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            InterruptedIOException interrupted = new InterruptedIOException("interrupted during the request to " + url);
+            interrupted.initCause(e);
+            throw interrupted;
+        }
+        if (response.statusCode() >= 400) {
+            throw new HttpStatusException(response.statusCode(), response.body());
+        }
+        return JsonParser.parseString(response.body()).getAsJsonObject();
     }
 
-    private String readStream(@Nullable InputStream stream) throws IOException {
-        if (stream == null) return "";
-        try (BufferedReader reader = new BufferedReader(new InputStreamReader(stream, StandardCharsets.UTF_8))) {
-            StringBuilder sb = new StringBuilder();
-            String line;
-            while ((line = reader.readLine()) != null) sb.append(line);
-            return sb.toString();
+    /** An error status, with the body the service explained it in. */
+    static final class HttpStatusException extends IOException {
+        private final String body;
+
+        HttpStatusException(int status, String body) {
+            super("HTTP " + status + ": " + body);
+            this.body = body;
+        }
+
+        /** Whether the body is a PlayFab error with this {@code errorCode}. */
+        boolean isPlayFabError(int errorCode) {
+            try {
+                JsonObject error = JsonParser.parseString(body).getAsJsonObject();
+                return error.has("errorCode") && error.get("errorCode").getAsInt() == errorCode;
+            } catch (RuntimeException e) {
+                return false;
+            }
         }
     }
 }
