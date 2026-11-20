@@ -50,11 +50,11 @@ import java.util.function.Supplier;
  * concurrent authentication. A request made while a fetch runs shares it.
  *
  * A valid token is never dropped because an attempt failed or timed out: one
- * authentication is two PlayFab requests with 15 second timeouts each, so it
- * can outlast the source's 30 second attempt deadline. Dropping the token it
- * delivers late would make every following attempt authenticate again and
- * time out the same way. Only the service refusing a token, its expiry, or a
- * manual restart ({@link #reconnectWithFreshToken}) replace it.
+ * authentication is two requests, three for a custom ID PlayFab has no account
+ * for, with 15 seconds each, so it can outlast the source's 30 second attempt
+ * deadline. Dropping the token it delivers late would make every following
+ * attempt authenticate again and time out the same way. Only the service
+ * refusing a token, its expiry, or a manual restart ({@link #reconnectWithFreshToken}) replace it.
  */
 final class XboxSignalingTokens implements NetherNetXboxRpcSignaling.TokenSupplier, AutoCloseable {
 

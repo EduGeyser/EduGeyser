@@ -26,20 +26,27 @@
 package org.geysermc.geyser.network.nethernet;
 
 import com.google.gson.JsonObject;
+import com.sun.net.httpserver.HttpExchange;
+import com.sun.net.httpserver.HttpServer;
 import org.checkerframework.checker.nullness.qual.Nullable;
 import org.geysermc.geyser.scoreboard.network.util.EmptyGeyserLogger;
 import org.junit.jupiter.api.Test;
 
 import java.io.IOException;
+import java.net.InetAddress;
+import java.net.InetSocketAddress;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Set;
+import java.util.concurrent.atomic.AtomicReference;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class PlayFabTokenManagerTest {
@@ -78,8 +85,15 @@ class PlayFabTokenManagerTest {
     }
 
     @Test
+    void writesACustomIdAsAJsonString() {
+        assertTrue(PlayFabTokenManager.loginBody("a\"b\\c", false).contains("   \"CustomId\" : \"a\\\"b\\\\c\",\n"));
+    }
+
+    @Test
     void createsTheAccountOnlyWhenPlayFabDoesNotKnowTheCustomId() {
-        RecordingPlayFab playFab = new RecordingPlayFab(true);
+        // PlayFab's answer to an unknown custom ID, as received on 2026-11-20
+        RecordingPlayFab playFab = new RecordingPlayFab(400,
+            "{\"code\":400,\"status\":\"BadRequest\",\"error\":\"AccountNotFound\",\"errorCode\":1001,\"errorMessage\":\"User not found\"}");
 
         assertNotNull(playFab.renew());
 
@@ -89,22 +103,98 @@ class PlayFabTokenManagerTest {
     }
 
     @Test
-    void doesNotCreateAnAccountAfterAnotherError() {
-        RecordingPlayFab playFab = new RecordingPlayFab(false);
+    void doesNotCreateAnAccountAfterAnotherAnswer() {
+        List<RecordingPlayFab> refusals = List.of(
+            // An account ban, as PlayFab's API documents it
+            new RecordingPlayFab(400, "{\"code\":400,\"status\":\"BadRequest\",\"error\":\"AccountBanned\",\"errorCode\":1002,"
+                + "\"errorMessage\":\"The account making this request is currently banned\"}"),
+            new RecordingPlayFab(503, "{\"errorCode\":1001}"),
+            new RecordingPlayFab(400, "{\"errorCode\":1001.5}"),
+            new RecordingPlayFab(400, "{\"errorCode\":[1001]}"),
+            new RecordingPlayFab(400, "<html>Bad Request</html>"));
 
-        assertNull(playFab.renew());
-
-        assertEquals(1, playFab.loginBodies.size());
+        for (RecordingPlayFab playFab : refusals) {
+            assertNull(playFab.renew());
+            assertEquals(1, playFab.loginBodies.size());
+        }
     }
 
-    /** Refuses the first login: as an unknown custom ID, or with another PlayFab error. */
+    @Test
+    void sendsOnlyTheHeadersOfTheClient() throws IOException {
+        AtomicReference<HttpExchange> received = new AtomicReference<>();
+        AtomicReference<String> receivedBody = new AtomicReference<>();
+        HttpServer server = answering(exchange -> {
+            received.set(exchange);
+            receivedBody.set(new String(exchange.getRequestBody().readAllBytes(), StandardCharsets.UTF_8));
+            return 200;
+        });
+        try {
+            JsonObject answer = manager().postJson(url(server), "{\"a\":1}\n", "libhttpclient/1.0.0.0");
+
+            assertEquals("{\"ok\":true}", answer.toString());
+            HttpExchange exchange = received.get();
+            assertEquals("POST", exchange.getRequestMethod());
+            assertEquals("HTTP/1.1", exchange.getProtocol());
+            // The server writes the names this way; the client sends no Accept and no upgrade to HTTP/2
+            assertEquals(Set.of("Content-type", "Content-length", "User-agent", "Host"), exchange.getRequestHeaders().keySet());
+            assertEquals("application/json", exchange.getRequestHeaders().getFirst("Content-type"));
+            assertEquals("libhttpclient/1.0.0.0", exchange.getRequestHeaders().getFirst("User-agent"));
+            assertEquals("{\"a\":1}\n", receivedBody.get());
+        } finally {
+            server.stop(0);
+        }
+    }
+
+    @Test
+    void refusesAnAnswerThatIsNoSuccess() throws IOException {
+        // A redirect is not followed, so its body must not be read as the answer
+        HttpServer server = answering(exchange -> 307);
+        try {
+            PlayFabTokenManager.HttpStatusException refused = assertThrows(PlayFabTokenManager.HttpStatusException.class,
+                () -> manager().postJson(url(server), "{}\n", null));
+
+            assertEquals("HTTP 307: {\"ok\":true}", refused.getMessage());
+        } finally {
+            server.stop(0);
+        }
+    }
+
+    private static PlayFabTokenManager manager() {
+        return new PlayFabTokenManager(new EmptyGeyserLogger(), CUSTOM_ID, "device-id");
+    }
+
+    private static String url(HttpServer server) {
+        return "http://127.0.0.1:" + server.getAddress().getPort() + "/";
+    }
+
+    /** A server on the loopback address that answers every request with the status its handler gives. */
+    private static HttpServer answering(StatusHandler handler) throws IOException {
+        HttpServer server = HttpServer.create(new InetSocketAddress(InetAddress.getLoopbackAddress(), 0), 0);
+        server.createContext("/", exchange -> {
+            byte[] answer = "{\"ok\":true}".getBytes(StandardCharsets.UTF_8);
+            exchange.sendResponseHeaders(handler.handle(exchange), answer.length);
+            exchange.getResponseBody().write(answer);
+            exchange.close();
+        });
+        server.start();
+        return server;
+    }
+
+    @FunctionalInterface
+    private interface StatusHandler {
+        int handle(HttpExchange exchange) throws IOException;
+    }
+
+    /** Refuses the first login with the given answer. */
     private static final class RecordingPlayFab extends PlayFabTokenManager {
         final List<String> loginBodies = new ArrayList<>();
-        private final boolean accountNotFound;
+        private final int refusalStatus;
+        private final String refusalBody;
 
-        RecordingPlayFab(boolean accountNotFound) {
+        RecordingPlayFab(int refusalStatus, String refusalBody) {
             super(new EmptyGeyserLogger(), CUSTOM_ID, "device-id");
-            this.accountNotFound = accountNotFound;
+            this.refusalStatus = refusalStatus;
+            this.refusalBody = refusalBody;
         }
 
         @Override
@@ -113,10 +203,7 @@ class PlayFabTokenManagerTest {
             if (url.endsWith("/Client/LoginWithCustomID")) {
                 loginBodies.add(jsonBody);
                 if (loginBodies.size() == 1) {
-                    // PlayFab's answers, as received on 2026-11-20 and as its API documents account bans
-                    throw new HttpStatusException(400, accountNotFound
-                        ? "{\"code\":400,\"status\":\"BadRequest\",\"error\":\"AccountNotFound\",\"errorCode\":1001,\"errorMessage\":\"User not found\"}"
-                        : "{\"code\":400,\"status\":\"BadRequest\",\"error\":\"AccountBanned\",\"errorCode\":1002,\"errorMessage\":\"The account making this request is currently banned\"}");
+                    throw new HttpStatusException(refusalStatus, refusalBody);
                 }
                 JsonObject data = new JsonObject();
                 data.addProperty("SessionTicket", "ticket");

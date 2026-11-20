@@ -26,8 +26,10 @@
 package org.geysermc.geyser.network.nethernet;
 
 import com.google.gson.JsonArray;
+import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
+import com.google.gson.JsonPrimitive;
 import org.checkerframework.checker.nullness.qual.Nullable;
 import org.geysermc.geyser.GeyserLogger;
 
@@ -42,6 +44,10 @@ import java.time.Duration;
 import java.time.Instant;
 import java.time.OffsetDateTime;
 import java.util.UUID;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ExecutionException;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
 
 /**
  * Handles PlayFab authentication and MCToken acquisition.
@@ -68,20 +74,16 @@ public class PlayFabTokenManager {
     private static final String TITLE_ID = "6955F";
     /** The client's HTTP library names itself so on every request. */
     private static final String CLIENT_USER_AGENT = "libhttpclient/1.0.0.0";
-    /** PlayFab's error code for a custom ID that has no account yet. */
-    private static final int ACCOUNT_NOT_FOUND = 1001;
     /**
      * The game version session/start is told, as the captured Education client wrote it. Only
      * change it to a value seen in a real client's request: the service knows those, and the
      * versions EduGeyser lists elsewhere are written for players, not for this service.
      */
     private static final String GAME_VERSION = "1.26.33";
+    /** What one request may take, from connecting to the last byte of the answer. */
     private static final Duration HTTP_TIMEOUT = Duration.ofSeconds(15);
-    /** Unlike HttpURLConnection, this client adds no Accept header, which the game client does not send either. */
-    private static final HttpClient HTTP = HttpClient.newBuilder()
-            .version(HttpClient.Version.HTTP_1_1)
-            .connectTimeout(HTTP_TIMEOUT)
-            .build();
+    /** Built by {@link #http()}. */
+    private static @Nullable HttpClient http;
     /** Cached tokens within this margin of expiry are treated as expired. */
     private static final long TOKEN_EXPIRY_MARGIN_MILLIS = 10 * 60 * 1000;
 
@@ -200,10 +202,10 @@ public class PlayFabTokenManager {
         try {
             response = postJson(LOGIN_URL, loginBody(customId, false), CLIENT_USER_AGENT);
         } catch (HttpStatusException e) {
-            if (!e.isPlayFabError(ACCOUNT_NOT_FOUND)) {
+            if (!e.isAccountNotFound()) {
                 throw e;
             }
-            // The first sign in of this custom ID, on a new install
+            // PlayFab has no account for this custom ID: a new install, or the account is gone
             response = postJson(LOGIN_URL, loginBody(customId, true), CLIENT_USER_AGENT);
         }
 
@@ -219,21 +221,19 @@ public class PlayFabTokenManager {
      * The login request as the client writes it, to the byte: its JSON library indents by three
      * spaces, puts spaces around the colons and ends with a line feed. The captured client sent
      * {@code CreateAccount} false for its existing account.
-     *
-     * @param customId the custom ID, which holds nothing JSON would need escaped (see connection-id.yml)
      */
     static String loginBody(String customId, boolean createAccount) {
         return """
             {
                "CreateAccount" : %s,
-               "CustomId" : "%s",
+               "CustomId" : %s,
                "InfoRequestParameters" : {
                   "GetPlayerProfile" : true,
                   "GetUserAccountInfo" : true
                },
                "TitleId" : "%s"
             }
-            """.formatted(createAccount, customId, TITLE_ID);
+            """.formatted(createAccount, new JsonPrimitive(customId), TITLE_ID);
     }
 
     private void obtainMCToken() throws IOException {
@@ -247,13 +247,17 @@ public class PlayFabTokenManager {
             throw new IOException("session/start response missing authorizationHeader");
         }
 
+        // Read the whole answer before keeping any of it: a cached token must not end up with
+        // the expiry or pmid of another when the answer cannot be read
         JsonObject result = response.getAsJsonObject("result");
-        this.mcToken = result.get("authorizationHeader").getAsString();
+        String token = result.get("authorizationHeader").getAsString();
+        JsonElement validUntil = result.get("validUntil");
         // A token without an expiry counts as expired; it must not inherit the previous token's
-        this.mcTokenExpiry = result.has("validUntil") ? result.get("validUntil").getAsString() : null;
+        String expiry = validUntil == null || validUntil.isJsonNull() ? null : validUntil.getAsString();
 
-        // Extract pmid from the MCToken JWT payload
-        this.pmsgId = extractPmsgId(this.mcToken);
+        this.mcToken = token;
+        this.mcTokenExpiry = expiry;
+        this.pmsgId = extractPmsgId(token);
 
         logger.debug("[Nethernet] MCToken obtained");
     }
@@ -297,44 +301,76 @@ public class PlayFabTokenManager {
         return payload + "\n";
     }
 
+    /**
+     * The client is built on first use, not with the class: a build that fails is then one failed
+     * authentication, which the caller tries again, and not a class that can never load.
+     * Unlike HttpURLConnection, this client adds no Accept header, which the game client does not
+     * send either.
+     */
+    private static synchronized HttpClient http() {
+        if (http == null) {
+            http = HttpClient.newBuilder().version(HttpClient.Version.HTTP_1_1).build();
+        }
+        return http;
+    }
+
     /** Package-private so tests can answer for PlayFab and the session service. */
     JsonObject postJson(String url, String jsonBody, @Nullable String userAgent) throws IOException {
-        HttpRequest.Builder request = HttpRequest.newBuilder(URI.create(url))
-                .timeout(HTTP_TIMEOUT)
+        URI uri = URI.create(url);
+        HttpRequest.Builder request = HttpRequest.newBuilder(uri)
                 .header("Content-Type", "application/json")
                 .POST(HttpRequest.BodyPublishers.ofString(jsonBody, StandardCharsets.UTF_8));
         if (userAgent != null) {
             request.header("User-Agent", userAgent);
         }
+        // One deadline for the whole exchange. The client's own request timeout stops at the
+        // answer's headers before Java 26, so a body that stalls would hold the token thread.
+        CompletableFuture<HttpResponse<String>> pending =
+                http().sendAsync(request.build(), HttpResponse.BodyHandlers.ofString(StandardCharsets.UTF_8));
         HttpResponse<String> response;
         try {
-            response = HTTP.send(request.build(), HttpResponse.BodyHandlers.ofString(StandardCharsets.UTF_8));
+            response = pending.get(HTTP_TIMEOUT.toMillis(), TimeUnit.MILLISECONDS);
+        } catch (TimeoutException e) {
+            pending.cancel(true);
+            throw new IOException("no answer from " + uri.getHost() + " within " + HTTP_TIMEOUT.toSeconds() + " seconds");
+        } catch (ExecutionException e) {
+            throw e.getCause() instanceof IOException io ? io : new IOException(e.getCause());
         } catch (InterruptedException e) {
+            pending.cancel(true);
             Thread.currentThread().interrupt();
             InterruptedIOException interrupted = new InterruptedIOException("interrupted during the request to " + url);
             interrupted.initCause(e);
             throw interrupted;
         }
-        if (response.statusCode() >= 400) {
+        if (response.statusCode() / 100 != 2) {
             throw new HttpStatusException(response.statusCode(), response.body());
         }
         return JsonParser.parseString(response.body()).getAsJsonObject();
     }
 
-    /** An error status, with the body the service explained it in. */
+    /** An answer that is no success, with the body the service explained it in. */
     static final class HttpStatusException extends IOException {
+        private final int status;
         private final String body;
 
         HttpStatusException(int status, String body) {
             super("HTTP " + status + ": " + body);
+            this.status = status;
             this.body = body;
         }
 
-        /** Whether the body is a PlayFab error with this {@code errorCode}. */
-        boolean isPlayFabError(int errorCode) {
+        /**
+         * Whether this is PlayFab's answer to a login that may not create an account, for a custom
+         * ID without one: HTTP 400 with error code 1001 (measured 2026-11-20). Nothing else may
+         * lead to the request that creates an account.
+         */
+        boolean isAccountNotFound() {
+            if (status != 400) {
+                return false;
+            }
             try {
-                JsonObject error = JsonParser.parseString(body).getAsJsonObject();
-                return error.has("errorCode") && error.get("errorCode").getAsInt() == errorCode;
+                JsonElement code = JsonParser.parseString(body).getAsJsonObject().get("errorCode");
+                return code instanceof JsonPrimitive number && number.isNumber() && number.getAsDouble() == 1001;
             } catch (RuntimeException e) {
                 return false;
             }
