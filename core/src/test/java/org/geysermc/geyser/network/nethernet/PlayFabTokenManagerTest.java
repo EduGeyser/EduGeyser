@@ -65,6 +65,19 @@ class PlayFabTokenManagerTest {
     }
 
     @Test
+    void writesTheSessionStartRequestWithTheClientsDeviceBlock() {
+        // A ticket holds characters JSON may write plainly or escaped; the client writes them plainly
+        String body = PlayFabTokenManager.sessionStartBody("0123456789abcdef0123456789abcdef", "A-B/c+d=");
+
+        assertEquals("{\"device\":{\"applicationType\":\"MinecraftEdu\",\"capabilities\":[\"RayTracing\"],"
+            + "\"gameVersion\":\"1.26.33\",\"hardwareMemoryTier\":5,\"id\":\"0123456789abcdef0123456789abcdef\","
+            + "\"isPreview\":false,\"memory\":\"29687091200\",\"platform\":\"Win32\",\"playFabTitleId\":\"6955F\","
+            + "\"storePlatform\":\"uwp.store\",\"treatmentOverrides\":null,\"type\":\"Win32\"},"
+            + "\"user\":{\"language\":\"en\",\"languageCode\":\"en-US\",\"regionCode\":\"US\","
+            + "\"token\":\"A-B/c+d=\",\"tokenType\":\"PlayFab\"}}", body);
+    }
+
+    @Test
     void createsTheAccountOnlyWhenPlayFabDoesNotKnowTheCustomId() {
         RecordingPlayFab playFab = new RecordingPlayFab(true);
 

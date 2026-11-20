@@ -25,6 +25,7 @@
 
 package org.geysermc.geyser.network.nethernet;
 
+import com.google.gson.JsonArray;
 import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
 import org.checkerframework.checker.nullness.qual.Nullable;
@@ -48,11 +49,16 @@ import java.util.UUID;
  *
  * Auth chain: PlayFab LoginWithCustomID -> SessionTicket -> session/start -> MCToken
  * <p>
- * The Education client signs in the same way: anonymously, with a custom ID it keeps. The
- * PlayFab login follows the request of an Education 26.33 client captured on 2026-11-20, body
- * and headers, except that it is not signed: the client adds x-playfab-signature and
- * x-playfab-timestamp, made with a secret of its own account, and PlayFab accepts the login
- * without them.
+ * The Education client signs in the same way: anonymously, with a custom ID it keeps. Both
+ * requests follow those of an Education 26.33 client captured on 2026-11-20, with two differences:
+ * <ul>
+ *     <li>The PlayFab login is not signed. The client adds x-playfab-signature and
+ *     x-playfab-timestamp, made with a secret of its own account, and PlayFab accepts the login
+ *     without them.</li>
+ *     <li>session/start names the token type "PlayFab". The client names "Edu" and adds the token
+ *     its Education account got from Minecraft Education Services, which a server does not have;
+ *     the service refuses "Edu" without it.</li>
+ * </ul>
  */
 public class PlayFabTokenManager {
 
@@ -64,6 +70,12 @@ public class PlayFabTokenManager {
     private static final String CLIENT_USER_AGENT = "libhttpclient/1.0.0.0";
     /** PlayFab's error code for a custom ID that has no account yet. */
     private static final int ACCOUNT_NOT_FOUND = 1001;
+    /**
+     * The game version session/start is told, as the captured Education client wrote it. Only
+     * change it to a value seen in a real client's request: the service knows those, and the
+     * versions EduGeyser lists elsewhere are written for players, not for this service.
+     */
+    private static final String GAME_VERSION = "1.26.33";
     private static final Duration HTTP_TIMEOUT = Duration.ofSeconds(15);
     /** Unlike HttpURLConnection, this client adds no Accept header, which the game client does not send either. */
     private static final HttpClient HTTP = HttpClient.newBuilder()
@@ -229,12 +241,41 @@ public class PlayFabTokenManager {
             throw new IOException("No PlayFab session ticket available");
         }
 
+        JsonObject response = postJson(SESSION_START_URL, sessionStartBody(deviceId, sessionTicket), CLIENT_USER_AGENT);
+
+        if (!response.has("result") || !response.getAsJsonObject("result").has("authorizationHeader")) {
+            throw new IOException("session/start response missing authorizationHeader");
+        }
+
+        JsonObject result = response.getAsJsonObject("result");
+        this.mcToken = result.get("authorizationHeader").getAsString();
+        // A token without an expiry counts as expired; it must not inherit the previous token's
+        this.mcTokenExpiry = result.has("validUntil") ? result.get("validUntil").getAsString() : null;
+
+        // Extract pmid from the MCToken JWT payload
+        this.pmsgId = extractPmsgId(this.mcToken);
+
+        logger.debug("[Nethernet] MCToken obtained");
+    }
+
+    /**
+     * The session/start request with the device block of the captured client: its application
+     * type, game version and hardware values. With these the MCToken names the same application
+     * type as an Education client's; the pmid, and with it the connection ID, does not depend on
+     * them (measured 2026-11-20).
+     */
+    static String sessionStartBody(String deviceId, String sessionTicket) {
+        JsonArray capabilities = new JsonArray();
+        capabilities.add("RayTracing");
+
         JsonObject device = new JsonObject();
-        device.addProperty("applicationType", "MinecraftPE");
-        device.add("capabilities", null);
-        device.addProperty("gameVersion", "1.21.10");
+        device.addProperty("applicationType", "MinecraftEdu");
+        device.add("capabilities", capabilities);
+        device.addProperty("gameVersion", GAME_VERSION);
+        device.addProperty("hardwareMemoryTier", 5);
         device.addProperty("id", deviceId);
-        device.addProperty("memory", "2147483647");
+        device.addProperty("isPreview", false);
+        device.addProperty("memory", "29687091200");
         device.addProperty("platform", "Win32");
         device.addProperty("playFabTitleId", TITLE_ID);
         device.addProperty("storePlatform", "uwp.store");
@@ -251,22 +292,7 @@ public class PlayFabTokenManager {
         JsonObject payload = new JsonObject();
         payload.add("device", device);
         payload.add("user", user);
-
-        JsonObject response = postJson(SESSION_START_URL, payload.toString(), CLIENT_USER_AGENT);
-
-        if (!response.has("result") || !response.getAsJsonObject("result").has("authorizationHeader")) {
-            throw new IOException("session/start response missing authorizationHeader");
-        }
-
-        JsonObject result = response.getAsJsonObject("result");
-        this.mcToken = result.get("authorizationHeader").getAsString();
-        // A token without an expiry counts as expired; it must not inherit the previous token's
-        this.mcTokenExpiry = result.has("validUntil") ? result.get("validUntil").getAsString() : null;
-
-        // Extract pmid from the MCToken JWT payload
-        this.pmsgId = extractPmsgId(this.mcToken);
-
-        logger.debug("[Nethernet] MCToken obtained");
+        return payload.toString();
     }
 
     /** Package-private so tests can answer for PlayFab and the session service. */
