@@ -42,9 +42,11 @@ import org.cloudburstmc.protocol.bedrock.codec.v390.serializer.PlayerSkinSeriali
 import org.cloudburstmc.protocol.bedrock.codec.v419.serializer.MovePlayerSerializer_v419;
 import org.cloudburstmc.protocol.bedrock.codec.v557.serializer.SetEntityDataSerializer_v557;
 import org.cloudburstmc.protocol.bedrock.codec.v662.serializer.SetEntityMotionSerializer_v662;
+import org.cloudburstmc.protocol.bedrock.codec.v671.serializer.ClientboundDebugRendererSerializer_v671;
 import org.cloudburstmc.protocol.bedrock.codec.v975.serializer.InventorySlotSerializer_v975;
 import org.cloudburstmc.protocol.bedrock.codec.v975.serializer.MobEquipmentSerializer_v975;
 import org.cloudburstmc.protocol.bedrock.codec.v975.serializer.MoveEntityAbsoluteSerializer_v975;
+import org.cloudburstmc.protocol.bedrock.data.ClientboundDebugRendererType;
 import org.cloudburstmc.protocol.bedrock.packet.AnvilDamagePacket;
 import org.cloudburstmc.protocol.bedrock.packet.BedrockPacket;
 import org.cloudburstmc.protocol.bedrock.packet.BossEventPacket;
@@ -52,6 +54,7 @@ import org.cloudburstmc.protocol.bedrock.packet.ClientCacheBlobStatusPacket;
 import org.cloudburstmc.protocol.bedrock.packet.ClientCacheStatusPacket;
 import org.cloudburstmc.protocol.bedrock.packet.ClientCheatAbilityPacket;
 import org.cloudburstmc.protocol.bedrock.packet.ClientToServerHandshakePacket;
+import org.cloudburstmc.protocol.bedrock.packet.ClientboundDebugRendererPacket;
 import org.cloudburstmc.protocol.bedrock.packet.ClientboundMatchmakingStatePacket;
 import org.cloudburstmc.protocol.bedrock.packet.CodeBuilderSourcePacket;
 import org.cloudburstmc.protocol.bedrock.packet.CraftingEventPacket;
@@ -92,6 +95,8 @@ import org.cloudburstmc.protocol.common.util.VarInts;
 import org.geysermc.geyser.GeyserImpl;
 import org.geysermc.geyser.session.UpstreamSession;
 
+import java.awt.Color;
+
 /**
  * Processes the Bedrock codec to remove or modify unused or unsafe packets and fields.
  */
@@ -127,6 +132,36 @@ public class CodecProcessor {
         public void deserialize(ByteBuf buffer, BedrockCodecHelper helper, BedrockPacket packet) {
         }
     };
+
+    // Protocol 893 moved debug markers to a string action and optional payload. The protocol
+    // library still writes the older numeric action and four separate floats for the color.
+    private static final BedrockPacketSerializer<ClientboundDebugRendererPacket> DEBUG_RENDERER_SERIALIZER = new ClientboundDebugRendererSerializer_v671() {
+        @Override
+        public void serialize(ByteBuf buffer, BedrockCodecHelper helper, ClientboundDebugRendererPacket packet) {
+            ClientboundDebugRendererType type = packet.getDebugMarkerType();
+            helper.writeString(buffer, switch (type) {
+                case INVALID -> "invalid";
+                case CLEAR_DEBUG_MARKERS -> "cleardebugmarkers";
+                case ADD_DEBUG_MARKER_CUBE -> "adddebugmarkercube";
+            });
+            boolean hasMarker = type == ClientboundDebugRendererType.ADD_DEBUG_MARKER_CUBE;
+            buffer.writeBoolean(hasMarker);
+            if (hasMarker) {
+                helper.writeString(buffer, packet.getMarkerText());
+                helper.writeVector3f(buffer, packet.getMarkerPosition());
+                Color color = new Color(packet.getMarkerColorRed(), packet.getMarkerColorGreen(),
+                    packet.getMarkerColorBlue(), packet.getMarkerColorAlpha());
+                buffer.writeIntLE(color.getRGB());
+                buffer.writeLongLE(packet.getMarkerDuration());
+            }
+        }
+
+        @Override
+        public void deserialize(ByteBuf buffer, BedrockCodecHelper helper, ClientboundDebugRendererPacket packet) {
+            throw new IllegalPacketException("Client cannot send ClientboundDebugRendererPacket!");
+        }
+    };
+
     /**
      * Serializer that throws an exception when trying to deserialize InventoryContentPacket since server-auth inventory is used.
      */
@@ -319,6 +354,7 @@ public class CodecProcessor {
             .updateSerializer(MobArmorEquipmentPacket.class, MOB_ARMOR_EQUIPMENT_SERIALIZER)
             .updateSerializer(PlayerSkinPacket.class, PLAYER_SKIN_SERIALIZER)
             // Illegal only when serverbound
+            .updateSerializer(ClientboundDebugRendererPacket.class, DEBUG_RENDERER_SERIALIZER)
             .updateSerializer(InventoryContentPacket.class, INVENTORY_CONTENT_SERIALIZER)
             .updateSerializer(InventorySlotPacket.class, INVENTORY_SLOT_SERIALIZER)
             .updateSerializer(MoveEntityAbsolutePacket.class, MOVE_ENTITY_SERIALIZER)
