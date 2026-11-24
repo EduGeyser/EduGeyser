@@ -344,7 +344,7 @@ public class MinecartEntity extends Entity implements Tickable {
     @Override
     protected InteractiveTag testInteraction(Hand hand) {
         if (javaDefinition == VanillaEntities.CHEST_MINECART || javaDefinition == VanillaEntities.HOPPER_MINECART) {
-            return InteractiveTag.OPEN_CONTAINER;
+            return InteractiveTag.OPENCONTAINER;
         } else {
             if (session.isSneaking() || javaDefinition == VanillaEntities.TNT_MINECART) {
                 return InteractiveTag.NONE;

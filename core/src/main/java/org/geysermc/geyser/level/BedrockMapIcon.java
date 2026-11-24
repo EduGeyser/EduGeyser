@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2019-2022 GeyserMC. http://geysermc.org
+ * Copyright (c) 2019-2026 GeyserMC. http://geysermc.org
  *
  * Permission is hereby granted, free of charge, to any person obtaining a copy
  * of this software and associated documentation files (the "Software"), to deal
@@ -25,120 +25,37 @@
 
 package org.geysermc.geyser.level;
 
-import lombok.Getter;
-import org.checkerframework.checker.nullness.qual.Nullable;
+import com.google.gson.JsonElement;
+import com.google.gson.JsonObject;
 import org.geysermc.geyser.network.bedrock.GameProtocol;
-import org.geysermc.geyser.session.GeyserSession;
-import org.geysermc.mcprotocollib.protocol.data.game.level.map.MapIconType;
 
-public enum BedrockMapIcon {
-    ICON_WHITE_ARROW(MapIconType.PLAYER, 0),
-    ICON_ITEM_FRAME(MapIconType.FRAME, 7),
-    ICON_RED_ARROW(MapIconType.RED_MARKER, 2),
-    ICON_BLUE_ARROW(MapIconType.BLUE_MARKER, 3),
-    ICON_WHITE_CROSS(MapIconType.TARGET_X, 4, 0, 0, 0), // Doesn't exist on Bedrock, replaced with a black cross
-    ICON_RED_POINTER(MapIconType.TARGET_POINT, 5),
-    ICON_WHITE_CIRCLE(MapIconType.PLAYER_OFF_MAP, 6),
-    ICON_SMALL_WHITE_CIRCLE(MapIconType.PLAYER_OFF_LIMITS, 13),
-    ICON_MANSION(MapIconType.MANSION, 14),
-    ICON_TEMPLE(MapIconType.MONUMENT, 15),
-    ICON_WHITE_BANNER(MapIconType.BANNER_WHITE, 13, 255, 255, 255),
-    ICON_ORANGE_BANNER(MapIconType.BANNER_ORANGE, 13, 249, 128, 29),
-    ICON_MAGENTA_BANNER(MapIconType.BANNER_MAGENTA, 13, 199, 78, 189),
-    ICON_LIGHT_BLUE_BANNER(MapIconType.BANNER_LIGHT_BLUE, 13, 58, 179, 218),
-    ICON_YELLOW_BANNER(MapIconType.BANNER_YELLOW, 13, 254, 216, 61),
-    ICON_LIME_BANNER(MapIconType.BANNER_LIME, 13, 128, 199, 31),
-    ICON_PINK_BANNER(MapIconType.BANNER_PINK, 13, 243, 139, 170),
-    ICON_GRAY_BANNER(MapIconType.BANNER_GRAY, 13, 71, 79, 82),
-    ICON_LIGHT_GRAY_BANNER(MapIconType.BANNER_LIGHT_GRAY, 13, 157, 157, 151),
-    ICON_CYAN_BANNER(MapIconType.BANNER_CYAN, 13, 22, 156, 156),
-    ICON_PURPLE_BANNER(MapIconType.BANNER_PURPLE, 13, 137, 50, 184),
-    ICON_BLUE_BANNER(MapIconType.BANNER_BLUE, 13, 60, 68, 170),
-    ICON_BROWN_BANNER(MapIconType.BANNER_BROWN, 13, 131, 84, 50),
-    ICON_GREEN_BANNER(MapIconType.BANNER_GREEN, 13, 94, 124, 22),
-    ICON_RED_BANNER(MapIconType.BANNER_RED, 13, 176, 46, 38),
-    ICON_BLACK_BANNER(MapIconType.BANNER_BLACK, 13, 29, 29, 33),
-    ICON_TREASURE_MARKER(MapIconType.RED_X, 4),
-    ICON_DESERT_VILLAGE(MapIconType.VILLAGE_DESERT, 17),
-    ICON_PLAINS_VILLAGE(MapIconType.VILLAGE_PLAINS, 18),
-    ICON_SAVANNA_VILLAGE(MapIconType.VILLAGE_SAVANNA, 19),
-    ICON_SNOWY_VILLAGE(MapIconType.VILLAGE_SNOWY, 20),
-    ICON_TAIGA_VILLAGE(MapIconType.VILLAGE_TAIGA, 21),
-    ICON_JUNGLE_TEMPLE(MapIconType.JUNGLE_TEMPLE, 22),
-    ICON_SWAMP_HUT(MapIconType.SWAMP_HUT, 23),
-    ICON_TRIAL_CHAMBERS(MapIconType.TRIAL_CHAMBERS, 24),
-    // Added in 26.50; older clients get the treasure X, the jungle temple and the monument instead
-    ICON_ABANDONED_CAMP(MapIconType.ABANDONED_CAMP, 25, 4),
-    ICON_ANCIENT_CITY(MapIconType.ANCIENT_CITY, 26, 4),
-    ICON_DESERT_PYRAMID(MapIconType.DESERT_PYRAMID, 28, 22),
-    ICON_MINESHAFT(MapIconType.MINESHAFT, 27, 4),
-    ICON_OCEAN_RUIN_WARM(MapIconType.OCEAN_RUIN_WARM, 29, 15);
+import java.util.Optional;
 
-    private static final BedrockMapIcon[] VALUES = values();
+public record BedrockMapIcon(int id, int argb) {
 
-    private final MapIconType iconType;
-
-    @Getter
-    private final int iconID;
-    private final int pre26_50IconID;
-
-    private final int red;
-    private final int green;
-    private final int blue;
-
-    BedrockMapIcon(MapIconType iconType, int iconID) {
-        this(iconType, iconID, iconID);
-    }
-
-    BedrockMapIcon(MapIconType iconType, int iconID, int pre26_50IconID) {
-        this(iconType, iconID, pre26_50IconID, 255, 255, 255);
-    }
-
-    BedrockMapIcon(MapIconType iconType, int iconID, int red, int green, int blue) {
-        this(iconType, iconID, iconID, red, green, blue);
-    }
-
-    BedrockMapIcon(MapIconType iconType, int iconID, int pre26_50IconID, int red, int green, int blue) {
-        this.iconType = iconType;
-        this.iconID = iconID;
-        this.pre26_50IconID = pre26_50IconID;
-
-        this.red = red;
-        this.green = green;
-        this.blue = blue;
-    }
-
-    /**
-     * Get the BedrockMapIcon for the Java MapIconType
-     *
-     * @param iconType A MapIconType
-     * @return The mapping for a BedrockMapIcon
-     */
-    public static @Nullable BedrockMapIcon fromType(MapIconType iconType) {
-        for (BedrockMapIcon icon : VALUES) {
-            if (icon.iconType.equals(iconType)) {
-                return icon;
-            }
+    public int idForProtocol(int protocolVersion) {
+        if (GameProtocol.is26_50orHigher(protocolVersion)) {
+            return id;
         }
 
-        return null;
+        // Approximate decorations that older clients cannot display.
+        return switch (id) {
+            case 25, 26, 27 -> 4; // Abandoned camp, ancient city and mineshaft use the treasure X.
+            case 28 -> 22; // Desert pyramid uses the jungle temple.
+            case 29 -> 15; // Warm ocean ruin uses the monument.
+            default -> id;
+        };
     }
 
-    public int getIconID(GeyserSession session) {
-        return GameProtocol.is26_50orHigher(session.protocolVersion()) ? iconID : pre26_50IconID;
-    }
+    public static BedrockMapIcon parse(JsonElement element) {
+        if (!(element instanceof JsonObject object)) {
+            throw new AssertionError("Expected map decoration mapping to be a JSON object");
+        }
 
-    /**
-     * Get the ARGB value of a BedrockMapIcon
-     *
-     * @return ARGB as an int
-     */
-    public int toARGB() {
-        final int alpha = 255;
-
-        return ((alpha & 0xFF) << 24) |
-                ((red & 0xFF) << 16) |
-                ((green & 0xFF) << 8) |
-                (blue & 0xFF);
+        int id = object.get("bedrock_id").getAsInt();
+        int argb = Optional.ofNullable(object.get("color"))
+            .map(JsonElement::getAsInt)
+            .orElse(0xFFFFFFFF);
+        return new BedrockMapIcon(id, argb);
     }
 }
