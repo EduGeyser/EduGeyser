@@ -41,7 +41,6 @@ import org.geysermc.mcprotocollib.protocol.packet.ingame.clientbound.Clientbound
 import org.geysermc.mcprotocollib.protocol.packet.ingame.clientbound.ClientboundCustomChatCompletionsPacket;
 import org.geysermc.mcprotocollib.protocol.packet.ingame.clientbound.ClientboundDeleteChatPacket;
 import org.geysermc.mcprotocollib.protocol.packet.ingame.clientbound.ClientboundDelimiterPacket;
-import org.geysermc.mcprotocollib.protocol.packet.ingame.clientbound.ClientboundGameTestHighlightPosPacket;
 import org.geysermc.mcprotocollib.protocol.packet.ingame.clientbound.ClientboundRecipeBookSettingsPacket;
 import org.geysermc.mcprotocollib.protocol.packet.ingame.clientbound.ClientboundServerDataPacket;
 import org.geysermc.mcprotocollib.protocol.packet.ingame.clientbound.ClientboundTabListPacket;
@@ -123,7 +122,6 @@ public class PacketTranslatorRegistry<T> extends AbstractMappedRegistry<Class<? 
         IGNORED_PACKETS.add(ClientboundResourcePackPopPacket.class);
         IGNORED_PACKETS.add(ClientboundChunksBiomesPacket.class); // ???
 
-        IGNORED_PACKETS.add(ClientboundGameTestHighlightPosPacket.class); // Maybe?
         IGNORED_PACKETS.add(ClientboundHurtAnimationPacket.class); // Maybe?
         IGNORED_PACKETS.add(ClientboundProjectilePowerPacket.class); // Maybe?
 
