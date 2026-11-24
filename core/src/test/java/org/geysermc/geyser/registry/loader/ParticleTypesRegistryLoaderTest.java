@@ -30,6 +30,7 @@ import org.cloudburstmc.protocol.bedrock.packet.LevelEventPacket;
 import org.geysermc.geyser.GeyserBootstrap;
 import org.geysermc.geyser.GeyserImpl;
 import org.geysermc.geyser.level.particle.ParticleMapping;
+import org.geysermc.geyser.level.particle.ParticleRandomization;
 import org.geysermc.geyser.session.GeyserSession;
 import org.geysermc.mcprotocollib.protocol.data.game.level.particle.ColorParticleData;
 import org.geysermc.mcprotocollib.protocol.data.game.level.particle.ParticleType;
@@ -70,7 +71,8 @@ class ParticleTypesRegistryLoaderTest {
 
         Vector3f position = Vector3f.from(1, 2, 3);
         var packet = assertInstanceOf(LevelEventPacket.class,
-            mapping.mapParticle(mock(GeyserSession.class), new ColorParticleData(0xFF0000)).apply(position));
+            mapping.mapParticle(mock(GeyserSession.class), new ColorParticleData(0xFF0000))
+                .apply(ParticleRandomization.ofStatic(position)));
 
         assertEquals(org.cloudburstmc.protocol.bedrock.data.ParticleType.MOB_SPELL, packet.getType());
         assertEquals(position, packet.getPosition());
