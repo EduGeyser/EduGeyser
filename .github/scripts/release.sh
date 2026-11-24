@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # Drafts the release of one master build on GitHub and Codeberg with the same tag, notes and jars.
 # Run by .github/workflows/release.yml. Both stay drafts: edit the notes on GitHub, then the
-# Publish release workflow (.github/scripts/publish-release.sh) publishes both. A rerun keeps a
-# complete draft, edited notes included, and replaces only a draft whose uploads did not finish.
+# Publish release workflow (.github/scripts/publish-release.sh) publishes both. A rerun resumes
+# incomplete uploads on each draft, preserving edited notes and assets already uploaded.
 set -euo pipefail
 
 : "${SHA:?}" "${JARS:?}" "${GH_TOKEN:?}" "${GITHUB_REPOSITORY:?}" "${CODEBERG_REPO:?}"
@@ -115,28 +115,28 @@ missing_assets() {
 }
 
 github_id=""
-while IFS=$'\t' read -r id release_tag _ draft; do
+while IFS=$'\t' read -r id release_tag target draft; do
     [ "$release_tag" = "$tag" ] || continue
     if [ "$draft" = false ]; then
         echo "$tag is already published, nothing to draft"
         exit 0
     fi
-    # Inside this loop, nothing may read stdin: it holds the release list
-    missing=$(gh api "repos/$GITHUB_REPOSITORY/releases/$id" \
-        --jq '.assets[] | select(.state == "uploaded") | .name' </dev/null | missing_assets)
-    if [ -z "$missing" ]; then
-        github_id=$id
-    else
-        # Left by a run that failed before its uploads finished
-        gh api -X DELETE "repos/$GITHUB_REPOSITORY/releases/$id" </dev/null >/dev/null
-    fi
+    [ "$target" = "$SHA" ] || fail "GitHub's draft $tag targets $target, not $SHA"
+    github_id=$id
+    break
 done <<<"$github_releases"
 
 if [ -z "$github_id" ]; then
     gh release create "$tag" "$JARS"/EduGeyser-*.jar --draft --target "$SHA" --title "$tag" --notes-file notes.md
-    github_id=$(gh api "repos/$GITHUB_REPOSITORY/releases" --paginate \
-        --jq ".[] | select(.tag_name == \"$tag\" and .draft) | .id" | head -n 1)
-    [ -n "$github_id" ] || fail "Cannot find the GitHub draft for $tag"
+else
+    missing=$(gh api "repos/$GITHUB_REPOSITORY/releases/$github_id" \
+        --jq '.assets[] | select(.state == "uploaded") | .name' | missing_assets)
+    if [ -n "$missing" ]; then
+        while IFS= read -r asset; do
+            # An interrupted upload can leave a placeholder with the same name.
+            gh release upload "$tag" "$JARS/$asset" --clobber </dev/null
+        done <<<"$missing"
+    fi
 fi
 
 # --- Codeberg: the same draft ---
@@ -155,30 +155,34 @@ if [ "$(codeberg_status "/tags/$tag")" = 200 ]; then
     [ "$tagged" = "$SHA" ] || fail "Codeberg's tag $tag points at $tagged, not $SHA"
 fi
 
-codeberg_release=""
 status=$(codeberg_status "/releases/tags/$tag")
 case "$status" in
-    200) codeberg_release=$(codeberg GET "/releases/tags/$tag") ;;
-    404) ;;
+    200)
+        codeberg_release=$(codeberg GET "/releases/tags/$tag")
+        # A published one means the Publish release workflow stopped between Codeberg and GitHub.
+        if [ "$(jq -r '.draft' <<<"$codeberg_release")" = false ]; then
+            echo "$tag is already published on Codeberg; the GitHub draft is ready"
+            exit 0
+        fi
+        [ "$(jq -r '.target_commitish' <<<"$codeberg_release")" = "$SHA" ] \
+            || fail "Codeberg's draft $tag does not target $SHA"
+        codeberg_id=$(jq -er '.id' <<<"$codeberg_release")
+        missing=$(jq -r '.assets[].name' <<<"$codeberg_release" | missing_assets)
+        ;;
+    404)
+        codeberg_id=$(codeberg POST /releases -H 'Content-Type: application/json' \
+            -d "$(jq -n --arg tag "$tag" --arg sha "$SHA" --rawfile body notes.md \
+                '{tag_name: $tag, target_commitish: $sha, name: $tag, body: $body, draft: true, prerelease: false}')" \
+            | jq -er '.id')
+        missing=$required_assets
+        ;;
     *) fail "Codeberg answered HTTP $status when looking up the release $tag" ;;
 esac
-# A published one means the Publish release workflow stopped between Codeberg and GitHub
-if [ -n "$codeberg_release" ] && [ "$(jq -r '.draft' <<<"$codeberg_release")" = true ]; then
-    if [ -n "$(jq -r '.assets[].name' <<<"$codeberg_release" | missing_assets)" ]; then
-        codeberg DELETE "/releases/$(jq -r '.id' <<<"$codeberg_release")" >/dev/null
-        codeberg_release=""
-    fi
-fi
-
-if [ -z "$codeberg_release" ]; then
-    codeberg_id=$(codeberg POST /releases -H 'Content-Type: application/json' \
-        -d "$(jq -n --arg tag "$tag" --arg sha "$SHA" --rawfile body notes.md \
-            '{tag_name: $tag, target_commitish: $sha, name: $tag, body: $body, draft: true, prerelease: false}')" \
-        | jq -r '.id')
-    for jar in "$JARS"/EduGeyser-*.jar; do
-        codeberg POST "/releases/$codeberg_id/assets?name=$(basename "$jar")" \
-            -F "attachment=@$jar;type=application/java-archive" >/dev/null
-    done
+if [ -n "$missing" ]; then
+    while IFS= read -r asset; do
+        codeberg POST "/releases/$codeberg_id/assets?name=$asset" \
+            -F "attachment=@$JARS/$asset;type=application/java-archive" </dev/null >/dev/null
+    done <<<"$missing"
 fi
 
 echo "Drafted $tag on GitHub and Codeberg. Edit the notes on GitHub, then run the Publish release workflow with $tag."
